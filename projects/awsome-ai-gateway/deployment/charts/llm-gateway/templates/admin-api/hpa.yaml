@@ -1,0 +1,35 @@
+{{/* Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms. */}}
+
+{{- if and .Values.adminApi.enabled .Values.adminApi.autoscaling.enabled -}}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "llm-gateway.fullname" . }}-admin-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-gateway.componentLabels" (dict "root" . "component" "admin-api") | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "llm-gateway.fullname" . }}-admin-api
+  minReplicas: {{ .Values.adminApi.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.adminApi.autoscaling.maxReplicas }}
+  metrics:
+    {{- if .Values.adminApi.autoscaling.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.adminApi.autoscaling.targetCPUUtilizationPercentage }}
+    {{- end }}
+    {{- if .Values.adminApi.autoscaling.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.adminApi.autoscaling.targetMemoryUtilizationPercentage }}
+    {{- end }}
+{{- end }}

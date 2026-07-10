@@ -1,0 +1,16 @@
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: otel-collector
+spec:
+  selector:
+    app.kubernetes.io/name: otel-collector
+  ports:
+    - { name: otlp-grpc,  port: 4317, targetPort: 4317, protocol: TCP }
+    - { name: otlp-http,  port: 4318, targetPort: 4318, protocol: TCP }
+    - { name: metrics,    port: 8888, targetPort: 8888, protocol: TCP }

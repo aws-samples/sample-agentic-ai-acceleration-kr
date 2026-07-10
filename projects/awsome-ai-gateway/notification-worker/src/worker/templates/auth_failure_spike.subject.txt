@@ -1,0 +1,1 @@
+[DS Gateway] 인증 실패 급증 감지 — {{ payload.failure_count | default('') }}회

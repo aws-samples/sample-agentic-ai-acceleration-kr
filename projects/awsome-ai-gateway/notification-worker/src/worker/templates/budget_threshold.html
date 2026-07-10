@@ -1,0 +1,30 @@
+<h2>예산 사용 알림</h2>
+<p>안녕하세요, {{ recipient_name }}님.</p>
+<p>현재 기간 예산의 {{ payload.threshold_pct | default('') }}%에 도달했습니다. 추가 사용을 제한하거나 제한을 증가시켜 주세요.</p>
+<table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;">
+  <tr>
+    <td><strong>항목</strong></td>
+    <td><strong>값</strong></td>
+  </tr>
+  <tr>
+    <td>범위</td>
+    <td>{{ payload.scope | default('') }}</td>
+  </tr>
+  <tr>
+    <td>기간</td>
+    <td>{{ payload.period | default('') }}</td>
+  </tr>
+  <tr>
+    <td>임계값</td>
+    <td>{{ payload.threshold_pct | default('') }}%</td>
+  </tr>
+  <tr>
+    <td>현재 사용액</td>
+    <td>${{ payload.current_usage_usd | default('') }}</td>
+  </tr>
+  <tr>
+    <td>한도</td>
+    <td>${{ payload.limit_usd | default('') }}</td>
+  </tr>
+</table>
+<p><small>{{ gateway_name }} — {{ timestamp_kr }}</small></p>

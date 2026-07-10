@@ -1,0 +1,89 @@
+{{/* Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms. */}}
+
+{{- if .Values.adminApi.enabled -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "llm-gateway.fullname" . }}-admin-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-gateway.componentLabels" (dict "root" . "component" "admin-api") | nindent 4 }}
+  {{- with (include "llm-gateway.commonAnnotations" .) }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if not .Values.adminApi.autoscaling.enabled }}
+  replicas: {{ .Values.adminApi.replicaCount }}
+  {{- end }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "llm-gateway.selectorLabels" (dict "root" . "component" "admin-api") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "llm-gateway.selectorLabels" (dict "root" . "component" "admin-api") | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/common/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/common/secret.yaml") . | sha256sum }}
+        {{- with .Values.adminApi.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "llm-gateway.serviceAccountName" (dict "root" . "svc" .Values.adminApi "default" "admin-api") }}
+      {{- include "llm-gateway.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.adminApi.terminationGracePeriodSeconds }}
+      {{- with .Values.adminApi.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.adminApi.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.adminApi.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: admin-api
+          image: {{ include "llm-gateway.image" (dict "root" . "image" .Values.adminApi.image) | quote }}
+          imagePullPolicy: {{ .Values.adminApi.image.pullPolicy }}
+          securityContext:
+            {{- include "llm-gateway.containerSecurityContext" (dict "root" . "override" (dict)) | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.adminApi.service.targetPort }}
+              protocol: TCP
+          env:
+            {{- include "llm-gateway.commonEnv" . | nindent 12 }}
+            {{- include "llm-gateway.authEnv" . | nindent 12 }}
+            {{- include "llm-gateway.oidcEnv" . | nindent 12 }}
+            {{- include "llm-gateway.downwardApiEnv" . | nindent 12 }}
+            {{- range $key, $value := .Values.adminApi.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "llm-gateway.fullname" . }}-config
+          resources:
+            {{- toYaml .Values.adminApi.resources | nindent 12 }}
+          startupProbe:
+            {{- toYaml .Values.adminApi.startupProbe | nindent 12 }}
+          livenessProbe:
+            {{- toYaml .Values.adminApi.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.adminApi.readinessProbe | nindent 12 }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 10"]
+{{- end }}

@@ -1,0 +1,83 @@
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
+
+# prometheus-adapter — metrics.k8s.io API 를 prometheus 데이터로 서빙.
+# ----------------------------------------------------------------------------
+# EKS Fargate 는 kubelet authz 제약으로 metrics-server 가 동작하지 않음.
+# prometheus-adapter 가 apiserver extension 으로 등록되어 HPA 에게 pod CPU/memory
+# 를 제공. 기본 데이터 소스는 kube-prometheus-stack 이 수집한 cAdvisor 메트릭.
+#
+# 참고: AWS Containers blog — "Autoscaling EKS on Fargate with custom metrics"
+#   https://aws.amazon.com/blogs/containers/autoscaling-eks-on-fargate-with-custom-metrics/
+# ----------------------------------------------------------------------------
+
+# kube-prometheus-stack 이 만든 Prometheus Service 를 가리킴.
+# 서비스 이름: kps-prometheus (수정된 chart 값 기준), 포트 9090.
+prometheus:
+  url: http://kps-prometheus.observability.svc
+  port: 9090
+
+# metrics.k8s.io/v1beta1 APIService 를 자동으로 등록 (HPA 에서 바로 사용 가능).
+# metrics-server 가 이미 있으면 충돌 → 설치 전에 반드시 metrics-server 제거.
+apiService:
+  create: true
+
+# HPA CPU/Memory 타깃을 위해 "resource" 규칙 활성화.
+# EKS Fargate cAdvisor 는 container 레벨 메트릭 없이 **pod 단위** 시리즈만 emit
+# (`container` label 은 없거나 빈 값). 따라서 `container!=""` filter 금지.
+# pod 레벨 sum 으로 HPA targetCPUUtilizationPercentage 가 올바르게 동작.
+rules:
+  default: false
+  resource:
+    cpu:
+      # Fargate: pod 레벨 container_cpu_usage_seconds_total (id="/" 등 root cgroup)
+      # LabelMatchers 는 prometheus-adapter 가 pod/namespace 로 필터링 주입.
+      containerQuery: |-
+        sum by (<<.GroupBy>>) (
+          rate(container_cpu_usage_seconds_total{<<.LabelMatchers>>}[3m])
+        )
+      nodeQuery: |-
+        sum by (<<.GroupBy>>) (
+          rate(node_cpu_usage_seconds_total{<<.LabelMatchers>>}[3m])
+        )
+      resources:
+        overrides:
+          namespace:
+            resource: namespace
+          pod:
+            resource: pod
+          node:
+            resource: node
+      containerLabel: container
+    memory:
+      containerQuery: |-
+        sum by (<<.GroupBy>>) (
+          container_memory_working_set_bytes{<<.LabelMatchers>>}
+        )
+      nodeQuery: |-
+        sum by (<<.GroupBy>>) (
+          node_memory_working_set_bytes{<<.LabelMatchers>>}
+        )
+      resources:
+        overrides:
+          namespace:
+            resource: namespace
+          pod:
+            resource: pod
+          node:
+            resource: node
+      containerLabel: container
+    window: 3m
+
+# 적당한 replica / 리소스. HPA 쿼리 실패 지점이라 여유를 둠.
+replicas: 2
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 200Mi
+  limits:
+    cpu: 500m
+    memory: 500Mi
+
+# Fargate 스케줄 가능 namespace. install.sh 가 observability ns 에 배포.
+# (prometheus-adapter 자체는 observability 가 Fargate profile 에 이미 포함돼 있어 그대로 OK.)

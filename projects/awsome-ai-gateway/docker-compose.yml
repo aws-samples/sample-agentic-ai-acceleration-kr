@@ -1,0 +1,323 @@
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
+
+networks:
+  data-plane:
+    driver: bridge
+  control-plane:
+    driver: bridge
+  shared:
+    driver: bridge
+
+volumes:
+  pgdata:
+  grafana-data:
+
+services:
+  # ============================================================
+  # Database
+  # ============================================================
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-gateway}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gateway_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-gateway}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    networks: [shared]
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER:-gateway}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================
+  # Cache / Message Broker
+  # ============================================================
+  redis:
+    image: redis:7-alpine
+    command: redis-server /usr/local/etc/redis/redis.conf
+    volumes:
+      - ./config/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    networks: [shared]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ============================================================
+  # DB Migration (run-once)
+  # ============================================================
+  migration:
+    build:
+      context: ./db
+    environment:
+      DB_URL: postgresql+asyncpg://${POSTGRES_USER:-gateway}:${POSTGRES_PASSWORD:-gateway_dev_password}@postgres:5432/${POSTGRES_DB:-gateway}
+    networks: [shared]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # ============================================================
+  # Mock vLLM (OpenAI-compatible)
+  # ============================================================
+  mock-vllm:
+    build:
+      context: ./mock
+    networks: [data-plane]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/v1/models')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ============================================================
+  # Gateway Proxy (U1)
+  # ============================================================
+  gateway-proxy:
+    build:
+      context: ./gateway-proxy
+    env_file: .env
+    environment:
+      DB_URL: postgresql+asyncpg://${POSTGRES_USER:-gateway}:${POSTGRES_PASSWORD:-gateway_dev_password}@postgres:5432/${POSTGRES_DB:-gateway}
+      REDIS_URL: redis://redis:6379/0
+      OPENMODEL_BASE_URL: http://mock-vllm:8080
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      AWS_REGION: ${AWS_REGION:-ap-northeast-2}
+      AWS_DEFAULT_REGION: ${AWS_REGION:-ap-northeast-2}
+    volumes:
+      - ~/.aws:/home/appuser/.aws:ro
+    networks: [data-plane, shared]
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migration:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ============================================================
+  # Admin API (U2)
+  # ============================================================
+  admin-api:
+    build:
+      context: ./admin-api
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-gateway}:${POSTGRES_PASSWORD:-gateway_dev_password}@postgres:5432/${POSTGRES_DB:-gateway}
+      REDIS_URL: redis://redis:6379/0
+      CLI_DIST_DIR: /app/cli-dist
+      DEV_LOGIN_ENABLED: ${DEV_LOGIN_ENABLED:-true}
+    volumes:
+      - ./gateway-cli/dist:/app/cli-dist:ro
+    networks: [control-plane, shared]
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migration:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ============================================================
+  # Admin UI (Next.js)
+  # ============================================================
+  admin-ui:
+    build:
+      context: ./admin-ui
+    environment:
+      HOSTNAME: "0.0.0.0"
+      ADMIN_API_URL: http://admin-api:8080
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-dev-secret-change-in-prod}
+      DEV_LOGIN_ENABLED: ${DEV_LOGIN_ENABLED:-true}
+      OTEL_SERVICE_NAME: admin-ui
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: "1"
+    networks:
+      - control-plane
+      - shared
+    ports:
+      - "3000:3000"
+    depends_on:
+      admin-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    restart: unless-stopped
+
+  # ============================================================
+  # ROI Scheduler (U2 — same image, different CMD)
+  # ============================================================
+  scheduler:
+    build:
+      context: ./admin-api
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-gateway}:${POSTGRES_PASSWORD:-gateway_dev_password}@postgres:5432/${POSTGRES_DB:-gateway}
+    command: ["python", "-m", "app.scheduler.main"]
+    networks: [shared]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ============================================================
+  # Cost Recorder Worker (offload — Redis Stream → DB batch flusher)
+  # ============================================================
+  cost-recorder-worker:
+    build:
+      context: ./cost-recorder-worker
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      DB_URL: postgresql+asyncpg://${POSTGRES_USER:-gateway}:${POSTGRES_PASSWORD:-gateway_dev_password}@postgres:5432/${POSTGRES_DB:-gateway}
+      REDIS_URL: redis://redis:6379/0
+      COST_STREAM_KEY: cost:stream
+      COST_STREAM_GROUP: cost-recorder-workers
+      COST_STREAM_CONSUMER: worker-1
+      BATCH_MAX_SIZE: "100"
+      BATCH_MAX_INTERVAL_SEC: "5"
+      DAILY_USAGE_AGG_CRON: "10 0 * * *"
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_SERVICE_NAME: cost-recorder-worker
+    networks: [shared]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migration:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import redis; r=redis.Redis.from_url('redis://redis:6379/0'); r.ping()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ============================================================
+  # Notification Worker (U3)
+  # ============================================================
+  notification-worker:
+    build:
+      context: ./notification-worker
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      DB_URL: postgresql+asyncpg://notification_worker_user:${NW_DB_PASSWORD:-notification_worker_password_change_me}@postgres:5432/${POSTGRES_DB:-gateway}
+      REDIS_URL: redis://redis:6379/0
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_SERVICE_NAME: notification-worker
+    networks: [shared]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migration:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import redis; r=redis.Redis.from_url('redis://redis:6379/0'); r.ping()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ============================================================
+  # Observability Stack
+  # ============================================================
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    command: ["--config=/etc/otel-collector-config.yml"]
+    volumes:
+      - ./config/otel/otel-collector-config.yml:/etc/otel-collector-config.yml:ro
+    networks: [shared]
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "8889:8889"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:13133/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  prometheus:
+    image: prom/prometheus:latest
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--web.enable-remote-write-receiver"
+    volumes:
+      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks: [shared]
+    ports:
+      - "9090:9090"
+
+  loki:
+    image: grafana/loki:latest
+    command: -config.file=/etc/loki/loki-config.yml
+    volumes:
+      - ./config/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+    networks: [shared]
+    ports:
+      - "3100:3100"
+
+  tempo:
+    image: grafana/tempo:latest
+    command: ["-config.file=/etc/tempo/tempo-config.yml"]
+    volumes:
+      - ./config/tempo/tempo-config.yml:/etc/tempo/tempo-config.yml:ro
+    networks: [shared]
+    ports:
+      - "3200:3200"
+
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:-admin}
+      GF_PATHS_PROVISIONING: /etc/grafana/provisioning
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./config/grafana/dashboards:/etc/grafana/dashboards:ro
+    networks: [shared]
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+      - loki
+      - tempo

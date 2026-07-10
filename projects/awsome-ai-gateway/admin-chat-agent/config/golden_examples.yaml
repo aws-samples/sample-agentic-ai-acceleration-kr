@@ -1,0 +1,206 @@
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
+
+# Few-shot examples for SQL Specialist (DAIL-SQL pattern).
+# docs/admin-chat-agent-spec.md §1 / §2.5.2.
+#
+# 12 use case (Tier A 8개 + Tier B 4개) MVP bootstrap.
+# 운영 중 운영자가 thumbs-up 한 query 를 admin 승인 후 추가.
+#
+# ⚠️ SQL 은 ground truth 스키마(db/init/02_create_tables.sql) 기준:
+#   - usage.usage_logs (NOT public.usage_logs). 컬럼: model_alias / requested_at /
+#     status(enum SUCCESS/ERROR/TIMEOUT) / cost_usd. (NOT model/created_at/status_code)
+#   - budget.budget_configs: max_budget_usd (NO used_usd/threshold_pct/period_start).
+#     실사용액은 usage.usage_logs 집계로 산출.
+#   - auth.virtual_keys: status='ACTIVE' (NO is_active). auth.users: NO last_login_at.
+#   - auth.teams: dept_id, name.
+
+examples:
+  # ─── Tier A — SQL only ───
+  - id: 01
+    tier: A
+    question: "이번 달 비용 top 10 사용자"
+    sql: |
+      SELECT u.email, SUM(l.cost_usd) AS cost_usd
+      FROM usage.usage_logs l
+      JOIN auth.users u ON u.id = l.user_id
+      WHERE l.requested_at AT TIME ZONE 'Asia/Seoul' >= date_trunc('month', now() AT TIME ZONE 'Asia/Seoul')
+      GROUP BY u.email
+      ORDER BY cost_usd DESC
+      LIMIT 10
+    expected_chart: bar
+
+  - id: 02
+    tier: A
+    question: "어제 평소보다 비싸진 사용자 누구"
+    sql: |
+      WITH daily AS (
+        SELECT user_id,
+               (requested_at AT TIME ZONE 'Asia/Seoul')::date AS d,
+               SUM(cost_usd) AS cost
+        FROM usage.usage_logs
+        WHERE requested_at >= now() - interval '8 days'
+        GROUP BY user_id, d
+      ),
+      stats AS (
+        SELECT user_id,
+               AVG(cost) FILTER (WHERE d < (now() AT TIME ZONE 'Asia/Seoul')::date) AS avg_prev,
+               MAX(cost) FILTER (WHERE d = (now() AT TIME ZONE 'Asia/Seoul')::date - 1) AS yest
+        FROM daily
+        GROUP BY user_id
+      )
+      SELECT u.email, s.avg_prev, s.yest,
+             (s.yest - s.avg_prev) / NULLIF(s.avg_prev, 0) AS growth_ratio
+      FROM stats s JOIN auth.users u ON u.id = s.user_id
+      WHERE s.yest IS NOT NULL AND s.yest > s.avg_prev * 1.5
+      ORDER BY growth_ratio DESC
+      LIMIT 20
+    expected_chart: table
+
+  - id: 03
+    tier: A
+    question: "팀별 모델 사용 분포"
+    sql: |
+      SELECT t.name AS team, l.model_alias, COUNT(*) AS calls, SUM(l.cost_usd) AS cost
+      FROM usage.usage_logs l
+      JOIN auth.users u ON u.id = l.user_id
+      LEFT JOIN auth.teams t ON t.id = u.team_id
+      WHERE l.requested_at >= now() - interval '30 days'
+      GROUP BY t.name, l.model_alias
+      ORDER BY t.name, cost DESC
+    expected_chart: bar  # stacked
+
+  - id: 04
+    tier: A
+    question: "지난 30일 일별 총 비용 추이"
+    sql: |
+      SELECT (requested_at AT TIME ZONE 'Asia/Seoul')::date AS day,
+             SUM(cost_usd) AS cost_usd
+      FROM usage.usage_logs
+      WHERE requested_at >= now() - interval '30 days'
+      GROUP BY day
+      ORDER BY day
+    expected_chart: line
+
+  - id: 05
+    tier: A
+    question: "이번 달 예산 80% 도달한 팀"
+    # budget.budget_configs 엔 used_usd/threshold_pct 가 없다. 실사용액은
+    # usage.usage_logs 를 이번 달로 집계해 max_budget_usd 와 비교(TEAM scope).
+    sql: |
+      WITH team_spend AS (
+        SELECT u.team_id, SUM(l.cost_usd) AS used_usd
+        FROM usage.usage_logs l
+        JOIN auth.users u ON u.id = l.user_id
+        WHERE l.requested_at AT TIME ZONE 'Asia/Seoul'
+              >= date_trunc('month', now() AT TIME ZONE 'Asia/Seoul')
+        GROUP BY u.team_id
+      )
+      SELECT t.name AS team,
+             b.max_budget_usd,
+             s.used_usd,
+             ROUND(100.0 * s.used_usd / NULLIF(b.max_budget_usd, 0), 1) AS pct
+      FROM budget.budget_configs b
+      JOIN auth.teams t ON t.id = b.scope_id
+      JOIN team_spend s ON s.team_id = b.scope_id
+      WHERE b.scope = 'TEAM' AND b.is_active = true
+        AND s.used_usd >= b.max_budget_usd * 0.8
+      ORDER BY pct DESC
+    expected_chart: kpi
+
+  - id: 06
+    tier: A
+    question: "지금 활성 VK 가장 많은 사용자"
+    sql: |
+      SELECT u.email, COUNT(*) AS active_keys
+      FROM auth.virtual_keys k
+      JOIN auth.users u ON u.id = k.user_id
+      WHERE k.status = 'ACTIVE'
+      GROUP BY u.email
+      ORDER BY active_keys DESC
+      LIMIT 20
+    expected_chart: table
+
+  - id: 07
+    tier: A
+    question: "지난 24h 에러 가장 많이 받은 사용자"
+    # usage_logs.status 는 enum (SUCCESS/ERROR/TIMEOUT). "에러" = SUCCESS 아님.
+    sql: |
+      SELECT u.email, COUNT(*) AS error_count
+      FROM usage.usage_logs l
+      JOIN auth.users u ON u.id = l.user_id
+      WHERE l.status IN ('ERROR', 'TIMEOUT')
+        AND l.requested_at >= now() - interval '24 hours'
+      GROUP BY u.email
+      ORDER BY error_count DESC
+      LIMIT 10
+    expected_chart: bar
+
+  - id: 08
+    tier: A
+    question: "Cognito 등록은 됐는데 한 번도 호출 안 한 사용자"
+    # auth.users 엔 last_login_at 없음. 미사용 판정은 usage_logs LEFT JOIN NULL.
+    sql: |
+      SELECT u.email, u.display_name, u.created_at
+      FROM auth.users u
+      LEFT JOIN usage.usage_logs l ON l.user_id = u.id
+      WHERE l.id IS NULL AND u.is_active = true
+      ORDER BY u.created_at DESC
+    expected_chart: table
+
+  # ─── Tier B — SQL + Code Specialist ───
+  - id: 09
+    tier: B
+    question: "지난 30일 사용 패턴 outlier 사용자 찾아줘"
+    sql: |
+      SELECT user_id,
+             (requested_at AT TIME ZONE 'Asia/Seoul')::date AS d,
+             SUM(cost_usd) AS daily_cost,
+             SUM(input_tokens + output_tokens) AS daily_tokens
+      FROM usage.usage_logs
+      WHERE requested_at >= now() - interval '30 days'
+      GROUP BY user_id, d
+      ORDER BY user_id, d
+    code_hint: "IsolationForest (sklearn) 또는 DBSCAN 으로 outlier user_id 식별"
+    expected_chart: table_with_scatter
+
+  - id: 10
+    tier: B
+    question: "이번 달 비용 추세에서 trend / seasonal / residual 분해"
+    sql: |
+      SELECT (requested_at AT TIME ZONE 'Asia/Seoul')::date AS d,
+             SUM(cost_usd) AS daily_cost
+      FROM usage.usage_logs
+      WHERE requested_at >= date_trunc('month', now() AT TIME ZONE 'Asia/Seoul')
+      GROUP BY d
+      ORDER BY d
+    code_hint: "statsmodels.tsa.seasonal.STL decomposition"
+    expected_chart: line_panels
+
+  - id: 11
+    tier: B
+    question: "다음 달 총 비용 예측해줘"
+    sql: |
+      SELECT (requested_at AT TIME ZONE 'Asia/Seoul')::date AS d,
+             SUM(cost_usd) AS daily_cost
+      FROM usage.usage_logs
+      WHERE requested_at >= now() - interval '180 days'
+      GROUP BY d
+      ORDER BY d
+    code_hint: "statsmodels SARIMAX 또는 ETS — Prophet 은 sandbox 미설치, statsmodels 권장"
+    expected_chart: line_with_ci
+
+  - id: 12
+    tier: B
+    question: "팀별 사용 시간대 패턴 시각화"
+    sql: |
+      SELECT t.name AS team,
+             extract(hour FROM (l.requested_at AT TIME ZONE 'Asia/Seoul')) AS hour_of_day,
+             COUNT(*) AS calls
+      FROM usage.usage_logs l
+      JOIN auth.users u ON u.id = l.user_id
+      LEFT JOIN auth.teams t ON t.id = u.team_id
+      WHERE l.requested_at >= now() - interval '30 days'
+      GROUP BY t.name, hour_of_day
+      ORDER BY t.name, hour_of_day
+    code_hint: "matplotlib heatmap (team × hour). PNG 로 export → S3"
+    expected_chart: heatmap_png

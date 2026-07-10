@@ -1,0 +1,299 @@
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
+
+# ============================================================================
+# AWS EKS Fargate — Production 환경 오버라이드
+# ----------------------------------------------------------------------------
+# 용도: 실제 사용자 트래픽, 10,000명 규모
+# 특성: HA (3+ replica), Aurora cluster(다중 AZ), ElastiCache cluster mode
+# ----------------------------------------------------------------------------
+#    현재 파일은 "prod 인프라 회로(3 AZ/r7g/Aurora HA/ElastiCache Cluster mode/
+#    3+ replica HPA)" 부하 테스트 목적의 smoke 설정임. 고객 고유 영역은 dev와
+#    동일하게 내려둠:
+#    - Ingress: HTTPS/ACM/WAF/도메인 대신 HTTP + host="" (방식 A)
+#    - OTel: sidecar → in-cluster (Chart sidecar ConfigMap 템플릿 미완성)
+#    - DEV_LOGIN_ENABLED: true (고객 SSO 교체 전이므로 dev-login 우회)
+#    - notificationWorkerUser: "gateway" (별도 DB role 생성 회피)
+#    ACM ARN / 도메인 / SSO / DB role 정책에 맞춰 재설정할 것.
+# ============================================================================
+
+global:
+  environment: prod
+  deploymentMode: eks-fargate
+  commonLabels:
+    environment: prod
+    managed-by: terraform
+    cost-center: platform-ai
+  # CHANGE_ME (account): 본인 AWS 계정의 ECR registry. terraform output ecr_registry 또는
+  # `aws ecr describe-repositories --query 'repositories[0].repositoryUri' | cut -d/ -f1` 로 확인.
+  imageRegistry: "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com"
+
+database:
+  enabled: false
+  external:
+    # CHANGE_ME (terraform output): RDS Proxy endpoint. terraform output -raw rds_proxy_endpoint
+    host: "<RDS_PROXY_ENDPOINT>"
+    port: 5432
+    name: "gateway"
+    user: "gateway"
+    # migration Job 이 자동 생성/GRANT 하는 단일 'gateway' 유저 사용.
+    # 필요시 "notification_worker_user" 별도 role 로 최소 권한 분리.
+    notificationWorkerUser: "gateway"
+    passwordSecretName: "llm-gateway-db"
+    sslMode: "require"
+    # pod 당 pool 50 (base 20 + burst 30). Aurora r7g.large max_connections ≈ 1800.
+    # HPA max 30 × 50 = 1,500 → 한도의 83% 안전. RDS Proxy multiplex 로 실제는 더 여유.
+    # VK 조회는 Redis cache hit 가 주경로라 실제 사용량은 100 내외.
+    poolSize: 20
+    maxOverflow: 30
+    # prod 는 RDS Proxy 경유(enable_rds_proxy=true 기본값)이므로
+    # asyncpg prepared statement 캐시 비활성 필수 (PostgreSQL pinning 회피).
+    # Proxy 를 끄는 경우엔 100 으로 복구.
+    statementCacheSize: 0
+
+redis:
+  enabled: false
+  # 명시(상속 아님): pod 당 pool × HPA maxReplicas(30) ≤ 노드 maxclients 합.
+  # 30 × 150 = 4,500 (3-shard 기준 shard 당 ~1,500). deepdive Q50 Phase4.
+  # ⚠️ loadtest(80~100 pod)는 values-*-prod-loadtest.yaml 에서 더 낮게 override.
+  poolSize: 150
+  external:
+    # CHANGE_ME (terraform output): ElastiCache configuration endpoint (cluster mode).
+    # terraform output -raw elasticache_configuration_endpoint
+    host: "<ELASTICACHE_ENDPOINT>"
+    port: 6379
+    tls: true
+    clusterMode: true
+    # ElastiCache AUTH — /llm-gateway/prod/redis Secrets Manager 에서 동기화.
+    # 빈 값이면 ExternalSecret 생성 안 되어 모든 Redis 클라이언트가 Auth 실패.
+    passwordSecretName: "llm-gateway-redis"
+    passwordSecretKey: "password"
+
+aws:
+  region: "ap-northeast-2"
+  bedrockAllowedModels:
+    - anthropic.claude-opus-4-20250514-v1:0
+    - anthropic.claude-sonnet-4-20250514-v1:0
+    - anthropic.claude-haiku-4-5-20251001-v1:0
+  allowedStsRegions:
+    - "ap-northeast-2"
+  allowedIamRoles:
+    # 임의로 생성한 IamRoles, 고객에 맞게 변경 필요
+    - Customer-Developer
+    - Customer-Engineer
+    - Customer-Admin
+    - admin
+
+externalSecrets:
+  enabled: true
+  secretStoreRef:
+    kind: "ClusterSecretStore"
+    name: "aws-secrets-manager"
+  secretPathPrefix: "/llm-gateway/"
+  refreshInterval: "30m"
+
+# Ingress — 테스트용 방식 A (HTTP, 도메인 없음)
+# 고객 상황에 맞게 설정 필요
+#   annotations:
+#     alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+#     alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS13-1-2-2021-06
+#     alb.ingress.kubernetes.io/ssl-redirect: "443"
+#     alb.ingress.kubernetes.io/certificate-arn: "arn:aws:acm:...CHANGE_ME"
+#     alb.ingress.kubernetes.io/wafv2-acl-arn: "arn:aws:wafv2:...CHANGE_ME"
+#   gateway/adminUi/adminApi: host=실제 도메인, tls.enabled=true
+ingress:
+  enabled: true
+  className: "alb"
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip  # Fargate 필수
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    alb.ingress.kubernetes.io/healthcheck-protocol: HTTP
+    alb.ingress.kubernetes.io/backend-protocol: HTTP
+    # SSE 스트리밍을 위해 idle timeout 충분히 (dev 300s → prod 600s 유지)
+    alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=600
+  # host 를 비워두면 ALB 가 모든 Host 헤더를 수락 (ALB DNS 로 직접 접근 가능)
+  gateway:
+    host: ""
+    tls:
+      enabled: false
+  adminUi:
+    host: ""
+    tls:
+      enabled: false
+  adminApi:
+    host: ""
+    tls:
+      enabled: false
+
+observability:
+  otel:
+    # sidecar 모드는 Chart에 ConfigMap 템플릿이 아직 없어서 Pod 가 ContainerCreating
+    # 에서 영구 대기. OTel Collector 배포 전에는 in-cluster + dummy endpoint 로 두고,
+    # Collector 배포 시점에 endpoint 만 교체 (env only, Pod 재시작 불필요).
+    mode: "in-cluster"
+    endpoint: "otel-collector.observability.svc.cluster.local:4317"
+    protocol: "grpc"
+
+# ============================================================================
+# 서비스별 — Production HA
+# ============================================================================
+gatewayProxy:
+  replicaCount: 3
+  image:
+    # ⚠️ 태그 필수 명시 — 비우면 Chart.appVersion(1.0.43)로 폴백. chart의 readinessProbe(/health/ready)는
+    # 1.0.51-resilience 이상에서만 200 응답(구버전은 401) → 반드시 resilience 이미지와 정합 유지.
+    # 1.0.52-workers: CMD ${WORKERS:-4} 로 WORKERS env 활성화(0.5 vCPU 4워커 기아 → 2워커).
+    tag: "1.0.52-workers"
+  serviceAccount:
+    annotations:
+      # CHANGE_ME (terraform output): IRSA role ARN. terraform output -raw gateway_proxy_role_arn
+      eks.amazonaws.com/role-arn: "arn:aws:iam::123456789012:role/llm-gateway-prod-gateway-proxy-bedrock"
+  env:
+    # uvicorn 워커 수. Dockerfile CMD 가 ${WORKERS:-4} 로 읽음(1.0.98+). cpu request
+    # 500m(Fargate ≈0.5 vCPU)에서 4워커면 워커당 0.125 vCPU 기아 → /v1/messages p95 저하.
+    # 2 = GIL 회피(멀티프로세스)와 CPU 기아 회피의 균형. burst 시 limit 2 vCPU 여유.
+    # (과거엔 Dockerfile 하드코딩 4 라 이 값이 죽은 설정이었음 — 부하테스트 p95 숨은 원인.)
+    WORKERS: "2"
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "2000m"
+      memory: "2Gi"
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 30
+    targetCPUUtilizationPercentage: 65
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 2
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/component: gateway-proxy
+            topologyKey: topology.kubernetes.io/zone
+
+adminApi:
+  replicaCount: 3
+  serviceAccount:
+    annotations:
+      # CHANGE_ME (terraform output): IRSA role ARN. terraform output -raw admin_api_role_arn
+      eks.amazonaws.com/role-arn: "arn:aws:iam::123456789012:role/llm-gateway-prod-admin-api"
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "768Mi"
+    limits:
+      cpu: "1500m"
+      memory: "1.5Gi"
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 65
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 2
+  env:
+    # 고객 SSO 교체 전이므로 dev-login 허용.
+    # 고객 로그인 설정 필요 반드시 "false" 로 복구.
+    DEV_LOGIN_ENABLED: "true"
+    # CHANGE_ME (terraform output): Cognito User Pool ID. terraform output -raw cognito_user_pool_id
+    COGNITO_USER_POOL_ID: "ap-northeast-2_XXXXXXXXX"
+    COGNITO_REGION: "ap-northeast-2"
+    COGNITO_SYNC_DEACTIVATE_MISSING: "true"
+
+  # ── OIDC (Cognito) ──
+  oidc:
+    enabled: true
+    # CHANGE_ME (terraform output): cognito_issuer_url. 형식 https://cognito-idp.{region}.amazonaws.com/{pool_id}
+    issuerUrl: "https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_XXXXXXXXX"
+    audience: ""               # Cognito access_token 은 aud 없음 → 비워둠
+    providerName: "oidc:cognito"
+    groupsClaim: "cognito:groups"
+    groupPrefix: "Claude_"
+    rejectUnmatchedGroups: true
+    requiredGroup: ""
+    vkTtlHours: 1
+
+  adminBootstrap:
+    # CHANGE_ME (org-specific): 첫 운영자 이메일. 이 사용자가 ClaudeAdmin 으로 승격됨.
+    # 본 deliverable 의 prod 환경 운영자 이메일 (org-specific 값으로 교체).
+    emails:
+      - "admin@example.com"
+    groups:
+      - "ClaudeAdmin"
+
+adminUi:
+  replicaCount: 2
+  image:
+    # ⚠️ 태그 필수 명시 — 비우면 Chart.appVersion(1.0.43-rebrand)로 폴백되어 다운그레이드됨.
+    # install-eks.sh 는 image.tag 를 --set 으로 주입하지 않으므로 전적으로 이 값에 의존.
+    tag: "1.0.97-brand"   # 브랜드명 'AWSome AI Gateway' 반영본 (dev 검증 후 prod 승인 배포)
+  resources:
+    requests:
+      cpu: "300m"
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+  env:
+    # admin-ui (Next.js) 도 dev-login route 를 렌더하려면 필요 (admin-api 와 별개 env).
+    # 고객 로그인 설정 필요 SSO 교체후 "false" 로 복구.
+    DEV_LOGIN_ENABLED: "true"
+
+scheduler:
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "500m"
+      memory: "768Mi"
+
+notificationWorker:
+  replicaCount: 2
+  serviceAccount:
+    annotations: {}
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "500m"
+      memory: "768Mi"
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+  email:
+    provider: "mock"          # 고객 내부 메일 API 연동 시 "internal_api"로 전환
+    internalApi:
+      url: ""                 # 고객 내부 메일 API URL
+      fromAddress: "no-reply@llm-gateway.local"
+      fromName: "LLM Gateway"
+
+costRecorderWorker:
+  replicaCount: 3
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 6

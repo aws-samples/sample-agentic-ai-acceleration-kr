@@ -1,0 +1,123 @@
+{{/* Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms. */}}
+
+{{- if .Values.ingress.enabled -}}
+{{/*
+Gateway(사용자 API), Admin UI(웹), Admin API(REST) 를 각각 별도 Ingress 리소스로 생성.
+- 서로 다른 hostname 사용 → 보안 분리 (data-plane vs control-plane)
+- ALB(EKS) / nginx(on-prem) 공통 이 템플릿으로 커버
+*/}}
+
+# ----------------------------------------------------------------------------
+# Gateway Proxy Ingress — data-plane (사용자 API)
+# ----------------------------------------------------------------------------
+{{- if .Values.gatewayProxy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "llm-gateway.fullname" . }}-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-gateway.componentLabels" (dict "root" . "component" "gateway-proxy") | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className | quote }}
+  {{- if .Values.ingress.gateway.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.gateway.host | quote }}
+      secretName: {{ .Values.ingress.gateway.tls.secretName | quote }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.gateway.host | quote }}
+      http:
+        paths:
+          - path: {{ .Values.ingress.gateway.path | quote }}
+            pathType: {{ .Values.ingress.gateway.pathType }}
+            backend:
+              service:
+                name: {{ include "llm-gateway.fullname" . }}-gateway-proxy
+                port:
+                  number: {{ .Values.gatewayProxy.service.port }}
+{{- end }}
+
+# ----------------------------------------------------------------------------
+# Admin UI Ingress — control-plane (웹)
+# ----------------------------------------------------------------------------
+{{- if .Values.adminUi.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "llm-gateway.fullname" . }}-admin-ui
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-gateway.componentLabels" (dict "root" . "component" "admin-ui") | nindent 4 }}
+  annotations:
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    # admin-ui (Next.js) 는 /health 가 i18n 미들웨어로 307 리다이렉트되어 ALB 가 unhealthy 판정.
+    # 실제 헬스 엔드포인트는 /api/health (200). 공통 어노테이션 뒤에 와서 healthcheck-path 를 override.
+    alb.ingress.kubernetes.io/healthcheck-path: /api/health
+    alb.ingress.kubernetes.io/success-codes: "200"
+spec:
+  ingressClassName: {{ .Values.ingress.className | quote }}
+  {{- if .Values.ingress.adminUi.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.adminUi.host | quote }}
+      secretName: {{ .Values.ingress.adminUi.tls.secretName | quote }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.adminUi.host | quote }}
+      http:
+        paths:
+          - path: {{ .Values.ingress.adminUi.path | quote }}
+            pathType: {{ .Values.ingress.adminUi.pathType }}
+            backend:
+              service:
+                name: {{ include "llm-gateway.fullname" . }}-admin-ui
+                port:
+                  number: {{ .Values.adminUi.service.port }}
+{{- end }}
+
+# ----------------------------------------------------------------------------
+# Admin API Ingress — control-plane (REST API)
+# ----------------------------------------------------------------------------
+{{- if .Values.adminApi.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "llm-gateway.fullname" . }}-admin-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-gateway.componentLabels" (dict "root" . "component" "admin-api") | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className | quote }}
+  {{- if .Values.ingress.adminApi.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.adminApi.host | quote }}
+      secretName: {{ .Values.ingress.adminApi.tls.secretName | quote }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.adminApi.host | quote }}
+      http:
+        paths:
+          - path: {{ .Values.ingress.adminApi.path | quote }}
+            pathType: {{ .Values.ingress.adminApi.pathType }}
+            backend:
+              service:
+                name: {{ include "llm-gateway.fullname" . }}-admin-api
+                port:
+                  number: {{ .Values.adminApi.service.port }}
+{{- end }}
+{{- end }}

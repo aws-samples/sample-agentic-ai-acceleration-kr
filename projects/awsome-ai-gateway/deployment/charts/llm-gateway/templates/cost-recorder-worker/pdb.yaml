@@ -1,0 +1,16 @@
+{{/* Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms. */}}
+
+{{- if and .Values.costRecorderWorker.enabled .Values.costRecorderWorker.podDisruptionBudget.enabled -}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "llm-gateway.fullname" . }}-cost-recorder-worker
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-gateway.componentLabels" (dict "root" . "component" "cost-recorder-worker") | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.costRecorderWorker.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "llm-gateway.selectorLabels" (dict "root" . "component" "cost-recorder-worker") | nindent 6 }}
+{{- end }}

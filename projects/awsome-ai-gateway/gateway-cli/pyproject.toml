@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "gateway-cli"
+version = "0.1.0"
+description = "LLM Gateway CLI - Integrated onboarding tool for AI development tools"
+requires-python = ">=3.11"
+dependencies = [
+    "click>=8.1",
+    "requests>=2.32",
+    "structlog>=24.4",
+    "pyyaml>=6.0",
+    "platformdirs>=4.3",
+    "botocore>=1.35",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-mock>=3.14",
+    "pytest-cov>=6.0",
+    "responses>=0.25",
+    "ruff>=0.8",
+    "pyinstaller>=6.11",
+]
+
+[project.scripts]
+gateway-cli = "cli.main:cli"
+api-key-helper = "api_key_helper.main:main"
+statusline = "statusline.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cli", "src/api_key_helper", "src/statusline", "src/gateway_cli_oidc"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]

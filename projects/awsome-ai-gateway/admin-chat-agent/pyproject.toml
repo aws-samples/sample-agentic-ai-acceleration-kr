@@ -1,0 +1,55 @@
+[project]
+name = "admin-chat-agent"
+version = "0.2.29"
+description = "LLM Gateway BI assistant — 5-agent Strands on AgentCore"
+requires-python = ">=3.11"
+dependencies = [
+  # structured_output_model(per-invocation) 은 strands 1.40+ 에서 보장 —
+  # 하한을 올려 빌드마다 구버전이 깔려 forced-output 이 무력화되는 일 방지.
+  "strands-agents>=1.42,<2",
+  # §59 L4 GPT-5.5 cross-family critic — Bedrock Mantle(us-east-2) Responses API.
+  # AgentCore_only 에서 검증된 경로: BedrockOpenAI + provide_token(SigV4 기반 단기
+  # bearer). Strands OpenAIModel 이 아니라 openai SDK 의 BedrockOpenAI 직접 사용
+  # (gpt-5.x 는 chat/completions 아닌 Responses API). 미설치 시 critic fail-soft.
+  "openai>=2.0.0",
+  "aws-bedrock-token-generator>=0.1.0",
+  "bedrock-agentcore>=0.1.0",
+  "bedrock-agentcore-starter-toolkit>=0.1.0",
+  "boto3>=1.35",
+  "pydantic>=2.7",
+  "structlog>=24.1",
+  # L2/L3 결정적 정확도 검증(§58): validator 에 SQL 구조 메타 주입 + 후보선택
+  # 결과셋 비교를 위해 agent 런타임에서도 SQL 을 파싱한다(query_db Lambda 와
+  # 동일 sqlglot — PASS 편향을 '문장'이 아닌 '구조 사실'로 억제).
+  "sqlglot>=23",
+  "pyyaml>=6",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=0.23",
+  "ruff>=0.6",
+  "pyyaml>=6",          # golden test 케이스 로드 (tests/golden/*.yaml)
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = ["agent"]
+
+[tool.setuptools.package-data]
+agent = ["prompts/*.md", "*.json"]
+
+[tool.pytest.ini_options]
+# tests/eval, tests/unit 이 `from tests.eval import ...` 로 import 하므로
+# 프로젝트 루트(=rootdir)를 path 에 둔다. src 는 agent 패키지용.
+testpaths = ["tests"]
+pythonpath = [".", "src"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120

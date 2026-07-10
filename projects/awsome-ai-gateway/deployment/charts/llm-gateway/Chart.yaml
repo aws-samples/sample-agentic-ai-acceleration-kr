@@ -1,0 +1,36 @@
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
+
+apiVersion: v2
+name: llm-gateway
+description: |
+  LLM Gateway — <Customer> 통합 LLM 게이트웨이. Bedrock(Claude)과 사내 오픈모델(vLLM/TGI)을
+  하나의 API로 프록시하며 예산/Rate Limit/ROI 분석을 제공합니다. EKS Fargate와 고객 on-prem
+  K8s를 동일 chart로 지원합니다.
+type: application
+
+# Chart 자체 버전. 내부 변경 시 SemVer bump.
+version: 0.1.0
+
+# 애플리케이션(이미지 태그) 기본 버전. values.image.tag로 오버라이드 가능.
+appVersion: "1.0.43-rebrand"
+
+kubeVersion: ">=1.28.0-0"
+
+home:
+sources:
+maintainers:
+  - name: LLM Gateway Team
+    email: admin
+
+keywords:
+  - llm
+  - gateway
+  - bedrock
+  - claude
+  - vllm
+  - openai
+  - proxy
+
+annotations:
+  category: AI
+  licenses: Proprietary

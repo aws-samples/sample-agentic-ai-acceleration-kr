@@ -1,0 +1,18 @@
+<!-- LLM Gateway logo — A2: Aperture, gradient tile (saved 2026-06-14). teal 타일 + 흰 날. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">
+  <defs>
+    <linearGradient id="apTile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0d9488"/><stop offset="1" stop-color="#2dd4bf"/>
+    </linearGradient>
+  </defs>
+  <rect width="48" height="48" rx="13" fill="url(#apTile)"/>
+  <g fill="#ffffff">
+    <path d="M24 24 L24 9 A15 15 0 0 1 37 16.5 Z"/>
+    <path d="M24 24 L37 16.5 A15 15 0 0 1 37 31.5 Z" opacity="0.78"/>
+    <path d="M24 24 L37 31.5 A15 15 0 0 1 24 39 Z" opacity="0.6"/>
+    <path d="M24 24 L24 39 A15 15 0 0 1 11 31.5 Z" opacity="0.78"/>
+    <path d="M24 24 L11 31.5 A15 15 0 0 1 11 16.5 Z" opacity="0.6"/>
+    <path d="M24 24 L11 16.5 A15 15 0 0 1 24 9 Z" opacity="0.88"/>
+  </g>
+  <circle cx="24" cy="24" r="4.6" fill="#0d9488"/>
+</svg>

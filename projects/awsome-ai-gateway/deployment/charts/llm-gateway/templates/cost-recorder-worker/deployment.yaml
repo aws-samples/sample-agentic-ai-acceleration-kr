@@ -1,0 +1,90 @@
+{{/* Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms. */}}
+
+{{- if .Values.costRecorderWorker.enabled -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "llm-gateway.fullname" . }}-cost-recorder-worker
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-gateway.componentLabels" (dict "root" . "component" "cost-recorder-worker") | nindent 4 }}
+  {{- with (include "llm-gateway.commonAnnotations" .) }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if not .Values.costRecorderWorker.autoscaling.enabled }}
+  replicas: {{ .Values.costRecorderWorker.replicaCount }}
+  {{- end }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      # Redis Stream consumer group이라 일시적으로 Pod 0개여도 안전
+      # (새 Pod가 기존 pending entries 이어받음)
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "llm-gateway.selectorLabels" (dict "root" . "component" "cost-recorder-worker") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "llm-gateway.selectorLabels" (dict "root" . "component" "cost-recorder-worker") | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/common/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/common/secret.yaml") . | sha256sum }}
+        {{- with .Values.costRecorderWorker.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "llm-gateway.serviceAccountName" (dict "root" . "svc" .Values.costRecorderWorker "default" "cost-recorder-worker") }}
+      {{- include "llm-gateway.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.costRecorderWorker.terminationGracePeriodSeconds }}
+      {{- with .Values.costRecorderWorker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.costRecorderWorker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.costRecorderWorker.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: cost-recorder-worker
+          image: {{ include "llm-gateway.image" (dict "root" . "image" .Values.costRecorderWorker.image) | quote }}
+          imagePullPolicy: {{ .Values.costRecorderWorker.image.pullPolicy }}
+          securityContext:
+            {{- include "llm-gateway.containerSecurityContext" (dict "root" . "override" (dict)) | nindent 12 }}
+          env:
+            {{- include "llm-gateway.commonEnv" . | nindent 12 }}
+            {{- include "llm-gateway.downwardApiEnv" . | nindent 12 }}
+            # Redis Stream consumer 이름을 Pod 이름으로 고정 → 재시작 후 pending entries 승계
+            - name: COST_STREAM_CONSUMER
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            {{- range $key, $value := .Values.costRecorderWorker.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "llm-gateway.fullname" . }}-config
+          resources:
+            {{- toYaml .Values.costRecorderWorker.resources | nindent 12 }}
+          livenessProbe:
+            {{- toYaml .Values.costRecorderWorker.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.costRecorderWorker.readinessProbe | nindent 12 }}
+          # 배치 flush 도중 kill 당하지 않게 preStop에서 short sleep
+          # (consumer group은 pending entries를 다음 consumer가 picking)
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 10"]
+{{- end }}

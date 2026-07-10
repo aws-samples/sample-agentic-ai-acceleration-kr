@@ -1,0 +1,346 @@
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
+
+# ============================================================================
+# AWS EKS Fargate — Development 환경 오버라이드
+# ----------------------------------------------------------------------------
+# 용도: 기능 검증, 실제 Fargate/IRSA/Bedrock 연동 테스트
+# 특성: 저비용(t-class Aurora), 단일 AZ 수용, 낮은 replica
+# 사용법:
+#   helm install llm-gateway ./charts/llm-gateway \
+#     -f ./charts/llm-gateway/values-eks-fargate-dev.yaml \
+#     -n llm-gateway-dev --create-namespace
+# ============================================================================
+
+global:
+  environment: dev
+  deploymentMode: eks-fargate
+  commonLabels:
+    environment: dev
+    managed-by: terraform
+  # CHANGE_ME (account): 본인 AWS 계정의 ECR registry. terraform output ecr_registry 또는
+  # `aws ecr describe-repositories --query 'repositories[0].repositoryUri' | cut -d/ -f1` 로 확인.
+  imageRegistry: "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com"
+
+# ----------------------------------------------------------------------------
+# 외부 관리형 의존성 (Aurora / ElastiCache)
+# ----------------------------------------------------------------------------
+database:
+  enabled: false  # 반드시 false — Aurora 사용
+  external:
+    # CHANGE_ME (terraform output): RDS Proxy endpoint. terraform output -raw rds_proxy_endpoint
+    # (Proxy 사용 안 하면 -raw aurora_writer_endpoint). 계정마다 hash 부분 다름.
+    host: "<RDS_PROXY_ENDPOINT>"
+    port: 5432
+    name: "gateway"
+    user: "gateway"
+    # 모든 서비스가 단일 'gateway' 유저 사용 (migration Job 이 자동 생성/GRANT).
+    # notification-worker 도 동일 유저 사용 — base values.yaml 의 통일 결정을 env 에서도 유지.
+    notificationWorkerUser: "gateway"
+    passwordSecretName: "llm-gateway-db"
+    sslMode: "require"
+    poolSize: 5
+    maxOverflow: 10
+    # dev 도 enable_rds_proxy=true 기본값이라 Proxy 경유 → pinning 회피 위해 0.
+    # Proxy 끄려면(-var enable_rds_proxy=false) 100 으로 복구.
+    statementCacheSize: 0
+
+redis:
+  enabled: false  # ElastiCache 사용
+  # dev 는 단일 노드(cache.t4g.small)·HPA 1~3 pod → 풀을 작게(노드 커넥션 보호).
+  # deepdive Q50 Phase4: pod 당 pool × maxReplica ≤ 노드 maxclients.
+  poolSize: 40
+  external:
+    # CHANGE_ME (terraform output): ElastiCache primary endpoint. terraform output -raw elasticache_primary_endpoint.
+    host: "<ELASTICACHE_ENDPOINT>"
+    port: 6379
+    tls: true  # ElastiCache encryption-in-transit
+    clusterMode: false  # dev는 단일 노드
+    # ElastiCache AUTH 토큰 — 03-secrets.md §3 에서 생성한 Secret 경로와 일치.
+    # 빈 값이면 ExternalSecret 이 생성되지 않아 모든 Redis 클라이언트가 Auth 실패.
+    passwordSecretName: "llm-gateway-redis"
+    passwordSecretKey: "password"
+
+# ----------------------------------------------------------------------------
+# AWS / IAM — dev 계정/역할 예시 (Terraform outputs로 교체 필요)
+# ----------------------------------------------------------------------------
+aws:
+  region: "ap-northeast-2"
+  bedrockAllowedModels:
+    - anthropic.claude-sonnet-4-20250514-v1:0
+    - anthropic.claude-haiku-4-5-20251001-v1:0
+  allowedStsRegions:
+    - "ap-northeast-2"
+  allowedIamRoles:
+    - Customer-Developer  # dev Permission Set 예시
+    - admin                # 개발/테스트 계정 admin role
+
+# ----------------------------------------------------------------------------
+# Secrets — ExternalSecrets Operator 사용 (AWS Secrets Manager)
+# ----------------------------------------------------------------------------
+externalSecrets:
+  enabled: true
+  secretStoreRef:
+    kind: "ClusterSecretStore"
+    name: "aws-secrets-manager"
+  secretPathPrefix: "/llm-gateway/"
+  refreshInterval: "1h"
+
+# ============================================================================
+# Ingress (ALB) — 방식 A(도메인 없음) / 방식 B(도메인 있음) 택 1
+# ----------------------------------------------------------------------------
+# ■ 방식 A — 도메인 없음 (dev 테스트용, 현재 활성):
+#     - HTTP 전용, ALB DNS(k8s-xxx.elb.amazonaws.com) 로 직접 접근
+#     - TLS/ACM 인증서 불필요, Route53 불필요
+#     - smoke-test / 내부 검증용으로만 사용. 사용자에게 공개 금지(평문 HTTP)
+#
+# ■ 방식 B — 도메인 있음 (prod, 또는 dev에 도메인 있을 때):
+#     - HTTPS + ACM 인증서 + Route53 CNAME 필요
+#     - 사전 준비:
+#         1) Route53 Hosted Zone 또는 외부 DNS 에 도메인 등록
+#         2) ACM 에서 `gateway-dev.<domain>`, `admin-dev.<domain>` 등 인증서 발급·검증
+#         3) 아래 방식 A 블록을 주석 처리하고 방식 B 블록의 주석 해제
+#         4) certificate-arn 을 실제 값으로 교체
+#         5) helm install/upgrade 후 Route53 에 ALB DNS → custom host CNAME 추가
+# ============================================================================
+
+# === 방식 A (활성): 도메인 없음, HTTP 전용 ===
+ingress:
+  enabled: true
+  className: "alb"
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip  # Fargate 필수
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    alb.ingress.kubernetes.io/healthcheck-protocol: HTTP
+    alb.ingress.kubernetes.io/backend-protocol: HTTP
+    # SSE 스트리밍을 위해 idle timeout 충분히
+    alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=300
+  # host 를 비워두면 ALB 가 모든 Host 헤더를 수락 (ALB DNS 로 직접 접근 가능)
+  gateway:
+    host: ""
+    tls:
+      enabled: false
+  adminUi:
+    host: ""
+    tls:
+      enabled: false
+  adminApi:
+    host: ""
+    tls:
+      enabled: false
+
+# === 방식 B (주석): 도메인 있음, HTTPS ===
+# 위 "방식 A" 블록 전체(ingress: ... adminApi 까지)를 주석 처리하고 아래 주석을 해제하세요.
+#
+# ingress:
+#   enabled: true
+#   className: "alb"
+#   annotations:
+#     alb.ingress.kubernetes.io/scheme: internet-facing
+#     alb.ingress.kubernetes.io/target-type: ip
+#     alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+#     alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS13-1-2-2021-06
+#     alb.ingress.kubernetes.io/ssl-redirect: "443"
+#     alb.ingress.kubernetes.io/healthcheck-path: /health
+#     alb.ingress.kubernetes.io/healthcheck-protocol: HTTP
+#     alb.ingress.kubernetes.io/backend-protocol: HTTP
+#     alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=300
+#     # 아래 ACM 인증서 ARN 을 실제 값으로 교체하세요.
+#     # aws acm list-certificates --region ap-northeast-2 로 확인.
+#     alb.ingress.kubernetes.io/certificate-arn: "arn:aws:acm:ap-northeast-2:ACCOUNT_ID:certificate/CERT_ID"
+#   gateway:
+#     host: "gateway-dev.llm-gateway.example.com"
+#     tls:
+#       enabled: true
+#   adminUi:
+#     host: "admin-dev.llm-gateway.example.com"
+#     tls:
+#       enabled: true
+#   adminApi:
+#     host: "admin-api-dev.llm-gateway.example.com"
+#     tls:
+#       enabled: true
+
+# ----------------------------------------------------------------------------
+# Observability — EKS Fargate는 DaemonSet 불가 → sidecar 또는 managed ADOT
+# ----------------------------------------------------------------------------
+observability:
+  otel:
+    # Chart 에 sidecar ConfigMap 템플릿 이 아직 없어서 "sidecar" 로 두면 gateway-proxy
+    # Pod 가 존재하지 않는 ConfigMap 참조로 ContainerCreating 에서 영구 대기.
+    # 당장은 OTel Collector 배포 전이므로 "in-cluster" 로 두고 endpoint 는 dummy.
+    # 실제 Collector 배포 시점에 endpoint 만 교체하면 됨 (Pod 재시작 불필요 — env only).
+    mode: "in-cluster"
+    endpoint: "otel-collector.observability.svc.cluster.local:4317"
+    protocol: "grpc"
+
+# ============================================================================
+# 서비스별 — dev는 최소 replica (비용 절감)
+# ============================================================================
+gatewayProxy:
+  replicaCount: 1
+  # 이미지 태그 명시 — 비우면 Chart.appVersion(1.0.43-rebrand)로 리셋되어 다운그레이드됨.
+  # helm --set 없이 helm upgrade 만 해도 이 태그가 유지되도록 각 서비스에 명시(정합 고정).
+  # 1.0.49-xacct: claude-code→374 cross-account Bedrock native 코드(BedrockAccountClientProvider
+  #   + adapter resolver/859 투명폴백).
+  # 1.0.50-xacct-review: 어드버서리 리뷰 픽스 — 캐시키에 external_id 포함(#1, stale 재사용 방지),
+  #   count_tokens 도 cross-account(#4, invoke=374/count=859 스플릿 제거), _region_for_rewrite
+  #   명시 초기화(#6, locals() 리플렉션 제거). 무회귀(269 유닛 통과).
+  # 1.0.51-resilience: 6축 견고성 갭 4건 — readiness 전용 /health/ready(DB_DEGRADED/풀 hard_cap
+  #   소진 시 503), pool_timeout=10·pool_recycle=3600, bedrock retries 배선(기본1), event_detector
+  #   LRU bounded. 283 유닛 통과. ⚠️ readinessProbe.path 아래 gatewayProxy 프로브 참조.
+  image:
+    # 1.0.52-workers: Dockerfile CMD 를 shell-form ${WORKERS:-4} 로 수정 → chart 의 WORKERS
+    #   env 가 살아남(이전엔 --workers 4 하드코딩이라 죽은 설정). 0.5 vCPU 워커 기아 해소.
+    tag: "1.0.52-workers"
+  serviceAccount:
+    annotations:
+      # CHANGE_ME (terraform output): IRSA role ARN. terraform output -raw gateway_proxy_role_arn
+      eks.amazonaws.com/role-arn: "arn:aws:iam::123456789012:role/llm-gateway-dev-gateway-proxy-bedrock"
+  env:
+    # uvicorn 워커 수. Dockerfile CMD 가 ${WORKERS:-4} 로 읽음(1.0.98+). Fargate cpu
+    # request 250m(≈0.25 vCPU)에서 워커당 CPU 기아를 피하려 2 로 명시(과거엔 Dockerfile
+    # 하드코딩 4 라 이 값이 죽은 설정이었음). rate-limit divisor(uvicorn_workers)와 정합.
+    WORKERS: "2"
+    # Server-side web search (Architecture C, AgentCore Gateway). AGENTCORE_GATEWAY_URL is
+    # the managed WebSearch gateway's /mcp endpoint (us-east-1); until it's provisioned and
+    # set here, agentcore_mcp_client is None → the router branch is skipped (zero-regression).
+    # AGENTCORE_REGION differs from aws.region (ap-northeast-2) on purpose — WebSearch is
+    # us-east-1-only; SigV4 signs to us-east-1 while the pod stays in Seoul.
+    AGENTCORE_GATEWAY_URL: "https://<AGENTCORE_GATEWAY_ID>.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp"
+    AGENTCORE_REGION: "us-east-1"
+    AGENTCORE_TARGET_ID: "web-search-tool"
+    WEB_SEARCH_ENABLED: "true"   # global kill-switch; per-client gating via routing_profiles.web_search_enabled
+  resources:
+    requests:
+      cpu: "250m"  # Fargate 하한
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 3
+  podDisruptionBudget:
+    enabled: false
+
+adminApi:
+  replicaCount: 1
+  image:
+    tag: "1.0.48-websearch"   # codex + 웹서치 + 웹서치토글 라우트(routing.py) 정합본
+  serviceAccount:
+    annotations:
+      # CHANGE_ME (terraform output): IRSA role ARN. terraform output -raw admin_api_role_arn
+      eks.amazonaws.com/role-arn: "arn:aws:iam::123456789012:role/llm-gateway-dev-admin-api"
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+  autoscaling:
+    enabled: false
+  env:
+    DEV_LOGIN_ENABLED: "true"  # dev 환경에서만 허용
+    # CHANGE_ME (terraform output): Cognito User Pool ID. terraform output -raw cognito_user_pool_id
+    COGNITO_USER_POOL_ID: "ap-northeast-2_XXXXXXXXX"
+    COGNITO_REGION: "ap-northeast-2"
+    COGNITO_SYNC_DEACTIVATE_MISSING: "true"
+    # BI Insight / 퀵챗 = AgentCore Runtime(admin-chat-agent) 연결. 이 ARN 없으면
+    # chat_agent.py:333 이 503 "AgentCore runtime not configured" 반환.
+    # values 에 명시(--set 유실 방지). ARN = aws bedrock-agentcore-control list-agent-runtimes.
+    AGENTCORE_REGION: "ap-northeast-2"
+    AGENTCORE_RUNTIME_ARN: "arn:aws:bedrock-agentcore:ap-northeast-2:123456789012:runtime/llm_gateway_dev_admin_chat_agent-a8AdBh8WM8"
+    CHAT_STAGING_BUCKET: "llm-gateway-dev-chat-agent-staging-123456789012"
+    # 리포트 다운로드 presign 라우트 — staging 버킷 reports/ prefix 화이트리스트.
+    # IRSA role(llm-gateway-dev-admin-api)에 report-download-presign 정책 부여됨(§49).
+    CHAT_STAGING_BUCKET: "llm-gateway-dev-chat-agent-staging-123456789012"
+
+  # ── OIDC (Cognito) ──
+  # issuerUrl / providerName 은 install-eks.sh 가 terraform output 에서 자동 주입.
+  # 수동 helm install 시엔 --set adminApi.oidc.issuerUrl=... 로 override.
+  oidc:
+    enabled: true
+    # CHANGE_ME (terraform output): cognito_issuer_url. 형식 https://cognito-idp.{region}.amazonaws.com/{pool_id}
+    issuerUrl: "https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_XXXXXXXXX"
+    audience: ""               # Cognito access_token 은 aud 없음 → 비워둠
+    providerName: "oidc:cognito"
+    groupsClaim: "cognito:groups"
+    groupPrefix: "Claude_"
+    rejectUnmatchedGroups: true
+    requiredGroup: ""
+    vkTtlHours: 1
+
+  adminBootstrap:
+    # CHANGE_ME (org-specific): 첫 운영자 이메일. 이 사용자가 ClaudeAdmin 으로 승격됨
+    emails:
+      - "admin@example.com"
+    groups:
+      - "ClaudeAdmin"
+
+adminUi:
+  replicaCount: 1
+  image:
+    tag: "1.0.97-brand"   # 브랜드명 'AWSome AI Gateway' 반영본(1.0.96-websearch UI 정합 유지)
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "500m"
+      memory: "768Mi"
+  autoscaling:
+    enabled: false
+  env:
+    # admin-ui (Next.js) 도 dev-login route 를 렌더하려면 이 env 가 필요.
+    # admin-api 쪽 DEV_LOGIN_ENABLED 와 별개 (두 컨테이너 따로 주입).
+    DEV_LOGIN_ENABLED: "true"
+
+scheduler:
+  image:
+    tag: "1.0.48-websearch"   # admin-api 이미지 공유 — 웹서치토글 포함 정합본으로 통일
+  resources:
+    requests:
+      cpu: "250m"  # Fargate 하한
+      memory: "512Mi"
+
+notificationWorker:
+  replicaCount: 1
+  serviceAccount:
+    annotations: {}
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+  autoscaling:
+    enabled: false
+  email:
+    provider: "mock"          # 고객 내부 메일 API 연동 시 "internal_api"로 전환
+    internalApi:
+      url: ""                 # 고객 내부 메일 API URL
+      fromAddress: "no-reply-dev@llm-gateway.local"
+      fromName: "LLM Gateway"
+
+# DB migration hook — 태그 명시(비우면 Chart.appVersion=1.0.43-rebrand 로 리셋되는데,
+# 그 이미지는 revision 0021 을 모름 → `alembic upgrade head` 가 DB 현재 리비전(0021)을
+# 못 찾아 pre-upgrade 훅 실패).
+# 1.0.49-xacct: head=0022(claude-code→374 cross-account). upgrade head 가 0021→0022 적용
+#   = routing_profiles.claude-code account_role_arn 을 374 role 로 SET → 374 컷오버.
+#   즉시 롤백: 0022 downgrade(account_role_arn NULL) 또는 SQL UPDATE + Redis 플러시.
+migration:
+  image:
+    tag: "1.0.49-xacct"
+
+costRecorderWorker:
+  replicaCount: 1
+  image:
+    tag: "1.0.47-websearch"   # web_search_count 배관 정합본
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+  autoscaling:
+    enabled: false

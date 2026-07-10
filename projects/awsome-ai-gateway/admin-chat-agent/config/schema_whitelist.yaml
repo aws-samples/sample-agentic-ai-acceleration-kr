@@ -1,0 +1,335 @@
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
+
+# Schema whitelist for admin-chat-agent's query_db tool.
+#
+# Source of truth for:
+#   - SQL Specialist's prompt (allowed tables/columns)
+#   - get_schema Lambda (returns subset of this yaml)
+#   - Schema Linking RAG (build-time embedding of descriptions)
+#   - query_db Lambda's sqlglot AST validation
+#
+# 새 테이블/컬럼 노출하려면:
+#   1) db/init/08_create_chat_reader.sql 에 GRANT SELECT 추가
+#   2) 이 파일에 entry 추가
+#   3) Phase 2 의 schema_embeddings 재빌드 스크립트 실행
+
+allowed_tables:
+  # ─── auth schema ───
+  - schema: auth
+    table: users
+    description: "사용자 계정. Cognito 와 1:1 매핑 (sso_subject 로 연결)."
+    columns:
+      - name: id
+        type: uuid
+        description: "내부 사용자 식별자. usage_logs / virtual_keys 등이 FK 로 참조"
+      - name: email
+        type: text
+        description: "사용자 이메일. Cognito 의 email attribute 와 일치"
+        sample_values: ["admin@example.com", "developer@example.com"]
+      - name: display_name
+        type: text
+        description: "사용자 표시 이름 (리포트/UI 용)"
+      - name: role
+        type: text
+        description: "사용자 역할. ADMIN / TEAM_LEADER / DEVELOPER"
+        sample_values: ["ADMIN", "TEAM_LEADER", "DEVELOPER"]
+      - name: provider
+        type: text
+        description: "인증 출처. 'sts'(legacy) 또는 'oidc:<idp>' (예: 'oidc:cognito')"
+        sample_values: ["sts", "oidc:cognito"]
+      - name: is_active
+        type: boolean
+        description: "활성 사용자 여부. false 이면 호출 차단"
+      - name: team_id
+        type: uuid
+        description: "소속 팀 (auth.teams.id 참조). null 이면 default 팀"
+      - name: created_at
+        type: timestamptz
+        description: "사용자 생성 시각 (UTC). KST 변환은 'AT TIME ZONE ''Asia/Seoul'''"
+      - name: updated_at
+        type: timestamptz
+        description: "최근 갱신 시각 (UTC). 사용자 활동 근사 지표 (last_login_at 컬럼은 없음)"
+
+  - schema: auth
+    table: teams
+    description: "팀 정보. Cognito 그룹 'Claude_<team>' 패턴에서 자동 생성"
+    columns:
+      - name: id
+        type: uuid
+      - name: name
+        type: text
+        description: "팀 이름 (예: 'AWS-AI-Specialist')"
+        sample_values: ["AWS-AI-Specialist", "Default"]
+      - name: dept_id
+        type: uuid
+        description: "소속 부서 (auth.departments.id). null 이면 Default Department"
+      - name: leader_user_id
+        type: uuid
+        description: "팀 리더 사용자 (auth.users.id). null 가능"
+      - name: created_at
+        type: timestamptz
+      - name: updated_at
+        type: timestamptz
+
+  - schema: auth
+    table: virtual_keys
+    description: "발급된 Virtual Key. key_value_encrypted 는 절대 노출 금지 (보안)"
+    columns:
+      - name: id
+        type: uuid
+      - name: user_id
+        type: uuid
+        description: "auth.users.id 참조"
+      - name: key_prefix
+        type: text
+        description: "키 식별용 prefix (예: 'vk-')"
+      - name: status
+        type: text
+        description: "키 상태 (ACTIVE / REVOKED / EXPIRED)"
+        sample_values: ["ACTIVE", "REVOKED"]
+      - name: issued_at
+        type: timestamptz
+        description: "발급 시각"
+      - name: expires_at
+        type: timestamptz
+        description: "만료 시각"
+      - name: last_used_at
+        type: timestamptz
+        description: "마지막 호출 시각. null 이면 발급 후 미사용"
+      - name: revoked_at
+        type: timestamptz
+        description: "폐기 시각. null 이면 미폐기 (audit 추적)"
+      - name: revoked_by
+        type: uuid
+        description: "폐기 수행자 (auth.users.id). audit 추적"
+      - name: created_at
+        type: timestamptz
+
+  # ─── usage schema (실제 사용량) ───
+  - schema: usage
+    table: usage_logs
+    description: "모든 LLM 호출 기록. cost / token / latency / status 통합"
+    columns:
+      - name: id
+        type: uuid
+      - name: request_id
+        type: varchar
+        description: "호출 고유 식별자 (추적용)"
+      - name: user_id
+        type: uuid
+      - name: team_id
+        type: uuid
+      - name: dept_id
+        type: uuid
+      - name: model_alias
+        type: varchar
+        description: "모델 이름 (예: 'global.anthropic.claude-sonnet-4-6')"
+        sample_values:
+          - "global.anthropic.claude-sonnet-4-6"
+          - "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+          - "global.anthropic.claude-opus-4-8"
+      - name: provider
+        type: varchar
+        description: "모델 provider (예: 'bedrock')"
+      - name: input_tokens
+        type: integer
+        description: "입력 토큰 수"
+      - name: output_tokens
+        type: integer
+        description: "출력 토큰 수"
+      - name: cache_creation_tokens
+        type: integer
+        description: "Prompt cache write 토큰"
+      - name: cache_read_tokens
+        type: integer
+        description: "Prompt cache hit 토큰 (저렴)"
+      - name: reasoning_tokens
+        type: integer
+        description: "추론(thinking) 토큰. GPT-5.x/Codex 는 output_tokens 안에 이미 포함된 부분집합 — 별도 합산/청구 금지(가시화용). Claude extended thinking 도 여기. 0 = 없음"
+      - name: client
+        type: text
+        description: "호출한 앱(클라이언트) 식별 태그. 정확히 'claude-code' / 'cowork' / 'codex' / NULL 4가지. NULL 은 태깅 이전 레거시(앱별 분석 시 'other' 로 취급). 앱별 비교는 이 컬럼으로 GROUP BY (예: claude code vs codex 비용/토큰)"
+        sample_values: ["claude-code", "cowork", "codex"]
+      - name: cost_usd
+        type: numeric
+        description: "한 호출 비용 (USD). 입력+출력+캐시 합산"
+        sample_values: [0.012, 0.045, 0.0001]
+      - name: latency_ms
+        type: integer
+        description: "응답까지 걸린 시간 (밀리초)"
+      - name: status
+        type: text
+        description: "호출 결과 상태 (enum usage.usage_status). 정확히 SUCCESS / ERROR / TIMEOUT 3개뿐 — THROTTLED·RATE_LIMITED 등 다른 값 없음. '에러'는 status IN ('ERROR','TIMEOUT')"
+        sample_values: ["SUCCESS", "ERROR", "TIMEOUT"]
+      - name: is_streaming
+        type: boolean
+      - name: estimated_usage
+        type: boolean
+        description: "tokenizer 역산 추정 플래그. true 면 합성/추정 값 (실측 아님)"
+      - name: downgraded_from
+        type: varchar
+        description: "자동 다운그레이드 발생 시 원래 요청 모델. null 이면 다운그레이드 없음"
+      - name: requested_at
+        type: timestamptz
+        description: "호출 시각 (UTC). KST 변환 'AT TIME ZONE ''Asia/Seoul'''"
+      - name: completed_at
+        type: timestamptz
+        description: "응답 완료 시각 (UTC)"
+
+  # ─── budget schema ───
+  - schema: budget
+    table: budget_configs
+    description: "예산 설정. scope ∈ {TEAM, USER}. 자동 다운그레이드는 TEAM scope 만 평가"
+    columns:
+      - name: id
+        type: uuid
+      - name: scope
+        type: text
+        description: "TEAM 또는 USER (enum)"
+        sample_values: ["TEAM", "USER"]
+      - name: scope_id
+        type: uuid
+        description: "scope=TEAM 이면 auth.teams.id, scope=USER 이면 auth.users.id"
+      - name: max_budget_usd
+        type: numeric
+        description: "예산 상한 (USD)"
+      - name: period_type
+        type: text
+        description: "예산 주기 (enum). MONTHLY 등"
+        sample_values: ["MONTHLY"]
+      - name: policy
+        type: text
+        description: "초과 시 정책 (enum): HARD_BLOCK / SOFT_WARNING / THROTTLE"
+        sample_values: ["HARD_BLOCK", "SOFT_WARNING", "THROTTLE"]
+      - name: allocated_by
+        type: uuid
+        description: "예산 할당 수행자 (auth.users.id). audit 추적"
+      - name: effective_from
+        type: date
+        description: "예산 적용 시작일"
+      - name: is_active
+        type: boolean
+      - name: created_at
+        type: timestamptz
+
+  # ─── model schema ───
+  - schema: model
+    table: rate_limit_configs
+    description: "Rate limit 정책. scope ∈ {TEAM, USER, GLOBAL}, 모델별 한도"
+    columns:
+      - name: id
+        type: uuid
+      - name: scope
+        type: text
+        description: "TEAM / USER / GLOBAL (enum)"
+      - name: scope_id
+        type: uuid
+        description: "scope 대상 ID. GLOBAL 이면 null 가능"
+      - name: model_alias
+        type: varchar
+        description: "적용 대상 모델 alias. null 이면 전체 모델"
+      - name: rpm_limit
+        type: integer
+        description: "분당 요청 수 한도"
+      - name: tpm_limit
+        type: integer
+        description: "분당 토큰 수 한도"
+      - name: cpm_limit_usd
+        type: numeric
+        description: "분당 비용 한도 (USD)"
+      - name: cph_limit_usd
+        type: numeric
+        description: "시간당 비용 한도 (USD)"
+      - name: is_active
+        type: boolean
+      - name: created_by
+        type: uuid
+        description: "rate limit 생성자 (auth.users.id). audit 추적"
+      - name: created_at
+        type: timestamptz
+      - name: updated_at
+        type: timestamptz
+
+# 절대 노출 금지 (sqlglot 이 reject)
+forbidden_columns:
+  - auth.users.sso_subject          # PII
+  - auth.virtual_keys.key_value_encrypted  # 키 원문 (보안 핵심)
+  - audit.audit_logs                # 별도 권한 필요
+
+# 절대 호출 금지 SQL operation
+forbidden_operations:
+  - INSERT
+  - UPDATE
+  - DELETE
+  - DROP
+  - TRUNCATE
+  - ALTER
+  - CREATE
+  - GRANT
+  - REVOKE
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 결정적 정확도 검증 메타 (query_db Lambda 의 sql_guard 가 사용 — DEVLOG §58).
+# LLM 추정이 아니라 이 ground-truth 로 fan-out / timezone / 컬럼 검증을 결정적
+# 으로 수행한다. 새 테이블/관계 추가 시 여기도 갱신.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# timestamptz 컬럼 — 시간 필터/버킷에서 'AT TIME ZONE ''Asia/Seoul''' 앵커를
+# 강제할 대상. raw UTC 로 날짜 경계(now()-interval, date_trunc('day', col))와
+# 비교되면 KST 자정과 9시간 어긋남(결함 ③).
+timestamptz_columns:
+  - usage.usage_logs.requested_at
+  - usage.usage_logs.completed_at
+  - auth.users.created_at
+  - auth.users.updated_at
+  - auth.teams.created_at
+  - auth.teams.updated_at
+  - auth.virtual_keys.issued_at
+  - auth.virtual_keys.expires_at
+  - auth.virtual_keys.last_used_at
+  - auth.virtual_keys.revoked_at
+  - auth.virtual_keys.created_at
+  - budget.budget_configs.created_at
+  - model.rate_limit_configs.created_at
+  - model.rate_limit_configs.updated_at
+
+# FK 카디널리티 — fan-out(1:N JOIN 후 부모측 measure SUM/AVG = N배 중복) 정적
+# 탐지용(결함 ②). child.fk -> parent.pk (child 쪽이 N, parent 쪽이 1).
+# measure(cost_usd/tokens 등)가 parent(1쪽) 컬럼인데 child(N쪽)와 join 후
+# 선집계 없이 SUM 되면 N배 부풀려진다.
+foreign_keys:
+  - child: usage.usage_logs.user_id
+    parent: auth.users.id
+  - child: usage.usage_logs.team_id
+    parent: auth.teams.id
+  - child: usage.usage_logs.dept_id
+    parent: auth.departments.id
+  - child: auth.virtual_keys.user_id
+    parent: auth.users.id
+  - child: auth.users.team_id
+    parent: auth.teams.id
+
+# 행 단위 measure 컬럼 — '한 usage_logs 행 = 한 호출의 실측치'. 이 컬럼들을
+# 1:N JOIN 평면 위에서 SUM/AVG 하면(부모 테이블과 join 시) 안전하지만,
+# usage_logs 를 virtual_keys 같은 다른 N쪽과 join 하면 호출이 VK 수만큼 복제됨.
+# fan-out 룰이 "measure 소속 테이블이 join 그래프에서 1:N 의 1쪽으로 곱해지는가"
+# 를 판정할 때 measure 후보로 사용.
+measure_columns:
+  - usage.usage_logs.cost_usd
+  - usage.usage_logs.input_tokens
+  - usage.usage_logs.output_tokens
+  - usage.usage_logs.cache_creation_tokens
+  - usage.usage_logs.cache_read_tokens
+  - usage.usage_logs.latency_ms
+
+# 행 고유 식별자 — fan-out 중복 카운트를 막는 COUNT(DISTINCT key) 권장 키.
+distinct_keys:
+  usage.usage_logs: request_id
+
+# 대시보드 정합 — admin-api dashboard.py 가 '총 비용/요청/활성사용자'를
+# status=SUCCESS 로 필터(dashboard.py:49). chat 의 '총량' 질의가 이 필터를
+# 빠뜨리면 대시보드와 숫자가 안 맞음(결함 ⑧). sql_guard 가 경고 신호로만 사용
+# (정책이라 결정 차단 아님 — WARN).
+dashboard_conventions:
+  success_status: ["SUCCESS"]
+  totals_filter_column: usage.usage_logs.status

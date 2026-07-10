@@ -1,0 +1,53 @@
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
+
+# ============================================================
+# OIDC IDP Stack (Dev Only) — Keycloak for local OIDC PoC + integration tests
+# ============================================================
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.idp.yml up -d keycloak
+#
+# Web Console: http://localhost:8088
+#   admin / admin  (KEYCLOAK_ADMIN / KEYCLOAK_ADMIN_PASSWORD)
+#
+# OIDC Issuer URL (for admin-api .env):
+#   OIDC_ISSUER_URL=http://localhost:8088/realms/dslg
+#   (inside docker network: http://keycloak:8080/realms/dslg)
+#
+# Realm 자동 import: ./config/keycloak/dslg-realm.json (있으면 시작 시 자동 적용)
+# ============================================================
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command:
+      - start-dev
+      - --import-realm
+      - --hostname-strict=false
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      # Health endpoint (probe 용)
+      KC_HEALTH_ENABLED: "true"
+      KC_HTTP_ENABLED: "true"
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
+      KC_PROXY_HEADERS: xforwarded
+      # Frontchannel issuer URL fixed → 토큰의 iss claim + discovery 의 issuer 모두 이걸로.
+      # admin-api 컨테이너는 OIDC_DISCOVERY_URL_OVERRIDE 로 docker network hostname 사용해서
+      # JWKS fetch. Backchannel 은 dynamic 이라 정상 동작.
+      KC_HOSTNAME: http://localhost:8088
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+    volumes:
+      # Realm seed (있으면 시작 시 자동 import)
+      - ./config/keycloak:/opt/keycloak/data/import:ro
+    ports:
+      - "8088:8080"
+    networks: [shared]
+    healthcheck:
+      # Keycloak 26 의 /health/ready 엔드포인트 (KC_HEALTH_ENABLED=true 필요)
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/9000 && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3 | grep -q '\"status\": \"UP\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped

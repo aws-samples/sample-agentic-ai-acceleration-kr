@@ -1,0 +1,104 @@
+{
+  "title": "Claude Code — Developer Activity",
+  "uid": "claude-code-activity",
+  "editable": true,
+  "time": {"from": "now-24h", "to": "now"},
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1, "title": "Sessions (24h)", "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
+      "targets": [{"expr": "sum(increase(claude_code_session_count_total[24h]))", "legendFormat": ""}],
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "blue", "value": null}]}}}
+    },
+    {
+      "id": 2, "title": "Active Time (24h)", "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 0},
+      "targets": [{"expr": "sum(increase(claude_code_active_time_seconds_total[24h]))", "legendFormat": ""}],
+      "fieldConfig": {"defaults": {"unit": "s", "color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "green", "value": null}]}}}
+    },
+    {
+      "id": 3, "title": "Total Tokens (24h)", "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 0},
+      "targets": [{"expr": "sum(increase(claude_code_token_usage_tokens_total[24h]))", "legendFormat": ""}],
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "purple", "value": null}]}}}
+    },
+    {
+      "id": 4, "title": "Total Cost (24h)", "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 12, "y": 0},
+      "targets": [{"expr": "sum(increase(claude_code_cost_usage_USD_total[24h]))", "legendFormat": ""}],
+      "fieldConfig": {"defaults": {"unit": "currencyUSD", "color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 5}, {"color": "red", "value": 20}]}}}
+    },
+    {
+      "id": 5, "title": "Lines Added (24h)", "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 16, "y": 0},
+      "targets": [{"expr": "sum(max_over_time(claude_code_lines_of_code_count_total{type=\"added\"}[24h]))", "legendFormat": ""}],
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "green", "value": null}]}}}
+    },
+    {
+      "id": 6, "title": "Lines Removed (24h)", "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 20, "y": 0},
+      "targets": [{"expr": "sum(max_over_time(claude_code_lines_of_code_count_total{type=\"removed\"}[24h]))", "legendFormat": ""}],
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "red", "value": null}]}}}
+    },
+
+    {
+      "id": 10, "title": "Token Usage Rate (5m)", "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "targets": [
+        {"expr": "sum by (token_type) (rate(claude_code_token_usage_tokens_total[5m]))", "legendFormat": "{{token_type}}"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "bars", "fillOpacity": 60, "stacking": {"mode": "normal"}}}}
+    },
+    {
+      "id": 11, "title": "Cost Rate (USD/min)", "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+      "targets": [
+        {"expr": "rate(claude_code_cost_usage_USD_total[5m]) * 60", "legendFormat": "cost/min"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "currencyUSD", "custom": {"drawStyle": "line", "fillOpacity": 30}}}
+    },
+
+    {
+      "id": 20, "title": "Code Changes Over Time", "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+      "targets": [
+        {"expr": "rate(claude_code_lines_of_code_count_total{type=\"added\"}[5m]) * 60", "legendFormat": "added/min"},
+        {"expr": "rate(claude_code_lines_of_code_count_total{type=\"removed\"}[5m]) * 60", "legendFormat": "removed/min"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "bars", "fillOpacity": 70}}}
+    },
+    {
+      "id": 21, "title": "Code Edit Tool Decisions", "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+      "targets": [
+        {"expr": "sum by (decision) (rate(claude_code_code_edit_tool_decision_total[5m]))", "legendFormat": "{{decision}}"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "bars", "fillOpacity": 60}}}
+    },
+
+    {
+      "id": 30, "title": "Session Activity", "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 20},
+      "targets": [
+        {"expr": "rate(claude_code_session_count_total[5m]) * 300", "legendFormat": "sessions/5min"},
+        {"expr": "rate(claude_code_active_time_seconds_total[5m])", "legendFormat": "active_rate"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "fillOpacity": 20}}}
+    },
+    {
+      "id": 31, "title": "Commits & PRs (24h)", "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 20},
+      "targets": [{"expr": "sum(increase(claude_code_commit_count_total[24h]))", "legendFormat": "commits"}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "orange", "value": null}]}}}
+    },
+    {
+      "id": 32, "title": "Pull Requests (24h)", "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 20},
+      "targets": [{"expr": "sum(increase(claude_code_pull_request_count_total[24h]))", "legendFormat": ""}],
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "blue", "value": null}]}}}
+    }
+  ],
+  "schemaVersion": 39
+}

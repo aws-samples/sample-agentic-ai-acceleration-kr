@@ -1,0 +1,28 @@
+<h2>비정상 사용 패턴 감지</h2>
+<p>안녕하세요, {{ recipient_name }}님.</p>
+<p>시스템에서 비정상적인 사용 패턴이 감지되었습니다. 추가 검토가 필요합니다.</p>
+<table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;">
+  <tr>
+    <td><strong>항목</strong></td>
+    <td><strong>값</strong></td>
+  </tr>
+  <tr>
+    <td>패턴 유형</td>
+    <td>{{ payload.pattern_type | default('') }}</td>
+  </tr>
+  <tr>
+    <td>사용자 ID</td>
+    <td>{{ payload.user_id | default('') }}</td>
+  </tr>
+  <tr>
+    <td>상세 정보</td>
+    <td>{{ payload.detail | default('') }}</td>
+  </tr>
+</table>
+<p><strong>권장 조치</strong></p>
+<ul>
+  <li>해당 사용자의 최근 활동을 검토하세요.</li>
+  <li>필요시 사용자에게 연락하여 확인하세요.</li>
+  <li>의심 활동이 계속되면 계정을 일시 중지하세요.</li>
+</ul>
+<p><small>{{ gateway_name }} — {{ timestamp_kr }}</small></p>

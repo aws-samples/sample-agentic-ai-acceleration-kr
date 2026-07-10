@@ -1,0 +1,22 @@
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
+#
+# Golden test case — L5 독립 답변 감사(§60) crying-wolf 회귀 가드.
+# 깨끗한 deep 질의(실행 결과에서 곧바로 나온 수치)에 대해 auditor 가 거짓 경보를
+# 내지 않아야 한다(verdict=PASS = audit 이벤트 미발행 또는 PASS). 약한 게이트의
+# 핵심 — 멀쩡한 답변을 RETRY/NEEDS_REVIEW 로 막으면 신뢰를 깎는다.
+#
+# ⚠️ 이 검증은 AUDITOR_ENABLED=1 일 때만 의미가 있다(기본 OFF면 audit 미발행=PASS
+# 로 자동 충족). 라이브에서 auditor 효과 측정 시 AUDITOR_ENABLED=1 로 실행.
+use_case_id: "14"
+tier: A
+mode: deep
+name: "[deep] auditor crying-wolf 가드 — 깨끗한 수치는 PASS"
+question: "이번 달 비용 top 3 사용자 진행해줘"
+
+expected:
+  # 핵심 수치가 SQL 결과 셀에서 직접 나오므로 auditor 는 결함을 못 찾아야 한다.
+  audit:
+    verdict: "PASS"
+  validator:
+    verdict: "PASS"
+    min_confidence: 0.6

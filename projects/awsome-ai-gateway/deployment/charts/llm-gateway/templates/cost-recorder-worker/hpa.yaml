@@ -1,0 +1,25 @@
+{{/* Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms. */}}
+
+{{- if and .Values.costRecorderWorker.enabled .Values.costRecorderWorker.autoscaling.enabled -}}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "llm-gateway.fullname" . }}-cost-recorder-worker
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-gateway.componentLabels" (dict "root" . "component" "cost-recorder-worker") | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "llm-gateway.fullname" . }}-cost-recorder-worker
+  minReplicas: {{ .Values.costRecorderWorker.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.costRecorderWorker.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.costRecorderWorker.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}

@@ -1,0 +1,19 @@
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# OTel Collector가 remote write로 push
+# scrape_configs는 OTel Collector 자체 메트릭 수집용
+scrape_configs:
+  - job_name: 'otel-collector'
+    static_configs:
+      - targets: ['otel-collector:8888']
+    scrape_interval: 15s
+
+  # Claude Code + 모든 서비스 메트릭 (Delta 포함) — pull 방식
+  - job_name: 'otel-metrics'
+    static_configs:
+      - targets: ['otel-collector:8889']
+    scrape_interval: 15s

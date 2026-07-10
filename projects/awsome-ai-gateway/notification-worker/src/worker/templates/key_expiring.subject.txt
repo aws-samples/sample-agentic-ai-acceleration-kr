@@ -1,0 +1,1 @@
+[DS Gateway] Virtual Key 만료 {{ payload.days_until_expiry | default('') }}일 전 알림

@@ -1,0 +1,207 @@
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
+
+# ============================================================================
+# On-prem K8s — Production 환경 오버라이드 (고객 권장값)
+# ----------------------------------------------------------------------------
+# 용도: 고객 사내 K8s 운영 환경
+# 특성: HA (3+ replica), 사내 DB/Redis HA 클러스터, TLS 필수
+# ============================================================================
+
+global:
+  environment: prod
+  deploymentMode: onprem
+  commonLabels:
+    environment: prod
+  imageRegistry: "harbor.customer.internal/llm-gateway"
+  imagePullSecrets:
+    - name: harbor-registry
+
+database:
+  enabled: false
+  external:
+    host: "postgres.customer.internal"  # HA 클러스터 endpoint (PgPool/HAProxy)
+    port: 5432
+    name: "gateway"
+    user: "gateway"
+    notificationWorkerUser: "notification_worker_user"
+    passwordSecretName: "llm-gateway-db"
+    sslMode: "require"
+    poolSize: 20
+    maxOverflow: 40
+
+redis:
+  enabled: false
+  external:
+    host: "redis.customer.internal"  # Redis Cluster endpoint
+    port: 6379
+    tls: true
+    clusterMode: true
+    passwordSecretName: "llm-gateway-redis"
+
+aws:
+  region: ""
+  bedrockAllowedModels: []
+  allowedStsRegions: []
+  allowedIamRoles: []
+
+auth:
+  jwt:
+    algorithm: "RS256"
+    issuer: "https://sso.customer.internal"
+    audience: "llm-gateway"
+    jwksUri: "https://sso.customer.internal/.well-known/jwks.json"
+    jwksCacheTtl: 3600
+  virtualKey:
+    encryptionKeySecretName: "llm-gateway-app"
+    encryptionKeySecretKey: "virtual_key_encryption_key"
+
+externalSecrets:
+  enabled: false  # 고객이 Vault를 쓰면 ExternalSecrets Operator + HashiCorp Vault provider 연동 후 true
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # Rate limiting(Ingress 레벨) — Gateway의 자체 Rate Limit과 별도, 과도한 공격 트래픽 차단용
+    nginx.ingress.kubernetes.io/limit-rps: "100"
+    nginx.ingress.kubernetes.io/limit-connections: "20"
+  gateway:
+    host: "gateway.llm-gateway.customer.internal"
+    tls:
+      enabled: true
+      secretName: "llm-gateway-tls-gateway"
+  adminUi:
+    host: "admin.llm-gateway.customer.internal"
+    tls:
+      enabled: true
+      secretName: "llm-gateway-tls-admin-ui"
+  adminApi:
+    host: "admin-api.llm-gateway.customer.internal"
+    tls:
+      enabled: true
+      secretName: "llm-gateway-tls-admin-api"
+
+observability:
+  otel:
+    mode: "in-cluster"
+    endpoint: "otel-collector.observability.svc.cluster.local:4317"
+    protocol: "grpc"
+
+# ============================================================================
+# 서비스별 — Production HA
+# ============================================================================
+gatewayProxy:
+  replicaCount: 3
+  serviceAccount:
+    annotations: {}
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "2000m"
+      memory: "2Gi"
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 65
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 2
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/component: gateway-proxy
+            topologyKey: kubernetes.io/hostname
+  env:
+    OPENMODEL_BASE_URL: "http://vllm.customer.internal"
+
+adminApi:
+  replicaCount: 3
+  serviceAccount:
+    annotations: {}
+  resources:
+    requests:
+      cpu: "400m"
+      memory: "768Mi"
+    limits:
+      cpu: "1500m"
+      memory: "1.5Gi"
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 8
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 2
+  env:
+    DEV_LOGIN_ENABLED: "false"
+
+adminUi:
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: "300m"
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+
+scheduler:
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+notificationWorker:
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+  email:
+    provider: "smtp"
+    smtp:
+      host: "smtp.customer.internal"
+      port: 587
+      startTls: true
+      fromAddress: "no-reply@llm-gateway.customer.internal"
+      credentialsSecretName: "llm-gateway-smtp"
+
+costRecorderWorker:
+  replicaCount: 3
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 6

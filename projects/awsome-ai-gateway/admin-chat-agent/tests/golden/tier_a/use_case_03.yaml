@@ -1,0 +1,21 @@
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
+use_case_id: "03"
+tier: A
+name: "팀별 모델 사용 분포"
+question: "팀별 모델 사용 분포"
+
+expected:
+  sql:
+    # team × model_alias 집계. usage_logs.team_id → auth.teams, model_alias 그룹.
+    required_tables: ["usage.usage_logs", "auth.teams"]
+    required_clauses:
+      - "GROUP BY"
+      - "model_alias"
+    forbidden_clauses:
+      - "INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER"
+  validator:
+    verdict: "PASS"
+    min_confidence: 0.7
+  chart:
+    kind: ["bar", "table"] # stacked bar
+  agent_path_includes: ["ask_sql_specialist", "ask_validator"]

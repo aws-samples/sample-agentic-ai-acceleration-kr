@@ -1,0 +1,31 @@
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
+#
+# Golden test case — docs/admin-chat-agent-spec.md §1.1 / §8.5.1.
+# expected.sql 의 테이블/컬럼은 db/init/02_create_tables.sql (= schema_whitelist.yaml)
+# 의 ground-truth 스키마 기준. (config/golden_examples.yaml 의 few-shot SQL 은
+# public.* 옛 네임스페이스라 신뢰하지 말 것 — memory/chat-agent-schema-drift 참조.)
+use_case_id: "01"
+tier: A # SQL only
+name: "이번 달 비용 top 10 사용자"
+question: "이번 달 비용 top 10 사용자"
+
+expected:
+  sql:
+    required_tables: ["usage.usage_logs", "auth.users"]
+    required_clauses:
+      - "GROUP BY"
+      - "ORDER BY"
+      - "DESC"
+      - "LIMIT"
+    forbidden_clauses:
+      - "INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER"
+    timezone_hint: "Asia/Seoul"
+    # §58: 시간 필터에 AT TIME ZONE 'Asia/Seoul' 강제(UTC 드리프트 회귀 차단).
+    timezone_kst: true
+  validator:
+    verdict: "PASS"
+    min_confidence: 0.7
+  chart:
+    kind: ["bar", "table", "kpi"]
+  agent_path_includes: ["ask_sql_specialist", "ask_validator"]
+  agent_path_excludes: ["ask_code_specialist"]

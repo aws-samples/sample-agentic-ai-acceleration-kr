@@ -1,0 +1,33 @@
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
+
+# English translations for gateway-cli
+msgid ""
+msgstr ""
+"Language: en\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Detecting AI tools..."
+msgstr "Detecting AI tools..."
+
+msgid "Detected"
+msgstr "Detected"
+
+msgid "tool(s)"
+msgstr "tool(s)"
+
+msgid "configured"
+msgstr "configured"
+
+msgid "not configured"
+msgstr "not configured"
+
+msgid "No AI tools detected. See manual setup guide."
+msgstr "No AI tools detected. See manual setup guide."
+
+msgid "Setup Summary"
+msgstr "Setup Summary"
+
+msgid "Gateway URL is required. Use --gateway-url option or set in config.yaml."
+msgstr "Gateway URL is required. Use --gateway-url option or set in config.yaml."

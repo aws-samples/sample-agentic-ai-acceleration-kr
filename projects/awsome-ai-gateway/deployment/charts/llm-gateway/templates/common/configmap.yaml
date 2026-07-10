@@ -1,0 +1,81 @@
+{{/* Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms. */}}
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "llm-gateway.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-gateway.labels" . | nindent 4 }}
+data:
+  # ----------------------------------------------------------------------------
+  # 앱 공통 (민감 정보 제외)
+  # ----------------------------------------------------------------------------
+  APP_ENV: {{ .Values.global.environment | quote }}
+  LOG_FORMAT: "json"
+
+  # ----------------------------------------------------------------------------
+  # DB 연결 풀 설정 (비민감)
+  # ----------------------------------------------------------------------------
+  DB_POOL_SIZE: {{ .Values.database.external.poolSize | quote }}
+  DB_MAX_OVERFLOW: {{ .Values.database.external.maxOverflow | quote }}
+  DB_POOL_TIMEOUT: {{ .Values.database.external.poolTimeout | quote }}
+  DB_POOL_RECYCLE: {{ .Values.database.external.poolRecycle | quote }}
+  DB_ECHO: "false"
+  # asyncpg prepared statement 캐시 크기. RDS Proxy 경유 시 0 (PostgreSQL pinning 회피),
+  # Aurora 직접 연결 시 100 (성능 이득) — 기본 100.
+  DB_STATEMENT_CACHE_SIZE: {{ .Values.database.external.statementCacheSize | default 100 | quote }}
+
+  # ----------------------------------------------------------------------------
+  # Redis 연결 풀 (gateway-proxy 전용, pod 당 max_connections)
+  # 공식: pod 당 pool × HPA max_replica ≤ ElastiCache shard max_clients 합.
+  # T2 v3 에서 기본 50 은 4k VU hold 구간에서 MaxConnectionsError → 429 유발.
+  # ----------------------------------------------------------------------------
+  REDIS_POOL_SIZE: {{ .Values.redis.poolSize | default 150 | quote }}
+
+  # Redis 장애 시 in-memory rate-limit fallback divisor 의 replica 항.
+  # divisor = RL_FALLBACK_REPLICAS × UVICORN_WORKERS (프로세스당 독립 카운터 수).
+  # gatewayProxy HPA minReplicas(현실적 하한)를 기본으로 추종 → fallback 쿼타가
+  # pod 수와 맞음(과거 고정 4 가 replica 무시 → 부하테스트 429×6, deepdive Q46/Q50).
+  RL_FALLBACK_REPLICAS: {{ .Values.gatewayProxy.autoscaling.minReplicas | default .Values.gatewayProxy.replicaCount | default 1 | quote }}
+
+  # Redis 연결 복원력 (deepdive Q50 Phase 2). socket_timeout 미설정(과거)이면 느린
+  # 노드 1개가 풀을 전 pod 에서 고갈 → 명령/연결 타임아웃 + blip 재시도 + idle
+  # health-check 로 "느린 Redis → 빠른 실패 → DB fallback". 0 으로 끄면 과거 동작.
+  REDIS_SOCKET_TIMEOUT: {{ .Values.redis.socketTimeout | default 2.0 | quote }}
+  REDIS_CONNECT_TIMEOUT: {{ .Values.redis.connectTimeout | default 1.0 | quote }}
+  REDIS_RETRIES: {{ .Values.redis.retries | default 1 | quote }}
+  REDIS_HEALTH_CHECK_INTERVAL: {{ .Values.redis.healthCheckInterval | default 30.0 | quote }}
+  # 읽기 replica 라우팅(cluster+replica 일 때만, deepdive Q50 Phase4-f). 기본 false=
+  # primary-only(강한 일관성). TTL 캐시·RL ZSET 처럼 lag 허용 시 true 로 read 스케일.
+  REDIS_READ_FROM_REPLICAS: {{ .Values.redis.readFromReplicas | default false | quote }}
+
+  # rate-limit 회로 차단기(deepdive Q50). Redis 연속 실패 시 회로 OPEN → 후속 호출
+  # socket_timeout 대기 없이 즉시 fallback. 기본 활성.
+  RL_BREAKER_ENABLED: {{ .Values.redis.breaker.enabled | default true | quote }}
+  RL_BREAKER_FAIL_THRESHOLD: {{ .Values.redis.breaker.failThreshold | default 5 | quote }}
+  RL_BREAKER_RECOVERY_TIMEOUT: {{ .Values.redis.breaker.recoveryTimeout | default 5.0 | quote }}
+  # rate-limit eval 실패 정책(deepdive Q50). open=통과(가용성, 기본·기존 동작),
+  # closed=차단(쿼타 정확성). budget/auth 는 이미 fail-closed — 의도적 비대칭.
+  # **무단 전환 금지** — 운영 정책 결정 후에만 closed 로.
+  RL_FAIL_MODE: {{ .Values.rateLimit.failMode | default "open" | quote }}
+
+  # ----------------------------------------------------------------------------
+  # OpenTelemetry
+  # ----------------------------------------------------------------------------
+  OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.observability.otel.endpoint | quote }}
+  OTEL_EXPORTER_OTLP_PROTOCOL: {{ .Values.observability.otel.protocol | quote }}
+  OTEL_RESOURCE_ATTRIBUTES: "deployment.environment={{ .Values.global.environment }},service.namespace={{ .Release.Namespace }}"
+
+  # ----------------------------------------------------------------------------
+  # AWS / Bedrock (비민감 설정)
+  # ----------------------------------------------------------------------------
+  AWS_REGION: {{ .Values.aws.region | quote }}
+  AWS_DEFAULT_REGION: {{ .Values.aws.region | quote }}
+  BEDROCK_ALLOWED_MODELS: {{ join "," .Values.aws.bedrockAllowedModels | quote }}
+
+  # ----------------------------------------------------------------------------
+  # 서비스 기본 설정
+  # ----------------------------------------------------------------------------
+  DEFAULT_TEAM_ID: "00000000-0000-4000-a000-000000000003"
+  CLI_DIST_DIR: "/app/cli-dist"

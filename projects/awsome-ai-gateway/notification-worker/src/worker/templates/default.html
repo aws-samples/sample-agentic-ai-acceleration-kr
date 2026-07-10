@@ -1,0 +1,6 @@
+<h2>{{ event.type }} 알림</h2>
+<p>안녕하세요, {{ recipient_name }}님.</p>
+<p>LLM Gateway에서 새로운 알림이 발생했습니다.</p>
+<p><strong>이벤트 상세 정보:</strong></p>
+<pre>{{ payload | tojson(indent=2) }}</pre>
+<p><small>{{ gateway_name }} — {{ timestamp_kr }}</small></p>

@@ -1,0 +1,32 @@
+<h2>보안 경고: 인증 실패 급증 감지</h2>
+<p>안녕하세요, {{ recipient_name }}님.</p>
+<p>시스템에서 비정상적인 수준의 인증 실패가 감지되었습니다. 보안 위협 가능성을 고려하여 즉시 조사가 필요합니다.</p>
+<table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;">
+  <tr>
+    <td><strong>항목</strong></td>
+    <td><strong>값</strong></td>
+  </tr>
+  <tr>
+    <td>출처 IP</td>
+    <td>{{ payload.source_ip | default('') }}</td>
+  </tr>
+  <tr>
+    <td>실패 횟수</td>
+    <td>{{ payload.failure_count | default('') }}회</td>
+  </tr>
+  <tr>
+    <td>감지 시간대</td>
+    <td>{{ payload.time_window | default('') }}</td>
+  </tr>
+  <tr>
+    <td>측정 기간</td>
+    <td>{{ payload.period | default('') }}</td>
+  </tr>
+</table>
+<p><strong>권장 조치</strong></p>
+<ul>
+  <li>출처 IP에서의 접속을 모니터링하세요.</li>
+  <li>필요한 경우 IP를 임시로 차단하세요.</li>
+  <li>관련 계정의 활동 로그를 검토하세요.</li>
+</ul>
+<p><small>{{ gateway_name }} — {{ timestamp_kr }}</small></p>

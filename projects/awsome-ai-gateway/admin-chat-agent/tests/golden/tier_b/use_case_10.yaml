@@ -1,0 +1,24 @@
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
+use_case_id: "10"
+tier: B
+name: "비용 추세 trend/seasonal/residual 분해"
+question: "이번 달 비용 추세에서 trend / seasonal / residual 분해해줘"
+
+expected:
+  sql:
+    required_tables: ["usage.usage_logs"]
+    required_clauses:
+      - "GROUP BY"
+      - "SUM"
+    forbidden_clauses:
+      - "INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER"
+  code:
+    # STL decomposition (statsmodels).
+    required_imports: ["statsmodels"]
+    required_any_of: ["STL", "seasonal_decompose"]
+  validator:
+    verdict: "PASS"
+    min_confidence: 0.5
+  chart:
+    kind: ["line", "image", "area"]
+  agent_path_includes: ["ask_sql_specialist", "ask_code_specialist", "ask_validator"]

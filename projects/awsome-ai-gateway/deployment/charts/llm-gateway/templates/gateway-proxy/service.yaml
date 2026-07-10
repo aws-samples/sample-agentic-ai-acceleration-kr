@@ -1,0 +1,24 @@
+{{/* Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms. */}}
+
+{{- if .Values.gatewayProxy.enabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "llm-gateway.fullname" . }}-gateway-proxy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-gateway.componentLabels" (dict "root" . "component" "gateway-proxy") | nindent 4 }}
+  {{- with (include "llm-gateway.commonAnnotations" .) }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.gatewayProxy.service.type }}
+  ports:
+    - port: {{ .Values.gatewayProxy.service.port }}
+      targetPort: {{ .Values.gatewayProxy.service.targetPort }}
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "llm-gateway.selectorLabels" (dict "root" . "component" "gateway-proxy") | nindent 4 }}
+{{- end }}

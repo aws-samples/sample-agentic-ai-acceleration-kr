@@ -1,0 +1,67 @@
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: observability
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      batch:
+        timeout: 10s
+        send_batch_size: 1000
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: 1500
+      resource:
+        attributes:
+          - key: cluster
+            value: llm-gateway-prod
+            action: insert
+
+    exporters:
+      # 클러스터 내부 Prometheus 로 push (SigV4 불필요)
+      prometheusremotewrite:
+        # kube-prometheus-stack 의 Prometheus service 이름:
+        #   kps-prometheus  (fullnameOverride=kps 일 때 chart 가 만든 실제 이름)
+        endpoint: "http://kps-prometheus.observability.svc.cluster.local:9090/api/v1/write"
+        tls:
+          insecure: true
+        resource_to_telemetry_conversion:
+          enabled: true
+
+      # logs/traces 는 당분간 버림 (Loki/Tempo 도입 시 교체)
+      debug:
+        verbosity: basic
+
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+
+    service:
+      extensions: [health_check]
+      pipelines:
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, resource, batch]
+          exporters: [prometheusremotewrite]
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [debug]
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [debug]
+      telemetry:
+        metrics:
+          address: 0.0.0.0:8888

@@ -1,0 +1,1 @@
+[DS Gateway] 서비스 상태 변경 — {{ payload.status | default('') }}

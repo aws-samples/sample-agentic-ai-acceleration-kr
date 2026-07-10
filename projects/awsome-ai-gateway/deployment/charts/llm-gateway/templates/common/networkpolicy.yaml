@@ -1,0 +1,180 @@
+{{/* Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms. */}}
+
+{{- if .Values.networkPolicy.enabled -}}
+{{/*
+NetworkPolicy — NFR-3.11 네트워크 분리
+- data-plane (gateway-proxy): 외부(Ingress) → gateway-proxy. 내부로는 DB/Redis/OTel만
+- control-plane (admin-api/ui): admin-ui → admin-api. 외부(Ingress) → admin-ui/admin-api
+- 워커들: egress만 허용 (DB/Redis/OTel/외부 API)
+- 기본 deny-all 후 명시적 allow
+*/}}
+
+# ----------------------------------------------------------------------------
+# Gateway Proxy: Ingress 에서만 접근 허용, 내부에서 상호 접근 금지
+# ----------------------------------------------------------------------------
+{{- if .Values.gatewayProxy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "llm-gateway.fullname" . }}-gateway-proxy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-gateway.componentLabels" (dict "root" . "component" "gateway-proxy") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "llm-gateway.selectorLabels" (dict "root" . "component" "gateway-proxy") | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Ingress Controller로부터
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system  # ALB controller namespace
+      ports:
+        - protocol: TCP
+          port: {{ .Values.gatewayProxy.service.targetPort }}
+    # 추가 허용 네임스페이스 (Prometheus scrape 등)
+    {{- range .Values.networkPolicy.allowedIngressNamespaces }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .name }}
+      ports:
+        - protocol: TCP
+          port: {{ $.Values.gatewayProxy.service.targetPort }}
+    {{- end }}
+  egress:
+    # DNS
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # 외부 Bedrock / vLLM / DB / Redis / OTel 는 전부 허용
+    # (CIDR 블록은 고객 환경에 따라 달라서 여기서는 광역 허용. 엄격 적용 시 values로 오버라이드)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.0.0/16  # EC2 metadata (IRSA 용은 별도 CIDR 아님)
+      ports:
+        - protocol: TCP
+{{- end }}
+
+# ----------------------------------------------------------------------------
+# Admin API: admin-ui에서만 내부 접근, 외부는 Ingress 경유
+# ----------------------------------------------------------------------------
+{{- if .Values.adminApi.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "llm-gateway.fullname" . }}-admin-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-gateway.componentLabels" (dict "root" . "component" "admin-api") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "llm-gateway.selectorLabels" (dict "root" . "component" "admin-api") | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Admin UI → Admin API (내부)
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "llm-gateway.selectorLabels" (dict "root" . "component" "admin-ui") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.adminApi.service.targetPort }}
+    # Ingress Controller (직접 REST 호출)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: TCP
+          port: {{ .Values.adminApi.service.targetPort }}
+    {{- range .Values.networkPolicy.allowedIngressNamespaces }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .name }}
+      ports:
+        - protocol: TCP
+          port: {{ $.Values.adminApi.service.targetPort }}
+    {{- end }}
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.0.0/16
+      ports:
+        - protocol: TCP
+{{- end }}
+
+# ----------------------------------------------------------------------------
+# Workers: Egress only (DB/Redis/외부 API)
+# ----------------------------------------------------------------------------
+{{- if or .Values.notificationWorker.enabled .Values.costRecorderWorker.enabled .Values.scheduler.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "llm-gateway.fullname" . }}-workers
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-gateway.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          - notification-worker
+          - cost-recorder-worker
+          - scheduler
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # 헬스체크 용 — kubelet에서 probe 접근
+    - {}
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.0.0/16
+      ports:
+        - protocol: TCP
+{{- end }}
+{{- end }}

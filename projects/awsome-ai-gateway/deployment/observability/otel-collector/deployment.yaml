@@ -1,0 +1,93 @@
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: otel-collector
+spec:
+  # replicas=1 — 다중 replica 일 때 동일 메트릭이 중복 push 되어 Prometheus 에서
+  # "out of order sample" 거부 발생. Prod 상시 운영 관점에선 해결 방법이
+  # 여러 가지 있으나 (loadbalancing exporter + collector statefulset 등) 부하
+  # 테스트 기간엔 단일 replica 가 가장 단순하고 안정적.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: otel-collector
+    spec:
+      serviceAccountName: otel-collector
+      # Pod-level security context.
+      # EN: The upstream `otel/opentelemetry-collector-contrib` image is built
+      #     to run as the unprivileged user `otelcol` (UID 10001). Declaring
+      #     it explicitly satisfies PodSecurity `restricted` and guarantees
+      #     the kubelet will refuse to start the pod if a future image
+      #     accidentally ships as root.
+      # KO: 공식 `otel/opentelemetry-collector-contrib` 이미지는 비특권 사용자
+      #     `otelcol` (UID 10001) 로 빌드되어 있습니다. 이를 명시적으로
+      #     선언하면 PodSecurity `restricted` 정책을 만족하고, 혹시 미래의
+      #     이미지가 root 로 빌드되면 kubelet 이 pod 기동을 거부합니다.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: otelcol
+          image: otel/opentelemetry-collector-contrib:0.113.0
+          imagePullPolicy: IfNotPresent
+          # Container-level security context.
+          # EN: `allowPrivilegeEscalation: false` blocks setuid binaries from
+          #     ever gaining additional privileges. `readOnlyRootFilesystem`
+          #     is safe here: the collector reads its config from the mounted
+          #     ConfigMap and writes nothing to the image filesystem.
+          #     Capabilities are dropped to ALL — the collector binds only
+          #     unprivileged ports (>=1024), so no NET_BIND_SERVICE needed.
+          # KO: `allowPrivilegeEscalation: false` 는 setuid 바이너리가 추가
+          #     권한을 획득하지 못하게 합니다. `readOnlyRootFilesystem` 도
+          #     안전합니다 — collector 는 ConfigMap 에서 설정을 읽고 이미지
+          #     파일시스템에는 쓰지 않습니다. capability 는 모두 제거합니다.
+          #     비특권 포트(>=1024) 만 사용하므로 NET_BIND_SERVICE 불필요.
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          args: ["--config=/etc/otel/config.yaml"]
+          ports:
+            - { name: otlp-grpc,  containerPort: 4317 }
+            - { name: otlp-http,  containerPort: 4318 }
+            - { name: metrics,    containerPort: 8888 }
+            - { name: health,     containerPort: 13133 }
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 13133
+            initialDelaySeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 13133
+            initialDelaySeconds: 10
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otel
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: otel-collector-config

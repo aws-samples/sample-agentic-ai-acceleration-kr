@@ -1,0 +1,81 @@
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║  LLM Gateway 설치 완료 — {{ include "llm-gateway.fullname" . }}
+║  Environment: {{ .Values.global.environment }} | Mode: {{ .Values.global.deploymentMode }}
+╚════════════════════════════════════════════════════════════════════════════╝
+
+📦 설치된 리소스:
+{{- if .Values.gatewayProxy.enabled }}
+   ✓ Gateway Proxy (data-plane)      : {{ .Values.gatewayProxy.replicaCount }} replica(s)
+{{- end }}
+{{- if .Values.adminApi.enabled }}
+   ✓ Admin API (control-plane)       : {{ .Values.adminApi.replicaCount }} replica(s)
+{{- end }}
+{{- if .Values.adminUi.enabled }}
+   ✓ Admin UI (Next.js)              : {{ .Values.adminUi.replicaCount }} replica(s)
+{{- end }}
+{{- if .Values.scheduler.enabled }}
+   ✓ ROI Scheduler (singleton)       : 1 replica
+{{- end }}
+{{- if .Values.notificationWorker.enabled }}
+   ✓ Notification Worker             : {{ .Values.notificationWorker.replicaCount }} replica(s)
+{{- end }}
+{{- if .Values.costRecorderWorker.enabled }}
+   ✓ Cost Recorder Worker            : {{ .Values.costRecorderWorker.replicaCount }} replica(s)
+{{- end }}
+
+🔍 상태 확인:
+
+   kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
+   kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/component=gateway-proxy --tail=100 -f
+
+{{- if .Values.ingress.enabled }}
+
+🌐 엔드포인트:
+
+{{- if .Values.ingress.gateway.host }}
+   • Gateway (사용자 API) : {{ if .Values.ingress.gateway.tls.enabled }}https{{ else }}http{{ end }}://{{ .Values.ingress.gateway.host }}
+{{- end }}
+{{- if .Values.ingress.adminUi.host }}
+   • Admin UI (웹 UI)     : {{ if .Values.ingress.adminUi.tls.enabled }}https{{ else }}http{{ end }}://{{ .Values.ingress.adminUi.host }}
+{{- end }}
+{{- if .Values.ingress.adminApi.host }}
+   • Admin API (REST)     : {{ if .Values.ingress.adminApi.tls.enabled }}https{{ else }}http{{ end }}://{{ .Values.ingress.adminApi.host }}
+{{- end }}
+
+{{- else }}
+
+🌐 Ingress 비활성화 상태. port-forward로 접근:
+
+   # Gateway Proxy
+   kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "llm-gateway.fullname" . }}-gateway-proxy 8000:{{ .Values.gatewayProxy.service.port }}
+
+   # Admin UI
+   kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "llm-gateway.fullname" . }}-admin-ui 3000:{{ .Values.adminUi.service.port }}
+
+{{- end }}
+
+🔐 선결 확인 사항:
+
+{{- if not .Values.database.external.host }}
+   ⚠ database.external.host 가 비어 있습니다. 외부 PostgreSQL 주입 필수.
+{{- end }}
+{{- if not .Values.redis.external.host }}
+   ⚠ redis.external.host 가 비어 있습니다. 외부 Redis 주입 필수.
+{{- end }}
+{{- if eq (len .Values.aws.allowedIamRoles) 0 }}
+   ⚠ aws.allowedIamRoles 가 비어 있습니다. CLI 인증이 전부 거부됩니다 (FR-2.1a).
+{{- end }}
+{{- if and (eq .Values.global.deploymentMode "eks-fargate") (eq (len .Values.gatewayProxy.serviceAccount.annotations) 0) }}
+   ⚠ EKS Fargate 모드인데 gatewayProxy.serviceAccount.annotations 에 IRSA role-arn 이 없습니다.
+{{- end }}
+{{- if and .Values.adminApi.env.DEV_LOGIN_ENABLED (eq .Values.adminApi.env.DEV_LOGIN_ENABLED "true") (eq .Values.global.environment "prod") }}
+   🚨 adminApi.env.DEV_LOGIN_ENABLED=true 이지만 environment=prod 입니다. 즉시 false로 바꾸세요.
+{{- end }}
+
+📚 다음 단계:
+   1. 스모크 테스트 실행:    deployment/scripts/smoke-test.sh --namespace {{ .Release.Namespace }}
+   2. 초기 Admin 계정 설정:  deployment/docs/{{ .Values.global.deploymentMode }}/05-smoke-test.md
+   3. 모니터링:              Grafana 대시보드 (uid: gateway-ops, gateway-usage)
+
+문제 발생 시: deployment/docs/{{ .Values.global.deploymentMode }}/troubleshooting.md

@@ -1,0 +1,1 @@
+[DS Gateway] 예산 {{ payload.threshold_pct | default('') }}% 도달 알림 ({{ payload.period | default('') }})

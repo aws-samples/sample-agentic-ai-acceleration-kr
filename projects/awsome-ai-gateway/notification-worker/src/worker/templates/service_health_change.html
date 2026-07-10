@@ -1,0 +1,32 @@
+<h2>서비스 상태 변경</h2>
+<p>안녕하세요, {{ recipient_name }}님.</p>
+<p>LLM Gateway의 서비스 상태가 변경되었습니다.</p>
+<table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;">
+  <tr>
+    <td><strong>항목</strong></td>
+    <td><strong>값</strong></td>
+  </tr>
+  <tr>
+    <td>서비스명</td>
+    <td>{{ payload.service_name | default('') }}</td>
+  </tr>
+  <tr>
+    <td>현재 상태</td>
+    <td>{{ payload.status | default('') }}</td>
+  </tr>
+  <tr>
+    <td>이전 상태</td>
+    <td>{{ payload.previous_status | default('') }}</td>
+  </tr>
+  <tr>
+    <td>상세 정보</td>
+    <td>{{ payload.detail | default('') }}</td>
+  </tr>
+</table>
+<p><strong>다음 단계</strong></p>
+<ul>
+  <li>서비스의 현재 상태를 모니터링하세요.</li>
+  <li>필요시 대체 경로로 요청을 라우팅하세요.</li>
+  <li>영향받는 사용자에게 안내해주세요.</li>
+</ul>
+<p><small>{{ gateway_name }} — {{ timestamp_kr }}</small></p>

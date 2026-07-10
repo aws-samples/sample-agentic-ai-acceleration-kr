@@ -1,0 +1,32 @@
+<h2>LLM Provider 오류 발생</h2>
+<p>안녕하세요, {{ recipient_name }}님.</p>
+<p>외부 LLM Provider에서 오류가 발생했습니다. 해당 제공자의 서비스가 일시적으로 중단되었을 수 있습니다.</p>
+<table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;">
+  <tr>
+    <td><strong>항목</strong></td>
+    <td><strong>값</strong></td>
+  </tr>
+  <tr>
+    <td>Provider 이름</td>
+    <td>{{ payload.provider_name | default('') }}</td>
+  </tr>
+  <tr>
+    <td>오류 유형</td>
+    <td>{{ payload.error_type | default('') }}</td>
+  </tr>
+  <tr>
+    <td>오류 메시지</td>
+    <td>{{ payload.error_message | default('') }}</td>
+  </tr>
+  <tr>
+    <td>발생 일시</td>
+    <td>{{ payload.occurred_at | default('') }}</td>
+  </tr>
+</table>
+<p><strong>권장 조치</strong></p>
+<ul>
+  <li>해당 Provider의 상태 페이지를 확인하세요.</li>
+  <li>필요시 다른 LLM Provider로 요청을 라우팅하세요.</li>
+  <li>자동 재시도 메커니즘을 확인하세요.</li>
+</ul>
+<p><small>{{ gateway_name }} — {{ timestamp_kr }}</small></p>

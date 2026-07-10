@@ -1,0 +1,124 @@
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
+
+# ============================================================================
+# kube-prometheus-stack — Loadtest observability
+# ----------------------------------------------------------------------------
+# Release name: kps (fullnameOverride 로 고정 — Grafana ServiceAccount 이름이
+#               정확히 "kps-grafana" 가 되어 IRSA namespace_service_accounts 와
+#               일치해야 함)
+# ============================================================================
+fullnameOverride: kps
+
+# ─── Disabled components ─────────────────────────────────────────────────
+# Fargate 미지원 or 부하테스트 불필요
+nodeExporter:
+  enabled: false
+
+prometheus-node-exporter:
+  hostRootFsMount:
+    enabled: false
+
+alertmanager:
+  enabled: false
+
+prometheusOperator:
+  # admissionWebhooks 를 전부 비활성화.
+  # - enabled=false: ValidatingWebhookConfiguration/MutatingWebhookConfiguration
+  #   리소스 생성 skip (operator pod 의 TLS secret mount 의존 제거).
+  # - patch.enabled=false: TLS 주입 Job (Fargate 에서 불안정) skip.
+  # 부하테스트 목적에선 PrometheusRule/ServiceMonitor validation 이 필수 아님.
+  admissionWebhooks:
+    enabled: false
+    patch:
+      enabled: false
+  tls:
+    enabled: false        # operator 의 TLS 리스너도 비활성 (admissionWebhooks 와 쌍)
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
+
+# ─── kube-state-metrics (HPA/Deployment state 메트릭) ────────────────────
+kube-state-metrics:
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
+
+# ─── Prometheus ──────────────────────────────────────────────────────────
+prometheus:
+  prometheusSpec:
+    retention: 24h
+    # OTel Collector 가 remote_write push → Prometheus 가 받도록 활성
+    enableRemoteWriteReceiver: true
+
+    # emptyDir — Fargate EBS CSI 없음. Pod 재시작 시 데이터 소실.
+    # 테스트 종료 직전 export 스크립트로 S3 백업 필수.
+    storageSpec: {}
+
+    # Prometheus 가 전체 클러스터 ServiceMonitor 를 pick up
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+
+    # Fargate 에서 tolerate 불필요 (Fargate profile 매칭으로 자동 스케줄)
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "2Gi"
+      limits:
+        cpu: "2"
+        memory: "4Gi"
+
+# ─── Grafana ────────────────────────────────────────────────────────────
+grafana:
+  # admin password 는 admin-secret.sh 가 미리 생성한 Secret 참조
+  admin:
+    existingSecret: "kps-grafana-admin"
+    userKey: admin-user
+    passwordKey: admin-password
+
+  # IRSA — install.sh 에서 GRAFANA_ROLE_ARN 으로 --set 주입
+  serviceAccount:
+    create: true
+    name: kps-grafana
+    annotations: {}   # install.sh 가 eks.amazonaws.com/role-arn 주입
+
+  persistence:
+    enabled: false    # emptyDir — dashboard JSON 은 manifests 로 provisioning
+
+  defaultDashboardsTimezone: "Asia/Seoul"
+
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+  # Data sources — Prometheus(self) 와 CloudWatch(AWS)
+  additionalDataSources:
+    - name: CloudWatch
+      type: cloudwatch
+      access: proxy
+      uid: cloudwatch
+      jsonData:
+        authType: default      # IRSA 사용 (default credential chain)
+        defaultRegion: ap-northeast-2
+        customMetricsNamespaces: "AWS/Bedrock,AWS/RDS,AWS/ApplicationELB"
+
+  # 부하테스트 대시보드 provisioning (sidecar 방식)
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: observability
+      folder: "Load Test"

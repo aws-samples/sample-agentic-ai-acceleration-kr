@@ -1,0 +1,76 @@
+{{/* Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms. */}}
+
+{{- if .Values.scheduler.enabled -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "llm-gateway.fullname" . }}-scheduler
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-gateway.componentLabels" (dict "root" . "component" "scheduler") | nindent 4 }}
+  {{- with (include "llm-gateway.commonAnnotations" .) }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
+spec:
+  # Singleton 강제 — 중복 cron 실행 방지
+  replicas: 1
+  strategy:
+    # 새 Pod 뜨기 전에 기존 Pod kill (cron 중복 실행 방지)
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "llm-gateway.selectorLabels" (dict "root" . "component" "scheduler") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "llm-gateway.selectorLabels" (dict "root" . "component" "scheduler") | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/common/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/common/secret.yaml") . | sha256sum }}
+        {{- with .Values.scheduler.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "llm-gateway.serviceAccountName" (dict "root" . "svc" .Values.scheduler "default" "scheduler") }}
+      {{- include "llm-gateway.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.scheduler.terminationGracePeriodSeconds }}
+      {{- with .Values.scheduler.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.scheduler.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.scheduler.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: scheduler
+          image: {{ include "llm-gateway.image" (dict "root" . "image" .Values.scheduler.image) | quote }}
+          imagePullPolicy: {{ .Values.scheduler.image.pullPolicy }}
+          command:
+            {{- toYaml .Values.scheduler.command | nindent 12 }}
+          securityContext:
+            {{- include "llm-gateway.containerSecurityContext" (dict "root" . "override" (dict)) | nindent 12 }}
+          env:
+            {{- include "llm-gateway.commonEnv" . | nindent 12 }}
+            {{- include "llm-gateway.downwardApiEnv" . | nindent 12 }}
+            {{- range $key, $value := .Values.scheduler.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "llm-gateway.fullname" . }}-config
+          resources:
+            {{- toYaml .Values.scheduler.resources | nindent 12 }}
+          livenessProbe:
+            {{- toYaml .Values.scheduler.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.scheduler.readinessProbe | nindent 12 }}
+{{- end }}

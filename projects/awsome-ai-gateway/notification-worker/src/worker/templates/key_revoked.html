@@ -1,0 +1,25 @@
+<h2>Virtual Key 강제 무효화 알림</h2>
+<p>안녕하세요, {{ recipient_name }}님.</p>
+<p>보안 정책에 의해 귀하의 Virtual Key가 강제로 무효화되었습니다. 이 Key는 더 이상 사용할 수 없으며, 새로운 Key를 발급받아야 합니다.</p>
+<table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;">
+  <tr>
+    <td><strong>항목</strong></td>
+    <td><strong>값</strong></td>
+  </tr>
+  <tr>
+    <td>Key 접두사</td>
+    <td>{{ payload.key_prefix | default('') }}</td>
+  </tr>
+  <tr>
+    <td>무효화 담당자</td>
+    <td>{{ payload.revoked_by | default('System') }}</td>
+  </tr>
+  {% if payload.reason %}
+  <tr>
+    <td>사유</td>
+    <td>{{ payload.reason | default('') }}</td>
+  </tr>
+  {% endif %}
+</table>
+<p>문의 사항이 있으시면 관리자에게 연락하세요.</p>
+<p><small>{{ gateway_name }} — {{ timestamp_kr }}</small></p>

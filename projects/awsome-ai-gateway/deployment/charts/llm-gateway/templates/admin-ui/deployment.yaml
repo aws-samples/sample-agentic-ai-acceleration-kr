@@ -1,0 +1,114 @@
+{{/* Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms. */}}
+
+{{- if .Values.adminUi.enabled -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "llm-gateway.fullname" . }}-admin-ui
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-gateway.componentLabels" (dict "root" . "component" "admin-ui") | nindent 4 }}
+  {{- with (include "llm-gateway.commonAnnotations" .) }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if not .Values.adminUi.autoscaling.enabled }}
+  replicas: {{ .Values.adminUi.replicaCount }}
+  {{- end }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "llm-gateway.selectorLabels" (dict "root" . "component" "admin-ui") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "llm-gateway.selectorLabels" (dict "root" . "component" "admin-ui") | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/common/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/common/secret.yaml") . | sha256sum }}
+        {{- with .Values.adminUi.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "llm-gateway.serviceAccountName" (dict "root" . "svc" .Values.adminUi "default" "admin-ui") }}
+      {{- include "llm-gateway.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.adminUi.terminationGracePeriodSeconds }}
+      {{- with .Values.adminUi.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.adminUi.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.adminUi.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: admin-ui
+          image: {{ include "llm-gateway.image" (dict "root" . "image" .Values.adminUi.image) | quote }}
+          imagePullPolicy: {{ .Values.adminUi.image.pullPolicy }}
+          securityContext:
+            {{- include "llm-gateway.containerSecurityContext" (dict "root" . "override" .Values.adminUi.securityContextOverride) | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.adminUi.service.targetPort }}
+              protocol: TCP
+          env:
+            - name: HOSTNAME
+              value: "0.0.0.0"
+            - name: PORT
+              value: {{ .Values.adminUi.service.targetPort | quote }}
+            - name: ADMIN_API_URL
+              value: {{ include "llm-gateway.adminApiUrl" . | quote }}
+            # 방식 A (host 빈 값, ALB DNS 로 직접) 인 경우 install-eks.sh 가
+            # --set adminUi.nextauthUrl=http://<ALB-DNS> 로 주입해야 NEXTAUTH_URL 이
+            # 올바르게 세팅됨. 명시 override 가 있으면 그것을, 없으면 ingress.host 에서 파생.
+            - name: NEXTAUTH_URL
+              value: {{ .Values.adminUi.nextauthUrl | default (printf "%s://%s" (ternary "https" "http" .Values.ingress.adminUi.tls.enabled) .Values.ingress.adminUi.host) | quote }}
+            - name: NEXTAUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "llm-gateway.fullname" . }}-app
+                  key: nextauth_secret
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.observability.otel.endpoint | quote }}
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: "http/protobuf"
+            {{- include "llm-gateway.downwardApiEnv" . | nindent 12 }}
+            {{- range $key, $value := .Values.adminUi.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.adminUi.resources | nindent 12 }}
+          startupProbe:
+            {{- toYaml .Values.adminUi.startupProbe | nindent 12 }}
+          livenessProbe:
+            {{- toYaml .Values.adminUi.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.adminUi.readinessProbe | nindent 12 }}
+          volumeMounts:
+            # Next.js 는 /.next/cache에 쓰기 필요
+            - name: next-cache
+              mountPath: /app/.next/cache
+            - name: tmp
+              mountPath: /tmp
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 10"]
+      volumes:
+        - name: next-cache
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+{{- end }}

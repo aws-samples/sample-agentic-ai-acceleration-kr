@@ -1,0 +1,131 @@
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
+#
+# Critic 비교 실험 데이터셋 (DEVLOG §59 — GPT vs Claude diverse-lens 검증 효과 측정).
+#
+# 목적: validator(critic)의 진짜 가치는 "정답을 아는 케이스에 일부러 틀린 SQL 을
+# 섞었을 때, 그 의미 오류를 잡아내는가(recall)" + "멀쩡한 SQL 을 오탐하지 않는가
+# (false positive)"이다. 멀티모델(GPT+Claude)의 핵심 가치는 "직교성" —
+# Claude critic 이 놓친 걸 GPT critic 이 잡는가. 두 critic 이 똑같이 잡고 똑같이
+# 놓치면 멀티모델은 비용만 2배.
+#
+# 각 케이스: question + correct SQL(PASS 기대) + broken 변형들(FAIL/WARN 기대,
+# defect 라벨 포함). critic 에 (question, sql) 을 주고 verdict 를 받아 채점한다.
+# 모델 비결정성 때문에 케이스당 N회(권장 3) 돌려 다수결.
+#
+# defect 종류(§58 결함 매핑): fanout(②) / timezone(③) / filter_missing(⑧) /
+# wrong_agg(④ 잘못된 집계컬럼) / wrong_status(① enum) / team_via_users(⑥) /
+# phantom_col(⑦)
+
+cases:
+  - id: c01
+    question: "이번 달 비용 top 10 사용자"
+    correct: |
+      SELECT u.email, SUM(l.cost_usd) AS cost
+      FROM usage.usage_logs l JOIN auth.users u ON u.id = l.user_id
+      WHERE l.status = 'SUCCESS'
+        AND l.requested_at AT TIME ZONE 'Asia/Seoul' >= date_trunc('month', now() AT TIME ZONE 'Asia/Seoul')
+      GROUP BY u.email ORDER BY cost DESC LIMIT 10
+    broken:
+      - defect: timezone
+        expect: FAIL
+        sql: |
+          SELECT u.email, SUM(l.cost_usd) AS cost
+          FROM usage.usage_logs l JOIN auth.users u ON u.id = l.user_id
+          WHERE l.status = 'SUCCESS' AND date_trunc('month', l.requested_at) = date_trunc('month', now())
+          GROUP BY u.email ORDER BY cost DESC LIMIT 10
+      - defect: wrong_agg
+        expect: FAIL
+        sql: |
+          SELECT u.email, SUM(l.input_tokens + l.output_tokens) AS cost
+          FROM usage.usage_logs l JOIN auth.users u ON u.id = l.user_id
+          WHERE l.status = 'SUCCESS'
+            AND l.requested_at AT TIME ZONE 'Asia/Seoul' >= date_trunc('month', now() AT TIME ZONE 'Asia/Seoul')
+          GROUP BY u.email ORDER BY cost DESC LIMIT 10
+
+  - id: c02
+    question: "활성 VK가 있는 사용자별 이번 달 총 비용"
+    correct: |
+      SELECT u.email, SUM(l.cost_usd) AS cost
+      FROM usage.usage_logs l JOIN auth.users u ON u.id = l.user_id
+      WHERE l.status = 'SUCCESS'
+        AND EXISTS (SELECT 1 FROM auth.virtual_keys vk WHERE vk.user_id = u.id AND vk.status = 'ACTIVE')
+        AND l.requested_at AT TIME ZONE 'Asia/Seoul' >= date_trunc('month', now() AT TIME ZONE 'Asia/Seoul')
+      GROUP BY u.email ORDER BY cost DESC
+    broken:
+      - defect: fanout
+        expect: FAIL
+        sql: |
+          SELECT u.email, SUM(l.cost_usd) AS cost
+          FROM usage.usage_logs l
+          JOIN auth.users u ON u.id = l.user_id
+          JOIN auth.virtual_keys vk ON vk.user_id = u.id AND vk.status = 'ACTIVE'
+          WHERE l.status = 'SUCCESS'
+            AND l.requested_at AT TIME ZONE 'Asia/Seoul' >= date_trunc('month', now() AT TIME ZONE 'Asia/Seoul')
+          GROUP BY u.email ORDER BY cost DESC
+
+  - id: c03
+    question: "이번 달 총 비용 (대시보드 기준)"
+    correct: |
+      SELECT SUM(cost_usd) AS total
+      FROM usage.usage_logs
+      WHERE status = 'SUCCESS'
+        AND requested_at AT TIME ZONE 'Asia/Seoul' >= date_trunc('month', now() AT TIME ZONE 'Asia/Seoul')
+    broken:
+      - defect: filter_missing
+        expect: WARN
+        sql: |
+          SELECT SUM(cost_usd) AS total
+          FROM usage.usage_logs
+          WHERE requested_at AT TIME ZONE 'Asia/Seoul' >= date_trunc('month', now() AT TIME ZONE 'Asia/Seoul')
+
+  - id: c04
+    question: "지난 3개월 팀별 비용"
+    correct: |
+      SELECT t.name, SUM(l.cost_usd) AS cost
+      FROM usage.usage_logs l JOIN auth.teams t ON t.id = l.team_id
+      WHERE l.status = 'SUCCESS'
+        AND l.requested_at AT TIME ZONE 'Asia/Seoul' >= date_trunc('month', now() AT TIME ZONE 'Asia/Seoul') - interval '3 months'
+      GROUP BY t.name ORDER BY cost DESC
+    broken:
+      - defect: team_via_users
+        expect: WARN
+        sql: |
+          SELECT t.name, SUM(l.cost_usd) AS cost
+          FROM usage.usage_logs l
+          JOIN auth.users u ON u.id = l.user_id
+          JOIN auth.teams t ON t.id = u.team_id
+          WHERE l.status = 'SUCCESS'
+            AND l.requested_at AT TIME ZONE 'Asia/Seoul' >= date_trunc('month', now() AT TIME ZONE 'Asia/Seoul') - interval '3 months'
+          GROUP BY t.name ORDER BY cost DESC
+
+  - id: c05
+    question: "이번 달 throttle 걸린 호출 수"
+    # 함정: status enum 에 THROTTLED 없음(SUCCESS/ERROR/TIMEOUT). correct 는 의도를
+    # 명확화하거나 빈 결과를 인지해야 함. broken 은 존재하지 않는 enum 값 사용.
+    correct: |
+      SELECT COUNT(*) AS cnt
+      FROM usage.usage_logs
+      WHERE status = 'ERROR'
+        AND requested_at AT TIME ZONE 'Asia/Seoul' >= date_trunc('month', now() AT TIME ZONE 'Asia/Seoul')
+    broken:
+      - defect: wrong_status
+        expect: FAIL
+        sql: |
+          SELECT COUNT(*) AS cnt
+          FROM usage.usage_logs
+          WHERE status = 'THROTTLED'
+            AND requested_at AT TIME ZONE 'Asia/Seoul' >= date_trunc('month', now() AT TIME ZONE 'Asia/Seoul')
+
+  - id: c06
+    question: "사용자별 마지막 로그인 시각"
+    # 함정: auth.users 에 last_login_at 없음(스키마). correct 는 usage_logs 최근
+    # requested_at 으로 근사. broken 은 유령 컬럼.
+    correct: |
+      SELECT u.email, MAX(l.requested_at) AS last_seen
+      FROM auth.users u LEFT JOIN usage.usage_logs l ON l.user_id = u.id
+      GROUP BY u.email ORDER BY last_seen DESC NULLS LAST
+    broken:
+      - defect: phantom_col
+        expect: FAIL
+        sql: |
+          SELECT u.email, u.last_login_at FROM auth.users u ORDER BY u.last_login_at DESC

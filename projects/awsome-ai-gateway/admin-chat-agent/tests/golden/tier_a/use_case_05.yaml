@@ -1,0 +1,28 @@
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
+use_case_id: "05"
+tier: A
+name: "이번 달 80% 도달한 팀"
+question: "이번 달 예산 80% 도달한 팀"
+
+expected:
+  sql:
+    # budget.budget_configs(max_budget_usd) + usage_logs 실사용 비교.
+    # NOTE: budget_configs 엔 used_usd/threshold_pct 컬럼 없음 (ground truth).
+    #       사용액은 usage.usage_logs 에서 집계해 max_budget_usd 와 비교해야 함.
+    required_tables: ["budget.budget_configs", "usage.usage_logs"]
+    required_clauses:
+      - "max_budget_usd"
+    forbidden_clauses:
+      - "INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER"
+      # 옛 budget_configs 컬럼(존재하지 않음) — drift 회귀 가드.
+      # ⚠️ used_usd/limit_usd 는 usage_logs 집계 산출 별칭(AS used_usd)으로
+      #    정당하게 쓰일 수 있어 가드에서 제외. budget_configs 에 절대 없고
+      #    별칭으로도 안 쓰이는 컬럼만 금지.
+      - "threshold_pct"
+      - "period_start|period_end"
+  validator:
+    verdict: "PASS"
+    min_confidence: 0.5
+  chart:
+    kind: ["kpi", "table", "bar"]
+  agent_path_includes: ["ask_sql_specialist", "ask_validator"]

@@ -1,0 +1,135 @@
+{{/* Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms. */}}
+
+{{- if .Values.notificationWorker.enabled -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "llm-gateway.fullname" . }}-notification-worker
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-gateway.componentLabels" (dict "root" . "component" "notification-worker") | nindent 4 }}
+  {{- with (include "llm-gateway.commonAnnotations" .) }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if not .Values.notificationWorker.autoscaling.enabled }}
+  replicas: {{ .Values.notificationWorker.replicaCount }}
+  {{- end }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "llm-gateway.selectorLabels" (dict "root" . "component" "notification-worker") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "llm-gateway.selectorLabels" (dict "root" . "component" "notification-worker") | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/common/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/common/secret.yaml") . | sha256sum }}
+        {{- with .Values.notificationWorker.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "llm-gateway.serviceAccountName" (dict "root" . "svc" .Values.notificationWorker "default" "notification-worker") }}
+      {{- include "llm-gateway.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.notificationWorker.terminationGracePeriodSeconds }}
+      {{- with .Values.notificationWorker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.notificationWorker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.notificationWorker.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: notification-worker
+          image: {{ include "llm-gateway.image" (dict "root" . "image" .Values.notificationWorker.image) | quote }}
+          imagePullPolicy: {{ .Values.notificationWorker.image.pullPolicy }}
+          securityContext:
+            {{- include "llm-gateway.containerSecurityContext" (dict "root" . "override" (dict)) | nindent 12 }}
+          env:
+            # Notification worker는 별도 DB user 사용 (권한 최소화)
+            - name: APP_ENV
+              value: {{ .Values.global.environment | quote }}
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.external.passwordSecretName | quote }}
+                  key: {{ .Values.database.external.notificationWorkerPasswordSecretKey | quote }}
+            - name: DB_URL
+              value: {{ include "llm-gateway.dbUrlNotificationWorker" . | quote }}
+            {{- if .Values.redis.external.passwordSecretName }}
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.redis.external.passwordSecretName | quote }}
+                  key: {{ .Values.redis.external.passwordSecretKey | quote }}
+            {{- end }}
+            - name: REDIS_URL
+              value: {{ include "llm-gateway.redisUrl" . | quote }}
+            - name: AWS_REGION
+              value: {{ .Values.aws.region | quote }}
+            - name: AWS_DEFAULT_REGION
+              value: {{ .Values.aws.region | quote }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.observability.otel.endpoint | quote }}
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: {{ .Values.observability.otel.protocol | quote }}
+            # 이메일 발송 설정
+            - name: EMAIL_SENDER_TYPE
+              value: {{ .Values.notificationWorker.email.provider | quote }}
+            {{- if eq .Values.notificationWorker.email.provider "internal_api" }}
+            - name: EMAIL_API_URL
+              value: {{ .Values.notificationWorker.email.internalApi.url | quote }}
+            - name: EMAIL_SENDER_ADDRESS
+              value: {{ .Values.notificationWorker.email.internalApi.fromAddress | quote }}
+            - name: EMAIL_SENDER_NAME
+              value: {{ .Values.notificationWorker.email.internalApi.fromName | quote }}
+            {{- else if eq .Values.notificationWorker.email.provider "smtp" }}
+            - name: SMTP_HOST
+              value: {{ .Values.notificationWorker.email.smtp.host | quote }}
+            - name: SMTP_PORT
+              value: {{ .Values.notificationWorker.email.smtp.port | quote }}
+            - name: SMTP_STARTTLS
+              value: {{ .Values.notificationWorker.email.smtp.startTls | quote }}
+            - name: EMAIL_SENDER_ADDRESS
+              value: {{ .Values.notificationWorker.email.smtp.fromAddress | quote }}
+            {{- if .Values.notificationWorker.email.smtp.credentialsSecretName }}
+            - name: SMTP_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.notificationWorker.email.smtp.credentialsSecretName }}
+                  key: username
+            - name: SMTP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.notificationWorker.email.smtp.credentialsSecretName }}
+                  key: password
+            {{- end }}
+            {{- end }}
+            {{- include "llm-gateway.downwardApiEnv" . | nindent 12 }}
+            {{- range $key, $value := .Values.notificationWorker.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "llm-gateway.fullname" . }}-config
+          resources:
+            {{- toYaml .Values.notificationWorker.resources | nindent 12 }}
+          livenessProbe:
+            {{- toYaml .Values.notificationWorker.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.notificationWorker.readinessProbe | nindent 12 }}
+{{- end }}

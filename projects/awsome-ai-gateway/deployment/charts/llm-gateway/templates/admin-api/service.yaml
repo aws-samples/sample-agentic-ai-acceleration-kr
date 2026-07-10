@@ -1,0 +1,20 @@
+{{/* Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms. */}}
+
+{{- if .Values.adminApi.enabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "llm-gateway.fullname" . }}-admin-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-gateway.componentLabels" (dict "root" . "component" "admin-api") | nindent 4 }}
+spec:
+  type: {{ .Values.adminApi.service.type }}
+  ports:
+    - port: {{ .Values.adminApi.service.port }}
+      targetPort: {{ .Values.adminApi.service.targetPort }}
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "llm-gateway.selectorLabels" (dict "root" . "component" "admin-api") | nindent 4 }}
+{{- end }}

@@ -1,0 +1,853 @@
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
+
+# ============================================================================
+# LLM Gateway — Helm Chart 공통 기본값
+# ----------------------------------------------------------------------------
+# 이 파일은 모든 환경(EKS Fargate dev/prod, on-prem dev/prod)이 상속하는
+# 공통 기본값을 정의합니다. 환경별 차이는 values-{env}.yaml 에서 오버라이드합니다.
+#
+# 설계 원칙:
+#   1. stateful(Postgres/Redis)은 기본 off — 외부 관리형(Aurora/ElastiCache 등) 사용
+#   2. 모든 서비스는 resource limit/request + probe + SecurityContext 필수
+#   3. Secret 주입은 두 가지 모드 지원: Helm Secret vs ExternalSecrets Operator
+#   4. IRSA annotation은 EKS 배포에서만 적용 (on-prem은 빈 값)
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# Global: 전체 chart에 적용되는 메타/레지스트리 설정
+# ----------------------------------------------------------------------------
+global:
+  # 고객 private registry 사용 시: global.imageRegistry 에 prefix 주입
+  # 예: "harbor.customer.com/llm-gateway" → 각 서비스 이미지 앞에 붙음
+  imageRegistry: ""
+
+  # Private registry 인증 시크릿 이름 목록
+  imagePullSecrets: []
+  # - name: regcred
+
+  # 모든 리소스에 붙는 공통 라벨
+  commonLabels: {}
+  # team: platform-ai
+
+  # 모든 리소스에 붙는 공통 어노테이션
+  commonAnnotations: {}
+
+  # 배포 환경 플래그 (dev | staging | prod) — app에 APP_ENV 로 주입
+  environment: dev
+
+  # 배포 모드 (eks-fargate | onprem) — 조건부 리소스 분기에 사용
+  deploymentMode: onprem
+
+# ----------------------------------------------------------------------------
+# Name overrides
+# ----------------------------------------------------------------------------
+nameOverride: ""
+fullnameOverride: ""
+
+# ----------------------------------------------------------------------------
+# Service Account (공통 기본) — 서비스별로 개별 SA 생성 가능
+# ----------------------------------------------------------------------------
+serviceAccount:
+  # chart 공통 SA 생성 여부. 서비스별 SA는 서비스 섹션 내 serviceAccount에서 별도 제어.
+  create: true
+  name: ""
+  # EKS Fargate에서 IRSA 쓸 때 주입. on-prem에선 빈 객체.
+  annotations: {}
+  # eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/llm-gateway-common
+  automountServiceAccountToken: true
+
+# ----------------------------------------------------------------------------
+# Pod 공통 SecurityContext (NFR-3 보안 baseline)
+# ----------------------------------------------------------------------------
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false  # admin-ui Next.js가 /tmp 쓰기 필요 — 서비스별 오버라이드
+  capabilities:
+    drop:
+      - ALL
+  runAsNonRoot: true
+  runAsUser: 1000
+
+# ----------------------------------------------------------------------------
+# Network Policy (NFR-3.11)
+# ----------------------------------------------------------------------------
+networkPolicy:
+  enabled: true
+  # data-plane/control-plane 분리 — gateway-proxy vs admin-api 네트워크 구분
+  allowedIngressNamespaces: []
+  # - name: monitoring  # Prometheus scrape 허용
+
+# ----------------------------------------------------------------------------
+# 외부 의존성 (PostgreSQL / Redis / Bedrock)
+# ----------------------------------------------------------------------------
+database:
+  # ⚠️ 프로덕션에선 반드시 외부 관리형(Aurora/PostgreSQL HA)을 주입.
+  # 이 chart의 subchart(postgresql)는 dev/테스트 전용이며 기본 off.
+  enabled: false  # 이 값이 true면 chart가 in-cluster Postgres를 띄움 (dev용)
+
+  # 외부 DB 연결 설정 (production)
+  external:
+    host: ""             # 예: llm-gateway.cluster-xxx.ap-northeast-2.rds.amazonaws.com
+    port: 5432
+    name: "gateway"
+    # Application user — 모든 서비스 (gateway-proxy, admin-api, scheduler, notification-worker 등) 공통.
+    # migration Job 이 이 유저를 자동 생성/업데이트하고 모든 schema 에 필요한 권한을 부여.
+    user: "gateway"
+    # notification-worker 호환용 (과거에는 별도 유저였지만 현재는 공통 유저로 통일).
+    notificationWorkerUser: "gateway"
+    # Application user 비밀번호 Secret 참조.
+    passwordSecretName: "llm-gateway-db"
+    passwordSecretKey: "password"
+    notificationWorkerPasswordSecretKey: "password"
+    # Master user (Aurora 자동 생성 superuser). migration Job 이 init SQL 실행 + application user 생성용.
+    # 로컬 docker-compose 에서는 필요 없음 (postgres 컨테이너가 init SQL 자체 처리).
+    masterUser: "postgres_admin"
+    masterPasswordSecretKey: "master_password"
+    # Master 비번을 어느 Secrets Manager 시크릿/프로퍼티에서 가져올지.
+    # 기본(빈 값)은 app 비번과 같은 "<prefix><env>/db" 시크릿의 master_password 프로퍼티
+    # (하위호환). Aurora ManageMasterUserPassword=on 환경에서는 RDS 가 master 비번을
+    # 자동 로테이션하는 별도 시크릿(rds!cluster-<uuid>)을 직접 가리켜 드리프트를 원천 차단:
+    #   masterPasswordRemoteKey: "rds!cluster-<uuid>"   (이름만, suffix 불필요)
+    #   masterPasswordRemoteProperty: "password"
+    # (ESO IRSA 정책에 rds!cluster-* read 권한 필요 — irsa 모듈에 추가됨.)
+    masterPasswordRemoteKey: ""        # 빈 값 → "<prefix><env>/db" 사용
+    masterPasswordRemoteProperty: ""   # 빈 값 → "master_password" 사용
+    # SSL 모드 (Aurora는 require 권장)
+    sslMode: "require"
+    # 연결 풀
+    poolSize: 10
+    maxOverflow: 20
+    # 풀 고갈 시 커넥션 대기 상한(초). 과거엔 db.py 가 이 값을 안 읽어(cosmetic) SQLAlchemy
+    # 기본 30s 로 동작 → "CPU 정상인데 느림" 지연. 견고성 6축검증 후 db.py 배선 완료 +
+    # 10s 로 낮춰 fast-fail(TimeoutError). HealthChecker 도 같은 풀이라 고갈 시 10s 내 감지.
+    poolTimeout: 10
+    poolRecycle: 3600
+    # asyncpg prepared statement 캐시 크기.
+    # RDS Proxy 경유 환경에선 0 으로 override (PostgreSQL pinning 회피).
+    # Aurora/Postgres 직접 연결 환경에선 기본값 100 유지 (성능 이득).
+    statementCacheSize: 100
+
+# Rate-limit 정책(deepdive Q50). failMode: open=eval 실패 시 통과(가용성·기본),
+# closed=차단(쿼타 정확성). **무단 전환 금지** — budget/auth 는 이미 fail-closed 라
+# 의도적 비대칭(RL 은 남용방지지 과금 게이트 아님). 운영 정책 결정 후에만 closed.
+rateLimit:
+  failMode: open
+
+redis:
+  enabled: false  # true면 in-cluster Redis 띄움 (dev용)
+
+  # gateway-proxy pod 당 Redis 커넥션 풀 크기.
+  # T2 v3 에서 50 은 4k VU hold 에서 MaxConnectionsError → 429 유발.
+  # 30 pod × 150 = 4,500 커넥션 (ElastiCache 3-shard 기준 shard 당 1,500 여유).
+  poolSize: 150
+
+  # rate-limit 회로 차단기(deepdive Q50 Phase3/4). Redis 연속 실패 시 회로 OPEN →
+  # 후속 eval 을 socket_timeout 대기 없이 즉시 fast-fail(→ fallback). 기본 활성.
+  breaker:
+    enabled: true
+    failThreshold: 5      # 연속 실패 N 회 → OPEN
+    recoveryTimeout: 5.0  # OPEN 후 N 초 뒤 HALF_OPEN 시험
+
+  external:
+    host: ""  # 예: gateway-cache.xxx.cache.amazonaws.com
+    port: 6379
+    db: 0
+    # TLS 사용 여부 (ElastiCache encryption-in-transit)
+    tls: false
+    # Password 인증 (ElastiCache AUTH 또는 Redis ACL)
+    passwordSecretName: ""
+    passwordSecretKey: "password"
+    # Redis Cluster mode (Helm이 URI에 cluster 모드 플래그 주입)
+    clusterMode: false
+
+# ----------------------------------------------------------------------------
+# Bedrock / AWS 설정
+# ----------------------------------------------------------------------------
+aws:
+  region: "ap-northeast-2"
+  # Bedrock 호출 가능한 모델 ID 화이트리스트 (IAM Policy와 일치해야 함)
+  bedrockAllowedModels: []
+  # - anthropic.claude-sonnet-4-20250514-v1:0
+  # STS 검증 허용 리전
+  allowedStsRegions:
+    - "ap-northeast-2"
+  # IAM Identity Center Permission Set 이름 화이트리스트 (FR-2.1a)
+  # 이 값이 비어있으면 CLI 인증 실패. 프로덕션에선 반드시 주입.
+  allowedIamRoles: []
+  # - Customer-Developer
+
+# ----------------------------------------------------------------------------
+# 인증 (JWT / VK 암호화)
+# ----------------------------------------------------------------------------
+auth:
+  jwt:
+    algorithm: "RS256"
+    issuer: ""  # 예: https://sso.example.com
+    audience: "llm-gateway"
+    # JWT 검증용 JWKS 엔드포인트 (public keys 가져올 URL)
+    jwksUri: ""
+    # JWKS 캐시 TTL (초)
+    jwksCacheTtl: 3600
+  virtualKey:
+    # AES-256-GCM DEK (64-char hex) — Secret에서 주입
+    encryptionKeySecretName: "llm-gateway-app"
+    encryptionKeySecretKey: "virtual_key_encryption_key"
+    # 로테이션 준비: 이전 버전 키 (복호화 전용)
+    extraKeysEnabled: false
+
+# ----------------------------------------------------------------------------
+# Ingress (ALB on EKS / nginx on on-prem)
+# ----------------------------------------------------------------------------
+ingress:
+  enabled: true
+  # "alb" (EKS Fargate) | "nginx" (on-prem)
+  className: "nginx"
+
+  # ALB(EKS) 또는 nginx(on-prem) 공통 어노테이션
+  annotations: {}
+
+  # gateway-proxy (사용자 API, data-plane)
+  gateway:
+    host: "gateway.example.com"
+    path: "/"
+    pathType: "Prefix"
+    tls:
+      enabled: false
+      secretName: ""
+
+  # admin-ui (관리자 웹)
+  adminUi:
+    host: "admin.example.com"
+    path: "/"
+    pathType: "Prefix"
+    tls:
+      enabled: false
+      secretName: ""
+
+  # admin-api (관리자 REST API)
+  adminApi:
+    host: "admin-api.example.com"
+    path: "/"
+    pathType: "Prefix"
+    tls:
+      enabled: false
+      secretName: ""
+
+# ----------------------------------------------------------------------------
+# External Secrets Operator 연동 (ESO 사용 시 K8s Secret 대신 동적 주입)
+# ----------------------------------------------------------------------------
+externalSecrets:
+  enabled: false
+  # SecretStore 또는 ClusterSecretStore 참조
+  secretStoreRef:
+    kind: "ClusterSecretStore"  # "SecretStore" | "ClusterSecretStore"
+    name: "aws-secrets-manager"
+  # Secrets Manager의 secret 경로 prefix
+  # 예: "/llm-gateway/prod/" 밑에 db, app, jwt 등이 존재
+  secretPathPrefix: "/llm-gateway/"
+  refreshInterval: "1h"
+
+# ----------------------------------------------------------------------------
+# Observability — OpenTelemetry
+# ----------------------------------------------------------------------------
+observability:
+  otel:
+    # 전송 모드: "sidecar" (Pod마다 Collector 사이드카) | "managed" (AWS ADOT 등 외부) | "in-cluster" (DaemonSet/Deployment)
+    mode: "in-cluster"
+
+    # Collector 엔드포인트 (sidecar 모드에선 localhost:4317, in-cluster는 Service DNS)
+    endpoint: "otel-collector.observability.svc.cluster.local:4317"
+    protocol: "grpc"  # grpc | http/protobuf
+
+    # Sidecar 이미지 (mode=sidecar 일 때만)
+    sidecarImage:
+      repository: "otel/opentelemetry-collector-contrib"
+      tag: "0.104.0"
+      pullPolicy: "IfNotPresent"
+
+# ============================================================================
+# 서비스별 설정
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# DB Migration (Helm pre-install / pre-upgrade hook으로 1회 실행)
+# ----------------------------------------------------------------------------
+migration:
+  enabled: true
+  image:
+    repository: "llm-gateway/migration"
+    tag: ""  # 비우면 Chart.appVersion 사용
+    pullPolicy: "IfNotPresent"
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  # Helm hook 타이밍
+  hooks:
+    - "pre-install"
+    - "pre-upgrade"
+  # 마이그레이션 실패 시 helm install/upgrade 전체를 롤백할지
+  hookDeletePolicy: "before-hook-creation,hook-succeeded"
+  activeDeadlineSeconds: 600  # 10분 안에 끝나지 않으면 실패로 판정
+  # initContainer 가 ExternalSecret 의 K8s Secret sync 완료를 대기할 때 사용.
+  # bitnami/kubectl 은 major.minor 태그를 제공하지 않음 — latest 또는 full version (1.30.13 등).
+  # 고객이 외부 이미지를 못 쓰는 환경이면 자체 ECR 로 복사 후 override.
+  waitForSecret:
+    image: "bitnami/kubectl:latest"
+
+# ----------------------------------------------------------------------------
+# Gateway Proxy (U1, data-plane) — 요청 라우팅 + 인증 + Rate Limit + 비용 기록
+# ----------------------------------------------------------------------------
+gatewayProxy:
+  enabled: true
+  replicaCount: 2  # prod에선 3+ 권장 (values-*-prod.yaml에서 override)
+
+  image:
+    repository: "llm-gateway/gateway-proxy"
+    tag: ""  # 비우면 Chart.appVersion
+    pullPolicy: "IfNotPresent"
+
+  serviceAccount:
+    # IRSA 필요 (FR-2.4) — Bedrock 호출용 IAM Role
+    create: true
+    name: "gateway-proxy"
+    annotations: {}
+    # eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/llm-gateway-gateway-proxy-bedrock
+
+  service:
+    type: "ClusterIP"
+    port: 8000
+    targetPort: 8000
+
+  # SSE 장시간 연결 수용 → HPA는 CPU 기반 + 충분한 maxReplicas 필요
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+    limits:
+      cpu: "2000m"
+      memory: "2Gi"
+
+  # HPA 는 CPU 만 사용. memory 는 제외.
+  # 이유: Gateway/FastAPI 는 CPU bound. Python allocator 특성상 memory 는 request
+  # 대비 상시 높게 측정되어 memory HPA 가 의미 없는 scale-out 루프를 유발함.
+  # Memory leak/급증은 livenessProbe + Prometheus alert 로 감지.
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 70
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1  # SSE 스트림 보호 — 최소 1개는 항상 가용
+
+  # SSE 스트림이 길어질 수 있으니 terminationGracePeriodSeconds 충분히
+  terminationGracePeriodSeconds: 60
+
+  livenessProbe:
+    httpGet:
+      path: "/health"
+      port: 8000
+    initialDelaySeconds: 15
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+  # readiness 는 /health/ready (엄격) — DB_DEGRADED/풀 포화 시 503 → 고장 파드를 endpoint 에서
+  # 제외(트래픽 차단). liveness 는 /health(관대) 유지 → 재시작 cascade 회피. (견고성 6축검증 축⑤)
+  readinessProbe:
+    httpGet:
+      path: "/health/ready"
+      port: 8000
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+  # Startup probe — 초기 로드(Redis 캐시 주입 등) 시간 확보. startup 은 /health(관대) 유지:
+  # 기동 직후 캐시 워밍 중 degradation 이 잠깐 non-HEALTHY 여도 startup 을 통과해야 함.
+  startupProbe:
+    httpGet:
+      path: "/health"
+      port: 8000
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 30  # 최대 150초 기동 대기
+
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+  # 앱 고유 env 변수 (configmap에서 읽거나 직접 주입)
+  env:
+    LOG_LEVEL: "INFO"
+    # uvicorn 워커 수 — gateway-proxy Dockerfile CMD 가 ${WORKERS:-4} 로 읽는다(1.0.98+).
+    # Fargate cpu request 기준 워커당 CPU 기아를 피하도록 설정(0.5 vCPU=2, 0.25 vCPU=1~2).
+    # ⚠️ 1.0.98 이전 이미지는 CMD 가 --workers 4 하드코딩이라 이 값이 무시됐음(죽은 설정).
+    WORKERS: "2"
+    OPENMODEL_BASE_URL: ""  # 사내 vLLM 엔드포인트. on-prem만 사용
+    # Redis 스트림 / 예산 관련
+    COST_STREAM_KEY: "cost:stream"
+    BUDGET_DEFAULT_POLICY: "HARD_BLOCK"
+    # Rate limit cache TTL
+    RATE_LIMIT_CONFIG_TTL_SEC: "300"
+
+# ----------------------------------------------------------------------------
+# Admin API (U2, control-plane) — 관리자 REST API + VK 발급
+# ----------------------------------------------------------------------------
+adminApi:
+  enabled: true
+  replicaCount: 2
+
+  image:
+    repository: "llm-gateway/admin-api"
+    tag: ""
+    pullPolicy: "IfNotPresent"
+
+  serviceAccount:
+    create: true
+    name: "admin-api"
+    annotations: {}
+    # IRSA for STS (FR-2.1a VK 발급 검증)
+    # eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/llm-gateway-admin-api
+
+  service:
+    type: "ClusterIP"
+    port: 8080
+    targetPort: 8080
+
+  resources:
+    requests:
+      cpu: "300m"
+      memory: "512Mi"
+    limits:
+      cpu: "1500m"
+      memory: "1Gi"
+
+  # HPA 는 CPU 만 사용 (gatewayProxy 와 동일 이유).
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  terminationGracePeriodSeconds: 30
+
+  # liveness 는 /health (프로세스 alive 만 확인). readiness/startup 은 /health/ready
+  # (DB+Redis 포함). DB 포화 시 pod kill 방지.
+  livenessProbe:
+    httpGet:
+      path: "/health"
+      port: 8080
+    initialDelaySeconds: 15
+    periodSeconds: 30
+    timeoutSeconds: 10
+    failureThreshold: 5
+
+  readinessProbe:
+    httpGet:
+      path: "/health/ready"
+      port: 8080
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 10
+    failureThreshold: 3
+
+  startupProbe:
+    httpGet:
+      path: "/health/ready"
+      port: 8080
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 30
+
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+  env:
+    LOG_LEVEL: "INFO"
+    WORKERS: "2"
+    DEV_LOGIN_ENABLED: "false"  # production에선 반드시 false
+    DEFAULT_USER_BUDGET_USD: "1000"
+
+  # --------------------------------------------------------------------------
+  # OIDC 인증 (Cognito / Keycloak / Okta / Azure AD / IC)
+  # --------------------------------------------------------------------------
+  # OIDC_ISSUER_URL 가 비어있으면 OIDC 비활성, STS 흐름만 동작.
+  # 채우면 dual-mode (STS + OIDC).
+  #
+  # EKS Fargate 환경에서는 install-eks.sh 가 terraform output (cognito_*) 을
+  # 자동으로 주입. on-prem/dev override 는 values-{env}.yaml 에서.
+  oidc:
+    enabled: false  # values-eks-fargate-{dev,prod}.yaml 에서 true 로 override
+    issuerUrl: ""              # OIDC_ISSUER_URL — Cognito issuer URL
+    audience: ""               # OIDC_AUDIENCE — Cognito 면 빈 값 (access_token 에 aud 없음)
+    providerName: "oidc"       # OIDC_PROVIDER_NAME — 예: "oidc:cognito"
+    discoveryUrlOverride: ""   # OIDC_DISCOVERY_URL_OVERRIDE — 보통 비워둠
+    jwksCacheTtlSeconds: 3600
+    # Claim 매핑 (IDP 별 차이 흡수)
+    userIdClaim: "sub"
+    emailClaim: "email"
+    nameClaim: "name"
+    groupsClaim: "cognito:groups"  # Cognito 표준. Keycloak/Okta 면 "groups"
+    # 그룹 → 팀 매핑 정규식 (named group 'team' 필수)
+    # 그룹 → 팀 매핑 prefix. underscore 개수로 파싱:
+    #   Claude_<team>        → Default Department 하위 <team> 팀
+    #   Claude_<dept>_<team> → <dept> 부서 자동 생성 후 <team> 팀
+    #   그 외                → reject
+    groupPrefix: "Claude_"
+    # 매칭 그룹 없을 때 동작: false=DEFAULT_TEAM 으로 fallback, true=거부.
+    # true 권장 — Cognito 를 팀 구조의 single source of truth 로 강제.
+    rejectUnmatchedGroups: true
+    # 게이팅 (옵션). 비우면 모든 OIDC 사용자 통과.
+    requiredGroup: ""
+    # OIDC 흐름 VK TTL (시간). STS 는 별도 (rotation policy default 90일).
+    # 1h — Cognito group 변경이 silent refresh 로 ~2h 안에 자동 반영되도록 짧게.
+    vkTtlHours: 1
+
+  # Admin 부트스트랩 — 둘 중 하나라도 매칭되면 ADMIN role 자동 부여
+  adminBootstrap:
+    emails: []          # ADMIN_EMAILS — 예: ["admin@example.com"]
+    groups: []          # ADMIN_GROUPS — 예: ["ClaudeAdmin"]
+
+  # 자동 프로비저닝 기본값 (Default Department / Team UUIDs)
+  # db/init/03_seed_data.sql 의 시드 UUID 와 정확히 일치해야 함.
+  autoProvisioning:
+    defaultTeamId: "00000000-0000-4000-a000-000000000003"
+    defaultDeptId: "00000000-0000-4000-a000-000000000002"
+    systemUserId: "00000000-0000-4000-a000-000000000010"
+
+# ----------------------------------------------------------------------------
+# Admin UI (Next.js 14 — 관리자 웹)
+# ----------------------------------------------------------------------------
+adminUi:
+  enabled: true
+  replicaCount: 2
+
+  image:
+    repository: "llm-gateway/admin-ui"
+    tag: ""
+    pullPolicy: "IfNotPresent"
+
+  serviceAccount:
+    create: true
+    name: "admin-ui"
+    annotations: {}
+
+  service:
+    type: "ClusterIP"
+    port: 3000
+    targetPort: 3000
+
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+
+  # HPA 는 CPU 만 사용 (gatewayProxy 와 동일 이유).
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 75
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  terminationGracePeriodSeconds: 30
+
+  # Next.js 기동이 느려서 startup probe 중요
+  startupProbe:
+    httpGet:
+      path: "/api/health"
+      port: 3000
+    initialDelaySeconds: 20
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 30
+
+  livenessProbe:
+    httpGet:
+      path: "/api/health"
+      port: 3000
+    initialDelaySeconds: 30
+    periodSeconds: 30
+    timeoutSeconds: 10
+
+  readinessProbe:
+    httpGet:
+      path: "/api/health"
+      port: 3000
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+
+  # Next.js는 /tmp + /.next/cache에 쓰기 필요 → readOnlyRootFilesystem false
+  securityContextOverride:
+    readOnlyRootFilesystem: false
+
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+  env:
+    NODE_ENV: "production"
+    NEXT_TELEMETRY_DISABLED: "1"
+    OTEL_SERVICE_NAME: "admin-ui"
+
+# ----------------------------------------------------------------------------
+# Scheduler (admin-api 이미지를 다른 CMD로 실행 — ROI 집계 cron)
+# Singleton 필수: replicas=1, HPA 없음, PDB minAvailable=0
+# ----------------------------------------------------------------------------
+scheduler:
+  enabled: true
+  replicaCount: 1  # 절대 2 이상 금지 (중복 cron 실행 방지)
+
+  image:
+    # admin-api 이미지 재사용 (command만 다름)
+    repository: "llm-gateway/admin-api"
+    tag: ""
+    pullPolicy: "IfNotPresent"
+
+  command: ["python", "-m", "app.scheduler.main"]
+
+  serviceAccount:
+    create: true
+    name: "scheduler"
+    annotations: {}
+
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+  podDisruptionBudget:
+    enabled: false  # singleton — 배포 시 순간 down 허용
+
+  terminationGracePeriodSeconds: 30
+
+  # Scheduler는 HTTP 서버가 없음 → exec probe.
+  # DB 드라이버는 asyncpg (psycopg2 미설치). import 만으로는 모듈 존재 확인 수준의 liveness.
+  livenessProbe:
+    exec:
+      command:
+        - "python"
+        - "-c"
+        - "import asyncpg"
+    initialDelaySeconds: 30
+    periodSeconds: 60
+    timeoutSeconds: 10
+
+  readinessProbe:
+    exec:
+      command:
+        - "python"
+        - "-c"
+        - "import asyncpg"
+    initialDelaySeconds: 10
+    periodSeconds: 30
+    timeoutSeconds: 5
+
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+  env:
+    LOG_LEVEL: "INFO"
+    ROI_AGGREGATION_CRON: "*/15 * * * *"
+    KEY_EXPIRY_CRON: "0 * * * *"
+
+# ----------------------------------------------------------------------------
+# Notification Worker (U3) — Redis pub/sub → email/HTTP
+# ----------------------------------------------------------------------------
+notificationWorker:
+  enabled: true
+  replicaCount: 2
+
+  image:
+    repository: "llm-gateway/notification-worker"
+    tag: ""
+    pullPolicy: "IfNotPresent"
+
+  serviceAccount:
+    create: true
+    name: "notification-worker"
+    annotations: {}
+
+  resources:
+    requests:
+      cpu: "100m"  # Fargate 최소 하한 주의 (0.25 vCPU로 반올림됨)
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 80
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  terminationGracePeriodSeconds: 30
+
+  # livenessProbe 는 외부 의존성 검사 금지 (Redis 장애로 pod restart 해도 해결 안 됨).
+  # PID 1 alive 만 체크 — Python import/TLS 지연에 안 휘둘림.
+  livenessProbe:
+    exec:
+      command: ["sh", "-c", "kill -0 1"]
+    initialDelaySeconds: 30
+    periodSeconds: 60
+    timeoutSeconds: 5
+
+  readinessProbe:
+    exec:
+      command:
+        - "python"
+        - "-c"
+        # K8s 는 probe command 안의 $(VAR) 를 1-level 만 치환. REDIS_URL 값 자체가
+        # "rediss://:$(REDIS_PASSWORD)@..." 이라 이중 치환이 안 되어 literal 이 Python 에 전달됨.
+        # 회피: os.environ 으로 런타임에 실제 확장된 값을 읽음.
+        - "import os, redis; r=redis.Redis.from_url(os.environ['REDIS_URL']); r.ping()"
+    # ElastiCache cluster mode + Fargate 환경에서 TLS handshake + Python import 가
+    # 5s 안에 안정적으로 끝나지 않음 → helm rollout 이 Progress deadline 실패.
+    # 15s 여유 + periodSeconds 60s 로 probe 부하도 경감.
+    initialDelaySeconds: 15
+    periodSeconds: 60
+    timeoutSeconds: 15
+
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+  env:
+    LOG_LEVEL: "INFO"
+    OTEL_SERVICE_NAME: "notification-worker"
+
+  # 이메일 발송 설정 — 고객 내부 메일 API / SMTP / mock
+  email:
+    provider: "internal_api"  # "internal_api" | "smtp" | "mock"
+    internalApi:
+      url: ""                 # 고객 내부 메일 API URL (예: http://mail-api.internal/send)
+      fromAddress: "no-reply@llm-gateway.local"
+      fromName: "LLM Gateway"
+    smtp:
+      host: ""
+      port: 587
+      startTls: true
+      fromAddress: ""
+      credentialsSecretName: ""
+
+# ----------------------------------------------------------------------------
+# Cost Recorder Worker — Redis Stream → DB batch flusher (FR-3.3 critical path)
+# ----------------------------------------------------------------------------
+costRecorderWorker:
+  enabled: true
+  # consumer group 방식이라 여러 replica가 안전하게 병렬 소비 가능
+  replicaCount: 2
+
+  image:
+    repository: "llm-gateway/cost-recorder-worker"
+    tag: ""
+    pullPolicy: "IfNotPresent"
+
+  serviceAccount:
+    create: true
+    name: "cost-recorder-worker"
+    annotations: {}
+
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+    # Redis Stream 지연(XLEN)을 직접 측정해 KEDA로 교체하면 더 정확
+    targetCPUUtilizationPercentage: 70
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  terminationGracePeriodSeconds: 60  # 배치 flush 완료까지 대기 여유
+
+  # livenessProbe 는 외부 의존성 검사 금지 (Redis 장애로 pod restart 해도 해결 안 됨).
+  # PID 1 alive 만 체크 — Python import/TLS 지연에 안 휘둘림.
+  livenessProbe:
+    exec:
+      command: ["sh", "-c", "kill -0 1"]
+    initialDelaySeconds: 30
+    periodSeconds: 60
+    timeoutSeconds: 5
+
+  readinessProbe:
+    exec:
+      command:
+        - "python"
+        - "-c"
+        # K8s 는 probe command 안의 $(VAR) 를 1-level 만 치환. REDIS_URL 값 자체가
+        # "rediss://:$(REDIS_PASSWORD)@..." 이라 이중 치환이 안 되어 literal 이 Python 에 전달됨.
+        # 회피: os.environ 으로 런타임에 실제 확장된 값을 읽음.
+        - "import os, redis; r=redis.Redis.from_url(os.environ['REDIS_URL']); r.ping()"
+    # ElastiCache cluster mode + Fargate 환경에서 TLS handshake + Python import 가
+    # 5s 안에 안정적으로 끝나지 않음 → helm rollout 이 Progress deadline 실패.
+    # 15s 여유 + periodSeconds 60s 로 probe 부하도 경감.
+    initialDelaySeconds: 15
+    periodSeconds: 60
+    timeoutSeconds: 15
+
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+  env:
+    LOG_LEVEL: "INFO"
+    OTEL_SERVICE_NAME: "cost-recorder-worker"
+    COST_STREAM_KEY: "cost:stream"
+    COST_STREAM_GROUP: "cost-recorder-workers"
+    # Consumer 이름은 pod name 기반으로 자동 설정 (Downward API)
+    # COST_STREAM_CONSUMER 는 환경변수 주입 시점에 HOSTNAME 값으로 치환
+    BATCH_MAX_SIZE: "100"
+    BATCH_MAX_INTERVAL_SEC: "5"
+    DAILY_USAGE_AGG_CRON: "10 0 * * *"

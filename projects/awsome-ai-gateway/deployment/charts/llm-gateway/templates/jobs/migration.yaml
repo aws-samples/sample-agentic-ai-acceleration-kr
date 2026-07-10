@@ -1,0 +1,153 @@
+{{/* Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms. */}}
+
+{{- if .Values.migration.enabled -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # helm.sh/hook 이 달려있어 매 install/upgrade 마다 재생성됨 → 이름에 revision 포함
+  name: {{ include "llm-gateway.fullname" . }}-migration-{{ .Release.Revision }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-gateway.componentLabels" (dict "root" . "component" "migration") | nindent 4 }}
+  annotations:
+    # Helm hook — 애플리케이션 Deployment 전에 1회 실행
+    "helm.sh/hook": {{ join "," .Values.migration.hooks | quote }}
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": {{ .Values.migration.hookDeletePolicy | quote }}
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: {{ .Values.migration.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: 600  # 10분 후 Job 자동 삭제 (디버그 여유 확보)
+  template:
+    metadata:
+      labels:
+        {{- include "llm-gateway.selectorLabels" (dict "root" . "component" "migration") | nindent 8 }}
+      annotations:
+        # hook 이 아닌 일반 Pod 주석
+        sidecar.istio.io/inject: "false"
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "llm-gateway.fullname" . }}-migration
+      {{- include "llm-gateway.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      # ExternalSecrets Operator 가 AWS Secrets Manager → K8s Secret 으로 sync 하는데
+      # ESO 는 async reconciler 라 timing 을 보장 못 함. initContainer 로 Secret 이
+      # 실제로 생성될 때까지 대기한 뒤 main container (alembic upgrade) 를 실행.
+      # pre-install hook weight -30 ExternalSecret → -5 migration 순서지만 sync 완료
+      # 시점을 hook 이 보장 못 하므로 명시적 wait 가 필요.
+      initContainers:
+        - name: wait-for-secret
+          # bitnami/kubectl 은 major.minor 태그를 제공하지 않음. full version (예: 1.30.13)
+          # 또는 latest 만 존재. latest 는 mutable 하지만 initContainer 가 Secret 존재만
+          # 확인하는 단순 작업이라 특정 kubectl API 변경에 민감하지 않음.
+          image: {{ .Values.migration.waitForSecret.image | default "bitnami/kubectl:latest" | quote }}
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              timeout=300
+              elapsed=0
+              SECRET={{ .Values.database.external.passwordSecretName | quote }}
+              NS={{ .Release.Namespace | quote }}
+              echo "Waiting for Secret $SECRET in namespace $NS (timeout ${timeout}s)..."
+              until kubectl get secret "$SECRET" -n "$NS" >/dev/null 2>&1; do
+                if [ $elapsed -ge $timeout ]; then
+                  echo "ERROR: timeout waiting for secret $SECRET. ExternalSecret 이 sync 되지 않았습니다."
+                  kubectl get externalsecret -n "$NS" || true
+                  exit 1
+                fi
+                sleep 3
+                elapsed=$((elapsed + 3))
+              done
+              echo "OK: Secret $SECRET ready after ${elapsed}s"
+      containers:
+        - name: migration
+          image: {{ include "llm-gateway.image" (dict "root" . "image" .Values.migration.image) | quote }}
+          imagePullPolicy: {{ .Values.migration.image.pullPolicy }}
+          securityContext:
+            {{- include "llm-gateway.containerSecurityContext" (dict "root" . "override" (dict)) | nindent 12 }}
+          env:
+            # Alembic stamp 용 (application user)
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.external.passwordSecretName | quote }}
+                  key: {{ .Values.database.external.passwordSecretKey | quote }}
+            - name: DB_URL
+              value: {{ include "llm-gateway.dbUrl" . | quote }}
+            # Cloud mode: init SQL 실행 + application user 생성용 (master 권한).
+            # 이 env 들이 모두 제공될 때만 run_migration.sh 가 cloud mode 로 동작.
+            # 로컬 docker-compose 에서는 이 env 들이 없으므로 local mode (alembic stamp 만).
+            - name: DB_MASTER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.external.passwordSecretName | quote }}
+                  key: {{ .Values.database.external.masterPasswordSecretKey | quote }}
+            - name: DB_MASTER_USER
+              value: {{ .Values.database.external.masterUser | quote }}
+            - name: DB_MASTER_URL
+              value: {{ include "llm-gateway.dbMasterUrl" . | quote }}
+            - name: APP_DB_USER
+              value: {{ .Values.database.external.user | quote }}
+            - name: APP_DB_PASSWORD
+              value: $(DB_PASSWORD)  # env var 참조 (위 DB_PASSWORD 재사용)
+          resources:
+            {{- toYaml .Values.migration.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "llm-gateway.fullname" . }}-migration
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-gateway.componentLabels" (dict "root" . "component" "migration") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": {{ join "," .Values.migration.hooks | quote }}
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": {{ .Values.migration.hookDeletePolicy | quote }}
+automountServiceAccountToken: true
+---
+# initContainer 가 kubectl 로 Secret/ExternalSecret 상태를 확인하려면 namespace 내
+# read 권한 필요. Role + RoleBinding 을 migration ServiceAccount 에 제한적으로 부여.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "llm-gateway.fullname" . }}-migration-secret-reader
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-gateway.componentLabels" (dict "root" . "component" "migration") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": {{ join "," .Values.migration.hooks | quote }}
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": {{ .Values.migration.hookDeletePolicy | quote }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["external-secrets.io"]
+    resources: ["externalsecrets"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "llm-gateway.fullname" . }}-migration-secret-reader
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-gateway.componentLabels" (dict "root" . "component" "migration") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": {{ join "," .Values.migration.hooks | quote }}
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": {{ .Values.migration.hookDeletePolicy | quote }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "llm-gateway.fullname" . }}-migration-secret-reader
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "llm-gateway.fullname" . }}-migration
+    namespace: {{ .Release.Namespace }}
+{{- end }}

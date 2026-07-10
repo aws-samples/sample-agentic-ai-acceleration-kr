@@ -1,0 +1,26 @@
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
+use_case_id: "04"
+tier: A
+name: "지난 30일 일별 총 비용 추이"
+question: "지난 30일 일별 총 비용 추이"
+
+expected:
+  sql:
+    # 일자별 SUM(cost_usd). 단일 테이블 시계열.
+    required_tables: ["usage.usage_logs"]
+    required_clauses:
+      - "GROUP BY"
+      - "SUM"
+      # 30일 범위 — INTERVAL 리터럴 또는 ::date - 30 산술 둘 다 허용.
+      - "(interval|date_trunc|::date\\s*-|now\\(\\))"
+    forbidden_clauses:
+      - "INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER"
+    timezone_hint: "Asia/Seoul"
+    # §58: 시간 필터에 AT TIME ZONE 'Asia/Seoul' 강제(UTC 드리프트 회귀 차단).
+    timezone_kst: true
+  validator:
+    verdict: "PASS"
+    min_confidence: 0.7
+  chart:
+    kind: ["line", "area"]
+  agent_path_includes: ["ask_sql_specialist", "ask_validator"]

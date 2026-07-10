@@ -1,0 +1,21 @@
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
+use_case_id: "08"
+tier: A
+name: "등록은 됐는데 한 번도 호출 안 한 사용자"
+question: "Cognito 등록은 됐는데 한 번도 호출 안 한 사용자"
+
+expected:
+  sql:
+    # auth.users LEFT JOIN usage.usage_logs WHERE usage_logs IS NULL.
+    required_tables: ["auth.users", "usage.usage_logs"]
+    required_clauses:
+      - "LEFT JOIN"
+      - "IS NULL"
+    forbidden_clauses:
+      - "INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER"
+  validator:
+    verdict: "PASS"
+    min_confidence: 0.6
+  chart:
+    kind: ["table"]
+  agent_path_includes: ["ask_sql_specialist", "ask_validator"]

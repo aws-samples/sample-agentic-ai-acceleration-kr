@@ -1,0 +1,101 @@
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
+
+# ==============================================================================
+# Dev 환경 변수 — terraform.tfvars 로 복사 후 수정
+# ==============================================================================
+#
+# 사용법:
+#   cp terraform.tfvars.example terraform.tfvars
+#   # terraform.tfvars 의 ACCOUNT_ID / YOUR_ROLE 등 값을 본인 환경에 맞게 채우기
+#   terraform init \
+#     -backend-config="bucket=<your-tfstate-bucket>" \
+#     -backend-config="dynamodb_table=<your-tflock-table>"
+#   terraform apply
+#
+# 주의: terraform.tfvars 는 .gitignore 로 추적 차단됨 (실제 IAM ARN 보호).
+
+project     = "llm-gateway"
+environment = "dev"
+aws_region  = "ap-northeast-2"
+
+# ------------------------------------------------------------------------------
+# Cognito Hosted UI 도메인 — 전 세계 unique 해야 함
+# ------------------------------------------------------------------------------
+# 최종 형식: {project}-{env}-{cognito_domain_suffix}.auth.{region}.amazoncognito.com
+# 본 deliverable 의 새 계정에선 "vanilla-auth-123456789012" 사용. 다른 계정은
+# 자기 계정 번호로 교체 또는 임의 unique 문자열 사용.
+cognito_domain_suffix = "vanilla-auth-CHANGE_ACCOUNT_ID"
+
+# ------------------------------------------------------------------------------
+# Bedrock 허용 모델 (AWS Console에서 Model Access 승인받은 것만)
+# ------------------------------------------------------------------------------
+# 애플리케이션은 `global.anthropic.*` (cross-region inference profile) 로 호출하므로
+# inference-profile + 실제 추론이 실행되는 foundation-model 양쪽 모두 허용해야 한다.
+# Model Access 승인 받은 모델만 실제로 호출 가능하므로 ARN 허용해도 무방.
+bedrock_allowed_model_arns = [
+  # Foundation models (실제 추론 실행 리소스)
+  "arn:aws:bedrock:ap-northeast-2::foundation-model/anthropic.claude-opus-4-*",
+  "arn:aws:bedrock:ap-northeast-2::foundation-model/anthropic.claude-sonnet-4-*",
+  "arn:aws:bedrock:ap-northeast-2::foundation-model/anthropic.claude-haiku-4-*",
+  # Foundation models (리전 없는 ARN — cross-region inference profile 경유 시 필요)
+  "arn:aws:bedrock:::foundation-model/anthropic.*",
+  # Global cross-region inference profiles (application 이 실제로 호출)
+  "arn:aws:bedrock:*::inference-profile/global.anthropic.claude-*",
+  "arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-*",
+  # APAC cross-region inference profile (예비)
+  "arn:aws:bedrock:ap-northeast-2::inference-profile/apac.anthropic.claude-*",
+]
+
+# ------------------------------------------------------------------------------
+# EKS 관리자 접근 (본인 IAM 유저/역할)
+# ------------------------------------------------------------------------------
+eks_access_entries = {
+  developer = {
+    # 예: "arn:aws:iam::123456789012:role/Customer-Developer"
+    # 또는 본인 IAM 유저: "arn:aws:iam::123456789012:user/your-name"
+    principal_arn = "arn:aws:iam::ACCOUNT_ID:role/YOUR_ROLE"
+    policy_associations = {
+      admin = {
+        policy_arn = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+        access_scope = {
+          type = "cluster"
+        }
+      }
+    }
+  }
+}
+
+tags = {
+  CostCenter = "platform-ai"
+  Owner      = "llm-gateway-team"
+}
+
+# ------------------------------------------------------------------------------
+# Cognito user groups (OIDC 자동 팀 매핑)
+# ------------------------------------------------------------------------------
+# - "Claude_<team>" 패턴: Default Department 하위에 <team> 이름의 Team 자동 생성
+#   + 사용자 배정. (예: "Claude_AI-Center_S/W-Culture-Office")
+# - "Claude_<department>_<team>" 패턴: <department> 부서 자동 생성 + 그 아래
+#   <team> 팀 자동 생성 + 사용자 배정. (예: "Claude_test-department_aws-test")
+# - "Claude_" prefix 없는 그룹은 OIDC 로그인 거부 (REJECT_UNMATCHED_GROUPS=true).
+# - "ClaudeAdmin": 팀 매핑 제외. 멤버에게 admin role 자동 부여
+#   (adminBootstrap.groups=ClaudeAdmin).
+# 운영 중 추가: 이 리스트 수정 → terraform apply (IaC 권장). 또는 AWS Console / CLI 로
+# 직접 Cognito group 추가도 가능 (코드 변경 불필요).
+cognito_groups = [
+  "Claude_AI-Center_S/W-Culture-Office",
+  "Claude_test-department_aws-test",
+  "ClaudeAdmin",
+]
+
+# ------------------------------------------------------------------------------
+# admin-chat-agent (BI 분석 에이전트) 인프라
+# ------------------------------------------------------------------------------
+# 본 deliverable 운영 환경은 BI 챗을 포함하므로 둘 다 true 로 배포돼 있다.
+# 신규 계정에서 동일 스택을 재현하려면 true. (이미 배포된 환경에서 false 로 apply 하면
+# 운영 리소스 ECR/S3/Lambda 가 파괴되니 주의.)
+#   enable_chat_agent    : ECR + S3 staging + IAM + KMS
+#   enable_chat_db_tools : query_db/get_schema Lambda + reader secret + SG
+# AgentCore Runtime 인스턴스 자체는 terraform 아니라 deploy_agent.sh 로 별도 배포.
+enable_chat_agent    = true
+enable_chat_db_tools = true

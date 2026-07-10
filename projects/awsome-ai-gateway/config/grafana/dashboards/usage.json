@@ -1,0 +1,105 @@
+{
+  "title": "Gateway Proxy — Usage & Cost",
+  "uid": "gateway-usage",
+  "editable": true,
+  "time": {"from": "now-24h", "to": "now"},
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {
+        "name": "model",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(gateway_token_usage_total, model)",
+        "refresh": 2,
+        "includeAll": true,
+        "current": {"text": "All", "value": "$__all"}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1, "title": "Total Requests (24h)", "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+      "targets": [{"expr": "sum(increase(gateway_request_total[24h]))", "legendFormat": ""}],
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 100}, {"color": "red", "value": 1000}]}}}
+    },
+    {
+      "id": 2, "title": "Total Cost (24h)", "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+      "targets": [{"expr": "sum(increase(gateway_cost_usd_USD_total[24h]))", "legendFormat": ""}],
+      "fieldConfig": {"defaults": {"unit": "currencyUSD", "color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 10}, {"color": "red", "value": 100}]}}}
+    },
+    {
+      "id": 3, "title": "Total Tokens (24h)", "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+      "targets": [{"expr": "sum(increase(gateway_token_usage_total[24h]))", "legendFormat": ""}],
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "blue", "value": null}]}}}
+    },
+    {
+      "id": 4, "title": "Active Connections", "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+      "targets": [{"expr": "gateway_active_connections", "legendFormat": ""}],
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 10}, {"color": "red", "value": 50}]}}}
+    },
+
+    {
+      "id": 10, "title": "Token Usage by Model & Type", "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "targets": [
+        {"expr": "sum by (model, token_type) (rate(gateway_token_usage_total{model=~\"$model\"}[5m]))", "legendFormat": "{{model}} {{token_type}}"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "fillOpacity": 20, "stacking": {"mode": "normal"}}}}
+    },
+    {
+      "id": 11, "title": "Cost by Model (USD/min)", "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+      "targets": [
+        {"expr": "sum by (model) (rate(gateway_cost_usd_USD_total{model=~\"$model\"}[5m])) * 60", "legendFormat": "{{model}}"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "currencyUSD", "custom": {"drawStyle": "bars", "fillOpacity": 60}}}
+    },
+
+    {
+      "id": 20, "title": "Cache Token Efficiency (write vs read)", "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+      "targets": [
+        {"expr": "sum by (model) (rate(gateway_token_usage_total{token_type=\"cache_write\", model=~\"$model\"}[5m]))", "legendFormat": "{{model}} cache_write"},
+        {"expr": "sum by (model) (rate(gateway_token_usage_total{token_type=\"cache_read\", model=~\"$model\"}[5m]))", "legendFormat": "{{model}} cache_read"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "fillOpacity": 30}}}
+    },
+    {
+      "id": 21, "title": "Cost per Model (24h)", "type": "piechart",
+      "gridPos": {"h": 8, "w": 6, "x": 12, "y": 12},
+      "targets": [{"expr": "sum by (model) (increase(gateway_cost_usd_USD_total[24h]))", "legendFormat": "{{model}}"}],
+      "options": {"legend": {"displayMode": "table", "placement": "right"}}
+    },
+    {
+      "id": 22, "title": "Cache Hit Ratio", "type": "gauge",
+      "gridPos": {"h": 8, "w": 6, "x": 18, "y": 12},
+      "targets": [{"expr": "sum(rate(gateway_token_usage_total{token_type=\"cache_read\"}[1h])) / (sum(rate(gateway_token_usage_total{token_type=\"cache_read\"}[1h])) + sum(rate(gateway_token_usage_total{token_type=\"input\"}[1h])) + sum(rate(gateway_token_usage_total{token_type=\"cache_write\"}[1h])))", "legendFormat": ""}],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1, "thresholds": {"steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 0.3}, {"color": "green", "value": 0.6}]}}}
+    },
+
+    {
+      "id": 30, "title": "ROI — Cost per Request", "type": "stat",
+      "gridPos": {"h": 4, "w": 8, "x": 0, "y": 20},
+      "targets": [{"expr": "sum(increase(gateway_cost_usd_USD_total[24h])) / sum(increase(gateway_request_total[24h]))", "legendFormat": ""}],
+      "fieldConfig": {"defaults": {"unit": "currencyUSD", "color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.05}, {"color": "red", "value": 0.5}]}}}
+    },
+    {
+      "id": 31, "title": "ROI — Cost per 1K Tokens", "type": "stat",
+      "gridPos": {"h": 4, "w": 8, "x": 8, "y": 20},
+      "targets": [{"expr": "sum(increase(gateway_cost_usd_USD_total[24h])) / (sum(increase(gateway_token_usage_total[24h])) / 1000)", "legendFormat": ""}],
+      "fieldConfig": {"defaults": {"unit": "currencyUSD", "color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.01}, {"color": "red", "value": 0.1}]}}}
+    },
+    {
+      "id": 32, "title": "Avg Latency p95 (5m)", "type": "stat",
+      "gridPos": {"h": 4, "w": 8, "x": 16, "y": 20},
+      "targets": [{"expr": "histogram_quantile(0.95, sum(rate(gateway_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": ""}],
+      "fieldConfig": {"defaults": {"unit": "s", "color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 5}, {"color": "red", "value": 15}]}}}
+    }
+  ],
+  "schemaVersion": 39
+}

@@ -1,0 +1,20 @@
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
+#
+# Golden test case — deep 모드 plan-first(§55/§57).
+# 다단계 분석 질문은 도구 실행 전에 ```plan 펜스로 분석 계획을 제시하고 멈춰야 한다.
+# (실행은 다음 턴 승인 후 — 이 케이스는 "계획 제시 턴"만 검증한다.)
+use_case_id: "13"
+tier: A
+mode: deep
+name: "[deep] plan-first — 다단계 질문은 계획 제시 후 정지"
+question: "이번 달 비용 급증 원인을 종합 분석해줘"
+
+expected:
+  # plan 이벤트(또는 본문 ```plan 펜스)가 있어야 하고, 도구는 호출하지 않아야 한다.
+  plan:
+    required: true
+    min_steps: 2
+  agent_path_excludes:
+    - "ask_sql_specialist"
+    - "ask_code_specialist"
+    - "ask_validator"

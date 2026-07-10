@@ -1,0 +1,32 @@
+<h2>권한 위반 감지</h2>
+<p>안녕하세요, {{ recipient_name }}님.</p>
+<p>사용자의 권한을 초과하는 접근 시도가 감지되었습니다. 즉시 조사가 필요합니다.</p>
+<table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;">
+  <tr>
+    <td><strong>항목</strong></td>
+    <td><strong>값</strong></td>
+  </tr>
+  <tr>
+    <td>사용자 ID</td>
+    <td>{{ payload.user_id | default('') }}</td>
+  </tr>
+  <tr>
+    <td>리소스</td>
+    <td>{{ payload.resource | default('') }}</td>
+  </tr>
+  <tr>
+    <td>시도된 작업</td>
+    <td>{{ payload.action | default('') }}</td>
+  </tr>
+  <tr>
+    <td>발생 일시</td>
+    <td>{{ payload.occurred_at | default('') }}</td>
+  </tr>
+</table>
+<p><strong>권장 조치</strong></p>
+<ul>
+  <li>해당 사용자의 계정 상태를 확인하세요.</li>
+  <li>필요시 계정을 즉시 비활성화하세요.</li>
+  <li>관련 활동 로그를 검토하세요.</li>
+</ul>
+<p><small>{{ gateway_name }} — {{ timestamp_kr }}</small></p>

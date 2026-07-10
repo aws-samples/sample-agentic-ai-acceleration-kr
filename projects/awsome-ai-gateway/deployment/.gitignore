@@ -1,0 +1,40 @@
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
+
+# ==============================================================================
+# Terraform
+# ==============================================================================
+# Provider plugin 캐시
+.terraform/
+.terraform.lock.hcl.backup
+
+# State (민감 — 절대 커밋 금지. S3 backend 쓰므로 로컬엔 없을 것)
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+
+# Plan output
+*.tfplan
+*.tfplan.*
+
+# 실제 변수값 (민감 가능 — ARN, 도메인, 계정 ID 등)
+# .example 은 커밋, 실사용 파일은 제외
+terraform.tfvars
+*.auto.tfvars
+!terraform.tfvars.example
+
+# ==============================================================================
+# Helm
+# ==============================================================================
+# helm package 산출물
+charts/*.tgz
+
+# ==============================================================================
+# Secrets / rendered manifests
+# ==============================================================================
+# K8s Secret 수동 생성용 스크립트 (Helm secrets 플러그인 안 쓸 때)
+secrets.yaml
+*.secret.yaml
+
+# 로컬 helm template 렌더 결과
+rendered/
+/tmp/helm-render/

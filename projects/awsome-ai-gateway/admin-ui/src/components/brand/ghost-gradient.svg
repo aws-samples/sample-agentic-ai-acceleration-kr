@@ -1,0 +1,14 @@
+<!-- LLM Gateway logo — B1 + E1 eyes: Ghost, teal gradient body, big ink pupils +
+     white sparkle highlights (saved + ACTIVE 2026-06-15). -->
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">
+  <defs>
+    <linearGradient id="ghBody" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5eead4"/><stop offset="1" stop-color="#0d9488"/>
+    </linearGradient>
+  </defs>
+  <path d="M12 22a12 12 0 0 1 24 0v15.5c0 1.2-1.4 1.9-2.4 1.2l-2.5-1.8-2.7 2a1.4 1.4 0 0 1-1.7 0l-2.7-2-2.6 1.9a1.4 1.4 0 0 1-1.7 0l-2.5-1.9-2.4 1.7c-1 .7-2.6 0-2.6-1.2z" fill="url(#ghBody)"/>
+  <circle cx="19.3" cy="22" r="3.4" fill="#0b2b26"/>
+  <circle cx="28.7" cy="22" r="3.4" fill="#0b2b26"/>
+  <circle cx="20.5" cy="20.8" r="1.05" fill="#ffffff"/>
+  <circle cx="29.9" cy="20.8" r="1.05" fill="#ffffff"/>
+</svg>

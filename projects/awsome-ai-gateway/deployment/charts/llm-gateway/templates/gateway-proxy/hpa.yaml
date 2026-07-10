@@ -1,0 +1,53 @@
+{{/* Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms. */}}
+
+{{- if and .Values.gatewayProxy.enabled .Values.gatewayProxy.autoscaling.enabled -}}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "llm-gateway.fullname" . }}-gateway-proxy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-gateway.componentLabels" (dict "root" . "component" "gateway-proxy") | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "llm-gateway.fullname" . }}-gateway-proxy
+  minReplicas: {{ .Values.gatewayProxy.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.gatewayProxy.autoscaling.maxReplicas }}
+  metrics:
+    {{- if .Values.gatewayProxy.autoscaling.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.gatewayProxy.autoscaling.targetCPUUtilizationPercentage }}
+    {{- end }}
+    {{- if .Values.gatewayProxy.autoscaling.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.gatewayProxy.autoscaling.targetMemoryUtilizationPercentage }}
+    {{- end }}
+  # SSE 스트림 연결이 붙어 있어서 스케일 다운을 보수적으로
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 10
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+        - type: Pods
+          value: 4
+          periodSeconds: 30
+      selectPolicy: Max
+{{- end }}

@@ -1,0 +1,26 @@
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
+use_case_id: "07"
+tier: A
+name: "지난 24h 에러 가장 많이 받은 사용자"
+question: "지난 24시간 에러 가장 많이 받은 사용자"
+
+expected:
+  sql:
+    # usage_logs.status (enum: SUCCESS/ERROR) — ground truth 엔 status_code 없음.
+    # "에러" = status='ERROR' (또는 status != 'SUCCESS').
+    required_tables: ["usage.usage_logs", "auth.users"]
+    required_clauses:
+      - "GROUP BY"
+      - "ORDER BY"
+      # 지난 24시간 범위 — INTERVAL 또는 now() 산술 둘 다 허용.
+      - "(interval|now\\(\\)|::timestamp|current_timestamp)"
+    forbidden_clauses:
+      - "INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER"
+      # 옛 스키마 컬럼(존재하지 않음) — drift 회귀 가드:
+      - "status_code"
+  validator:
+    verdict: "PASS"
+    min_confidence: 0.6
+  chart:
+    kind: ["bar", "table"]
+  agent_path_includes: ["ask_sql_specialist", "ask_validator"]

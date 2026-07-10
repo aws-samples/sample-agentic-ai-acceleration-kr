@@ -1,0 +1,61 @@
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
+
+# values-eks-fargate-prod-loadtest.yaml
+# ─────────────────────────────────────────────────────────────────────
+# T3 (10,000 동접자 VK 발급) 부하테스트 전용 OVERRIDE values.
+#
+# 사용법:
+#   helm upgrade llm-gateway deployment/charts/llm-gateway \
+#     -n default \
+#     -f deployment/charts/llm-gateway/values-eks-fargate-prod.yaml \
+#     -f deployment/charts/llm-gateway/values-eks-fargate-prod-loadtest.yaml
+#
+# 롤백:
+#   helm upgrade llm-gateway deployment/charts/llm-gateway \
+#     -n default \
+#     -f deployment/charts/llm-gateway/values-eks-fargate-prod.yaml
+#
+# ⚠ 이 override 를 올려두면 Cognito 경로가 **비활성** 되고 mock-oidc
+#   로 대체되므로, 실 사용자 login 은 동안 동작하지 않는다.
+#   현재 실 사용자 0 이어서 안전하다는 전제로만 적용.
+# ─────────────────────────────────────────────────────────────────────
+
+adminApi:
+  # v6: workers 1 + min80/max100 + jitter 120s (시나리오 측에서) → 90% 목표
+  # workers 1: GIL 회피 + pod 부팅 self-DoS 회피 (lifespan 1번)
+  # min 80: peak 부하 도착 시점 이미 80 pod ready → Fargate scale-up lag 회피
+  env:
+    WORKERS: "1"
+  autoscaling:
+    enabled: true
+    minReplicas: 80
+    maxReplicas: 100
+    targetCPUUtilizationPercentage: 65
+
+  # 새 pod ready 시점 4-10초 단축 (C: startupProbe 튜닝)
+  # 총 대기 = periodSeconds × failureThreshold = 2 × 60 = 120s (이전 5×30=150s)
+  startupProbe:
+    httpGet:
+      path: "/health/ready"
+      port: 8080
+    initialDelaySeconds: 0
+    periodSeconds: 2
+    timeoutSeconds: 3
+    failureThreshold: 60
+
+  oidc:
+    enabled: true
+    # mock-oidc 서비스 DNS. loadtest/k6/k8s/mock-oidc-deploy.yaml 의
+    # ISSUER_URL env 와 반드시 동일해야 한다 (iss claim 정확 일치 검증).
+    issuerUrl: "http://mock-oidc.loadtest-mock.svc.cluster.local"
+    # discovery 도 동일 URL 로 fetch. issuer 검증 완화 시 오동작할 수 있어 같이 덮어씀.
+    discoveryUrlOverride: "http://mock-oidc.loadtest-mock.svc.cluster.local"
+    audience: ""
+    providerName: "oidc:mock-loadtest"
+    # mock-oidc 가 Cognito 포맷 호환을 위해 `cognito:groups` claim 으로 서명.
+    groupsClaim: "cognito:groups"
+    groupPrefix: "Claude_"
+    rejectUnmatchedGroups: true
+    requiredGroup: ""
+    # VK TTL 은 짧게 유지 — 테스트 후 만료로 자동 정리.
+    vkTtlHours: 1

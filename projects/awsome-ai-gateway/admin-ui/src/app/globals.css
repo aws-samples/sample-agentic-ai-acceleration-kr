@@ -1,0 +1,431 @@
+/* Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms. */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Design system — "Glass" (2026 redesign)
+ * - Dark  : Space Black + aurora gradient + neon teal/pink/sky
+ * - Light : near-white + faint aurora tint + vivid teal/pink/sky
+ * Accent roles: teal=primary, sky=secondary, pink=emphasis/limit, violet=4th series.
+ */
+
+@layer base {
+  :root {
+    /* ── Light (Glass) ── */
+    --background: 220 60% 99%;          /* #fbfcfe near-white */
+    --foreground: 220 17% 7%;           /* #0f1115 ink */
+
+    --card: 0 0% 100%;
+    --card-foreground: 220 17% 7%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 17% 7%;
+
+    /* teal primary (vivid for light bg) */
+    --primary: 175 84% 32%;             /* #0d9488 */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 200 30% 96%;
+    --secondary-foreground: 175 77% 26%;
+
+    --muted: 220 20% 96%;
+    --muted-foreground: 217 10% 41%;    /* #5e6673 */
+
+    --accent: 175 60% 95%;
+    --accent-foreground: 175 77% 26%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --warning: 33 90% 45%;
+    --warning-foreground: 0 0% 100%;
+
+    --success: 156 85% 26%;             /* #0a7d4f */
+    --success-foreground: 0 0% 100%;
+
+    --border: 220 22% 92%;              /* #e6e9ef */
+    --input: 220 22% 90%;
+    --ring: 175 84% 32%;
+
+    /* Apple-style corner radii (generous, continuous-corner feel).
+       shadcn reads --radius for lg/md/sm; the scale below is for our own use. */
+    --radius: 0.875rem;                 /* 14px — base (cards) */
+    --radius-xs: 0.5rem;                /* 8px  — chips, dots */
+    --radius-sm: 0.625rem;              /* 10px — buttons, menu items */
+    --radius-md: 0.75rem;               /* 12px — inputs, segments */
+    --radius-lg: 1rem;                  /* 16px — cards */
+    --radius-xl: 1.375rem;              /* 22px — large containers, sheets */
+
+    --sidebar-background: 220 40% 99%;
+    --sidebar-foreground: 217 10% 38%;
+    --sidebar-primary: 175 84% 32%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 175 60% 95%;
+    --sidebar-accent-foreground: 175 77% 26%;
+    --sidebar-border: 220 22% 92%;
+    --sidebar-ring: 175 84% 32%;
+
+    /* Chart palette — soft-but-vivid (틸/스카이/핑크 중간 채도). chartTheme.ts
+       CATEGORICAL_PALETTE 와 동일 색을 HSL 토큰으로(recharts 가 var 로 읽음). */
+    --chart-1: 172 66% 50%;             /* teal-400  #2dd4bf */
+    --chart-2: 199 92% 60%;             /* sky-400   #38bdf8 */
+    --chart-3: 330 81% 70%;             /* pink-400  #f472b6 */
+    --chart-4: 255 92% 76%;             /* violet-400#a78bfa */
+    --chart-5: 43 96% 56%;              /* amber-400 #fbbf24 */
+
+    /* Glass / aurora / hover (theme-specific) */
+    --glass-bg: 255 255 255 / 0.82;                 /* card surface (rgba parts) */
+    --glass-border: 220 22% 92%;
+    --glass-blur: 14px;
+    --aurora-1: 13 148 136 / 0.10;                  /* teal */
+    --aurora-2: 219 39 119 / 0.06;                  /* pink */
+    --aurora-3: 2 132 199 / 0.08;                   /* sky */
+    --hover-shadow: 0 18px 40px -16px rgba(20,30,55,.28), 0 0 0 1px hsl(var(--primary) / .3);
+    --hover-translate: -4px;
+
+    /* ── Table tokens (§60) — 고급 데이터 테이블. 라이트 값. ── */
+    --table-divider: hsl(var(--border) / 0.6);          /* 행 구분선(글래스 위에서 묻히지 않게) */
+    --table-row-hover: hsl(var(--muted) / 0.5);          /* 정적 행 hover */
+    --table-progress-track: hsl(var(--foreground) / 0.08); /* 진행바 트랙(라이트는 muted 가 안 보여) */
+  }
+
+  .dark {
+    /* ── Dark (Glass · Space Black) ── */
+    --background: 220 11% 5%;           /* #0c0d0f */
+    --foreground: 210 10% 96%;          /* #f4f5f6 */
+
+    --card: 220 11% 7%;
+    --card-foreground: 210 10% 96%;
+
+    --popover: 220 11% 7%;
+    --popover-foreground: 210 10% 96%;
+
+    /* teal primary (neon for dark bg) */
+    --primary: 172 66% 50%;             /* #2dd4bf */
+    --primary-foreground: 168 80% 10%;
+
+    --secondary: 220 10% 14%;
+    --secondary-foreground: 210 10% 96%;
+
+    --muted: 220 10% 14%;
+    --muted-foreground: 219 7% 63%;     /* #9a9fa8 */
+
+    --accent: 172 40% 16%;
+    --accent-foreground: 172 66% 70%;
+
+    --destructive: 0 72% 45%;
+    --destructive-foreground: 0 0% 100%;
+
+    --warning: 33 90% 55%;
+    --warning-foreground: 168 80% 10%;
+
+    --success: 158 64% 52%;             /* #34d399 */
+    --success-foreground: 168 80% 10%;
+
+    --border: 220 13% 16%;              /* 다크 배경보다 살짝 밝은 은은한 구분선 (순백 금지) */
+    --input: 220 10% 18%;
+    --ring: 172 66% 50%;
+
+    --sidebar-background: 225 9% 9%;    /* #141518 */
+    --sidebar-foreground: 219 7% 63%;
+    --sidebar-primary: 172 66% 50%;
+    --sidebar-primary-foreground: 168 80% 10%;
+    --sidebar-accent: 172 40% 16%;
+    --sidebar-accent-foreground: 172 66% 70%;
+    --sidebar-border: 220 13% 14%;
+    --sidebar-ring: 172 66% 50%;
+
+    /* Chart palette — soft-but-vivid (dark, 동일 hue). chartTheme.ts 와 일치. */
+    --chart-1: 172 66% 50%;             /* teal-400  */
+    --chart-2: 199 92% 60%;             /* sky-400   */
+    --chart-3: 330 81% 70%;             /* pink-400  */
+    --chart-4: 255 92% 76%;             /* violet-400*/
+    --chart-5: 43 96% 56%;              /* amber-400 */
+
+    /* Glass / aurora / hover (dark) */
+    --glass-bg: 255 255 255 / 0.05;                 /* translucent light film */
+    --glass-border: 0 0% 100%;
+    --glass-blur: 12px;
+    --aurora-1: 20 184 166 / 0.26;                  /* teal  */
+    --aurora-2: 244 114 182 / 0.18;                 /* pink  */
+    --aurora-3: 56 189 248 / 0.15;                  /* sky   */
+    --hover-shadow: 0 18px 40px -12px rgba(0,0,0,.6), 0 0 0 1px hsl(var(--primary) / .4), 0 0 28px -6px hsl(var(--primary) / .45);
+    --hover-translate: -4px;
+
+    /* ── Table tokens (§60) — 다크 값. 순백 금지(보더가 아니라 표면 밝기로). ── */
+    --table-divider: hsl(0 0% 100% / 0.06);              /* 흰 6% film 행 구분선 */
+    --table-row-hover: hsl(0 0% 100% / 0.04);            /* teal 4% 는 다크에서 안 보여 흰 4% */
+    --table-progress-track: hsl(var(--muted));           /* 다크는 muted 로 충분 */
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-sans;
+    font-feature-settings: 'rlig' 1, 'calt' 1, 'liga' 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  /*
+   * 폼 컨트롤 accent — 네이티브 checkbox/radio/range 의 기본 색은 브라우저
+   * 파란색이라 테마(teal/--primary)와 충돌. accent-color 로 테마색 강제해
+   * 선택 상태가 전체 색감과 일치하게 한다(light/dark 모두 --primary 따라감).
+   */
+  input[type='checkbox'],
+  input[type='radio'],
+  input[type='range'] {
+    accent-color: hsl(var(--primary));
+  }
+
+  /*
+   * Aurora background — faint colored glow in the page corners.
+   * Applied to the app shell so cards/glass float over it.
+   */
+  .aurora-bg {
+    position: relative;
+    isolation: isolate;
+  }
+  .aurora-bg::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background:
+      radial-gradient(640px 340px at 84% -12%, rgb(var(--aurora-1)), transparent 60%),
+      radial-gradient(500px 400px at 108% 50%, rgb(var(--aurora-2)), transparent 55%),
+      radial-gradient(440px 380px at -8% 108%, rgb(var(--aurora-3)), transparent 55%);
+  }
+}
+
+@layer components {
+  /*
+   * Glass surface — translucent card with blur + layered depth.
+   * Dark: light film over space-black. Light: near-white frosted.
+   * Depth recipe (radius-safe, no border-image):
+   *   1) faint top-to-bottom sheen via linear-gradient overlay (::before)
+   *   2) gradient "lit rim" border via masked ::after (catches light on top edge)
+   *   3) stacked shadows — tight contact + soft ambient + inset rim highlight
+   * Pair with .glass-hover for the interactive lift.
+   */
+  .glass {
+    position: relative;
+    background: rgb(var(--glass-bg));
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+    backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+    border: 1px solid hsl(var(--glass-border) / 0.08);
+    border-radius: var(--radius-lg);
+    box-shadow:
+      inset 0 1px 0 hsl(0 0% 100% / 0.08),
+      inset 0 0 0 1px hsl(0 0% 100% / 0.02),
+      0 1px 2px rgba(15, 23, 42, 0.06),
+      0 12px 32px -14px rgba(15, 23, 42, 0.22);
+  }
+  /* Top sheen — a soft light gradient washing down from the top edge. */
+  .glass::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    z-index: 0;
+    background: linear-gradient(
+      180deg,
+      hsl(0 0% 100% / 0.10) 0%,
+      hsl(0 0% 100% / 0.02) 22%,
+      transparent 60%
+    );
+  }
+  /* Lit rim — gradient border (bright on top, fading to sides) via mask compositing. */
+  .glass::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    pointer-events: none;
+    z-index: 0;
+    background: linear-gradient(
+      160deg,
+      hsl(0 0% 100% / 0.30),
+      hsl(0 0% 100% / 0.04) 30%,
+      transparent 65%
+    );
+    -webkit-mask:
+      linear-gradient(#fff 0 0) content-box,
+      linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask:
+      linear-gradient(#fff 0 0) content-box,
+      linear-gradient(#fff 0 0);
+    mask-composite: exclude;
+  }
+  /* Keep real content above the decorative pseudo-layers. */
+  .glass > * {
+    position: relative;
+    z-index: 1;
+  }
+  .dark .glass {
+    border-color: hsl(var(--glass-border) / 0.07);
+    box-shadow:
+      inset 0 1px 0 hsl(0 0% 100% / 0.06),
+      inset 0 0 0 1px hsl(0 0% 100% / 0.015),
+      0 1px 2px rgba(0, 0, 0, 0.4),
+      0 16px 40px -16px rgba(0, 0, 0, 0.6);
+  }
+  .dark .glass::before {
+    background: linear-gradient(
+      180deg,
+      hsl(0 0% 100% / 0.06) 0%,
+      hsl(0 0% 100% / 0.015) 24%,
+      transparent 62%
+    );
+  }
+  .dark .glass::after {
+    background: linear-gradient(
+      160deg,
+      hsl(0 0% 100% / 0.16),
+      hsl(0 0% 100% / 0.02) 32%,
+      transparent 68%
+    );
+  }
+
+  /* Card/elevated surface hover — lift + glow/shadow (theme-aware). */
+  .glass-hover {
+    transition:
+      transform 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+      box-shadow 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+      border-color 0.28s,
+      background 0.28s;
+    will-change: transform;
+  }
+  .glass-hover:hover {
+    transform: translateY(var(--hover-translate));
+    border-color: hsl(var(--primary) / 0.45);
+    box-shadow: var(--hover-shadow);
+  }
+  /* 라이트: 흰 카드로 또렷하게. html:not(.dark) 로 다크 제외(이전 :root 는
+     다크에서도 매치돼 흰색으로 깨지던 버그). */
+  html:not(.dark) .glass-hover:hover {
+    background: #fff;
+  }
+  /* 다크: 살짝만 밝아지는 film (흰색 전환 금지). */
+  .dark .glass-hover:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  /*
+   * Lightweight interactive hover — for menu items, table rows, list cells,
+   * chips. No lift; subtle tinted background + crisp Apple radius. Applied
+   * broadly so EVERYTHING clickable responds to the cursor.
+   */
+  .interactive {
+    border-radius: var(--radius-sm);
+    transition:
+      background 0.16s ease,
+      color 0.16s ease,
+      box-shadow 0.16s ease;
+    cursor: pointer;
+  }
+  .interactive:hover {
+    background: hsl(var(--primary) / 0.08);
+    color: hsl(var(--primary));
+  }
+  .dark .interactive:hover {
+    background: hsl(0 0% 100% / 0.05);
+    color: hsl(var(--foreground));
+  }
+
+  /* Button-like press feedback (pairs with hover). */
+  .pressable {
+    transition: transform 0.12s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .pressable:active {
+    transform: scale(0.97);
+  }
+
+  /*
+   * Badge — 상태/역할/프로바이더 등 라벨. teal/sky/pink/neutral 톤을
+   * 부드러운 그라데이션(색→연한 색/화이트 방향)으로 통일. 가독성을 위해
+   * 텍스트는 진한 동일 계열, 배경은 옅은 그라데이션 + 옅은 링.
+   */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.125rem 0.5rem;
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    line-height: 1rem;
+    font-weight: 600;
+    white-space: nowrap;
+    /* 기본 회색 링 제거 — 각 tone 이 자체 링을 가져, 이중 링이 라이트에서 뱃지를
+       탁하게 만들던 문제 해소(§60). tone 미지정 fallback 용으로만 옅게. */
+    font-variant-numeric: tabular-nums;
+  }
+  /* teal — 긍정/활성 (ACTIVE, NORMAL, DEVELOPER) */
+  .badge-teal {
+    background: linear-gradient(135deg, hsl(174 72% 56% / 0.22), hsl(190 90% 60% / 0.10) 70%, transparent);
+    color: hsl(176 75% 30%);
+    box-shadow: inset 0 0 0 1px hsl(174 72% 45% / 0.28);
+  }
+  .dark .badge-teal { color: hsl(172 70% 70%); }
+  /* sky — 정보/보조 (TEAM_LEADER, TEAM) */
+  .badge-sky {
+    background: linear-gradient(135deg, hsl(199 92% 64% / 0.22), hsl(210 90% 70% / 0.10) 70%, transparent);
+    color: hsl(202 85% 38%);
+    box-shadow: inset 0 0 0 1px hsl(199 90% 55% / 0.28);
+  }
+  .dark .badge-sky { color: hsl(199 92% 74%); }
+  /* pink — 강조/경고 (ADMIN, CRITICAL, REVOKED) */
+  .badge-pink {
+    background: linear-gradient(135deg, hsl(330 85% 66% / 0.22), hsl(350 90% 70% / 0.10) 70%, transparent);
+    color: hsl(332 72% 46%);
+    box-shadow: inset 0 0 0 1px hsl(330 80% 60% / 0.28);
+  }
+  .dark .badge-pink { color: hsl(330 90% 78%); }
+  /* amber — 주의 (WARNING) */
+  .badge-amber {
+    background: linear-gradient(135deg, hsl(40 95% 58% / 0.24), hsl(28 90% 60% / 0.10) 70%, transparent);
+    color: hsl(32 80% 40%);
+    box-shadow: inset 0 0 0 1px hsl(38 90% 52% / 0.30);
+  }
+  .dark .badge-amber { color: hsl(40 95% 68%); }
+  /* neutral — 기본/비활성 (EXPIRED, USER, unknown). 화이트 그라데이션. */
+  .badge-neutral {
+    background: linear-gradient(135deg, hsl(210 16% 80% / 0.20), hsl(0 0% 100% / 0.06) 70%, transparent);
+    color: hsl(215 14% 40%);
+    box-shadow: inset 0 0 0 1px hsl(214 12% 60% / 0.24);
+  }
+  .dark .badge-neutral { color: hsl(214 12% 72%); }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  /* Apple-style radius scale (use instead of ad-hoc rounded-*). */
+  .rounded-apple-sm { border-radius: var(--radius-sm); }
+  .rounded-apple-md { border-radius: var(--radius-md); }
+  .rounded-apple    { border-radius: var(--radius-lg); }
+  .rounded-apple-xl { border-radius: var(--radius-xl); }
+
+  /* §60 숫자 셀 — 등폭(tabular)+라이닝 자형으로 자릿수 세로 정렬. 비용/토큰/%
+     컬럼에 우측정렬과 함께 적용(공통 <Td numeric> 이 자동 부여). */
+  .num {
+    font-variant-numeric: tabular-nums lining-nums;
+  }
+  /* §60 식별자(mono) — 슬래시 제로로 0/O 혼동 방지(key_prefix, model_id 등). */
+  .mono-id {
+    font-feature-settings: 'zero' 1;
+    font-variant-numeric: slashed-zero;
+  }
+}

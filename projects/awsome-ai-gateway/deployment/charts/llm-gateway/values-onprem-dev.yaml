@@ -1,0 +1,182 @@
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
+
+# ============================================================================
+# On-prem K8s — Development 환경 오버라이드 (고객 권장값)
+# ----------------------------------------------------------------------------
+# 용도: 고객 사내 K8s에서 기능 검증/스테이징
+# 특성: 사내 DB/Redis/SMTP 엔드포인트 주입, 낮은 replica
+# 사용법:
+#   1. 고객이 자신의 환경에 맞게 이 파일을 복사해 수정
+#   2. helm install llm-gateway ./charts/llm-gateway \
+#        -f ./charts/llm-gateway/values-onprem-dev.yaml \
+#        -n llm-gateway-dev --create-namespace
+# ============================================================================
+
+global:
+  environment: dev
+  deploymentMode: onprem
+  commonLabels:
+    environment: dev
+  # 고객 private registry (필수로 수정)
+  imageRegistry: "harbor.customer.internal/llm-gateway"
+  imagePullSecrets:
+    - name: harbor-registry
+
+database:
+  enabled: false
+  external:
+    host: "postgres-dev.customer.internal"  # 고객이 수정
+    port: 5432
+    name: "gateway"
+    user: "gateway"
+    notificationWorkerUser: "notification_worker_user"
+    passwordSecretName: "llm-gateway-db"
+    # 사내 Postgres가 self-signed cert 사용 시 "disable" 또는 "prefer"
+    sslMode: "prefer"
+    poolSize: 5
+    maxOverflow: 10
+
+redis:
+  enabled: false
+  external:
+    host: "redis-dev.customer.internal"  # 고객이 수정
+    port: 6379
+    tls: false  # 사내 네트워크 정책 따라 조정
+    clusterMode: false
+    # Redis ACL 사용 시 Secret 이름 주입
+    passwordSecretName: ""
+
+aws:
+  region: ""  # 사내 환경에선 Bedrock 호출 안함
+  bedrockAllowedModels: []
+  allowedStsRegions: []
+  allowedIamRoles: []
+
+# 사내 JWT 인증
+auth:
+  jwt:
+    algorithm: "RS256"
+    issuer: "https://sso.customer.internal"
+    audience: "llm-gateway"
+    jwksUri: "https://sso.customer.internal/.well-known/jwks.json"
+  virtualKey:
+    encryptionKeySecretName: "llm-gateway-app"
+    encryptionKeySecretKey: "virtual_key_encryption_key"
+
+# ExternalSecrets 미사용 (사내 K8s Secret 직접 관리)
+externalSecrets:
+  enabled: false
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"  # SSE
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  gateway:
+    host: "gateway-dev.llm-gateway.customer.internal"
+    tls:
+      enabled: true
+      secretName: "llm-gateway-tls-gateway"
+  adminUi:
+    host: "admin-dev.llm-gateway.customer.internal"
+    tls:
+      enabled: true
+      secretName: "llm-gateway-tls-admin-ui"
+  adminApi:
+    host: "admin-api-dev.llm-gateway.customer.internal"
+    tls:
+      enabled: true
+      secretName: "llm-gateway-tls-admin-api"
+
+# ----------------------------------------------------------------------------
+# Observability — 사내 K8s는 DaemonSet 가능 → 별도 네임스페이스에 Collector 운영 가정
+# ----------------------------------------------------------------------------
+observability:
+  otel:
+    mode: "in-cluster"
+    endpoint: "otel-collector.observability.svc.cluster.local:4317"
+    protocol: "grpc"
+
+# 사내 이메일 서버 (SMTP)
+# ============================================================================
+gatewayProxy:
+  replicaCount: 1
+  # IRSA annotation 없음 (on-prem)
+  serviceAccount:
+    annotations: {}
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "384Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 3
+  env:
+    OPENMODEL_BASE_URL: "http://vllm.customer.internal"  # 사내 vLLM
+
+adminApi:
+  replicaCount: 1
+  serviceAccount:
+    annotations: {}
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "384Mi"
+    limits:
+      cpu: "1000m"
+      memory: "768Mi"
+  autoscaling:
+    enabled: false
+  env:
+    DEV_LOGIN_ENABLED: "true"
+
+adminUi:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: "150m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "768Mi"
+  autoscaling:
+    enabled: false
+
+scheduler:
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "256Mi"
+
+notificationWorker:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "256Mi"
+  autoscaling:
+    enabled: false
+  email:
+    provider: "smtp"
+    smtp:
+      host: "smtp.customer.internal"
+      port: 587
+      startTls: true
+      fromAddress: "no-reply-dev@llm-gateway.customer.internal"
+      credentialsSecretName: "llm-gateway-smtp"
+
+costRecorderWorker:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "256Mi"
+  autoscaling:
+    enabled: false

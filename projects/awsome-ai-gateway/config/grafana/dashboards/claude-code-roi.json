@@ -1,0 +1,111 @@
+{
+  "title": "Claude Code — Development ROI",
+  "uid": "claude-code-roi",
+  "editable": true,
+  "time": {"from": "now-7d", "to": "now"},
+  "refresh": "1m",
+  "templating": {
+    "list": [
+      {
+        "name": "interval",
+        "type": "interval",
+        "query": "1h,6h,12h,24h,7d",
+        "current": {"text": "24h", "value": "24h"}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1, "title": "Cost per Line of Code", "type": "stat",
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 0},
+      "description": "AI 비용 / 코드 변경 라인 수 — 낮을수록 효율적",
+      "targets": [{"expr": "sum(increase(gateway_cost_usd_USD_total[$interval])) / (sum(increase(claude_code_lines_of_code_count_total[$interval])) > 0)", "legendFormat": ""}],
+      "fieldConfig": {"defaults": {"unit": "currencyUSD", "color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.01}, {"color": "red", "value": 0.1}]}}}
+    },
+    {
+      "id": 2, "title": "Cost per Commit", "type": "stat",
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 0},
+      "description": "AI 비용 / 커밋 수 — 커밋당 생산성 지표",
+      "targets": [{"expr": "sum(increase(gateway_cost_usd_USD_total[$interval])) / (sum(increase(claude_code_commit_count_total[$interval])) > 0)", "legendFormat": ""}],
+      "fieldConfig": {"defaults": {"unit": "currencyUSD", "color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 1}, {"color": "red", "value": 10}]}}}
+    },
+    {
+      "id": 3, "title": "Lines of Code per $1 Spent", "type": "stat",
+      "gridPos": {"h": 5, "w": 6, "x": 12, "y": 0},
+      "description": "$1당 생성/수정 코드 라인 수 — 높을수록 효율적",
+      "targets": [{"expr": "sum(increase(claude_code_lines_of_code_count_total[$interval])) / (sum(increase(gateway_cost_usd_USD_total[$interval])) > 0)", "legendFormat": ""}],
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 50}, {"color": "green", "value": 200}]}}}
+    },
+    {
+      "id": 4, "title": "Cache Savings Ratio", "type": "gauge",
+      "gridPos": {"h": 5, "w": 6, "x": 18, "y": 0},
+      "description": "캐시 재활용으로 절감된 비용 비율 — 높을수록 토큰 절감",
+      "targets": [{"expr": "sum(rate(gateway_token_usage_total{token_type=\"cache_read\"}[$interval])) / (sum(rate(gateway_token_usage_total{token_type=\"cache_read\"}[$interval])) + sum(rate(gateway_token_usage_total{token_type=\"input\"}[$interval])) + sum(rate(gateway_token_usage_total{token_type=\"cache_write\"}[$interval])))", "legendFormat": ""}],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1, "thresholds": {"steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 0.3}, {"color": "green", "value": 0.6}]}}}
+    },
+
+    {
+      "id": 10, "title": "Code Output vs AI Cost", "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 5},
+      "description": "코드 생산량(라인)과 AI 비용 추이 비교",
+      "targets": [
+        {"expr": "sum(increase(claude_code_lines_of_code_count_total[1h]))", "legendFormat": "lines/hr"},
+        {"expr": "sum(increase(gateway_cost_usd_USD_total[1h])) * 100", "legendFormat": "cost ×100 ($/hr)"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "fillOpacity": 15}}}
+    },
+    {
+      "id": 11, "title": "Cost per Line Over Time", "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 5},
+      "description": "시간대별 라인당 비용 추이 — 하락하면 효율 개선",
+      "targets": [
+        {"expr": "sum(increase(gateway_cost_usd_USD_total[1h])) / (sum(increase(claude_code_lines_of_code_count_total[1h])) > 0)", "legendFormat": "$/line"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "currencyUSD", "custom": {"drawStyle": "line", "fillOpacity": 10}}}
+    },
+
+    {
+      "id": 20, "title": "Code Activity: Lines Added vs Removed", "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 13},
+      "description": "시간대별 코드 변경량",
+      "targets": [
+        {"expr": "sum(increase(claude_code_lines_of_code_count_total{type=\"added\"}[1h]))", "legendFormat": "added/hr"},
+        {"expr": "sum(increase(claude_code_lines_of_code_count_total{type=\"removed\"}[1h]))", "legendFormat": "removed/hr"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "bars", "fillOpacity": 60}}}
+    },
+    {
+      "id": 21, "title": "Model Cost Efficiency ($/1K tokens)", "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 13},
+      "description": "모델별 1K 토큰당 실제 비용 — 모델 선택 최적화",
+      "targets": [
+        {"expr": "sum by (model) (increase(gateway_cost_usd_USD_total[$interval])) / (sum by (model) (increase(gateway_token_usage_total[$interval])) / 1000)", "legendFormat": "{{model}}"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "currencyUSD", "custom": {"drawStyle": "bars", "fillOpacity": 60}}}
+    },
+
+    {
+      "id": 30, "title": "Daily Summary", "type": "table",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 21},
+      "description": "24h 요약: 비용, 코드 라인, 커밋, API 요청",
+      "targets": [
+        {"expr": "sum(increase(gateway_cost_usd_USD_total[24h]))", "legendFormat": "cost_usd", "instant": true, "format": "table"},
+        {"expr": "sum(increase(claude_code_lines_of_code_count_total[24h]))", "legendFormat": "lines", "instant": true, "format": "table"},
+        {"expr": "sum(increase(claude_code_commit_count_total[24h]))", "legendFormat": "commits", "instant": true, "format": "table"},
+        {"expr": "sum(increase(gateway_request_total[24h]))", "legendFormat": "api_requests", "instant": true, "format": "table"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short"}}
+    },
+    {
+      "id": 31, "title": "Session Efficiency: Cost per Session", "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 21},
+      "description": "세션당 비용 추이 — AI 사용 효율성 지표",
+      "targets": [
+        {"expr": "sum(increase(gateway_cost_usd_USD_total[1h])) / (sum(increase(claude_code_session_count_total[1h])) > 0)", "legendFormat": "$/session"},
+        {"expr": "sum(increase(claude_code_lines_of_code_count_total[1h])) / (sum(increase(claude_code_session_count_total[1h])) > 0)", "legendFormat": "lines/session"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "fillOpacity": 15}}}
+    }
+  ],
+  "schemaVersion": 39
+}

@@ -1,0 +1,24 @@
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
+use_case_id: "06"
+tier: A
+name: "지금 활성 VK 가장 많은 사용자"
+question: "지금 활성 VK 가장 많은 사용자"
+
+expected:
+  sql:
+    # auth.virtual_keys (is_active=true) × users. value 컬럼 절대 미참조.
+    required_tables: ["auth.virtual_keys", "auth.users"]
+    required_clauses:
+      - "GROUP BY"
+      - "COUNT"
+      - "ORDER BY"
+    forbidden_clauses:
+      - "INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER"
+      # 보안: 키 원문 컬럼 절대 노출 금지 (forbidden_columns)
+      - "key_value_encrypted"
+  validator:
+    verdict: "PASS"
+    min_confidence: 0.7
+  chart:
+    kind: ["table", "bar"]
+  agent_path_includes: ["ask_sql_specialist", "ask_validator"]

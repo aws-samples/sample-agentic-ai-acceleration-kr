@@ -1,0 +1,3 @@
+# module init artifacts (downloaded providers, lock files in module dirs)
+modules/*/.terraform/
+modules/*/.terraform.lock.hcl
