@@ -25,7 +25,7 @@ dependencies = [
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
     "pyjwt[crypto]>=2.9",
-    "cryptography>=43.0",
+    "cryptography>=48.0.1",
     "python-multipart>=0.0.12",
     "tiktoken>=0.8",
 ]
