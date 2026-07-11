@@ -384,7 +384,7 @@ helm_install() {
                 --values "$VALUES_FILE" \
                 "${set_args[@]}" \
                 --force-conflicts \
-                --rollback-on-failure \
+                --atomic \
                 --cleanup-on-fail \
                 --timeout 15m \
                 --wait
@@ -393,7 +393,7 @@ helm_install() {
                 --namespace "$NAMESPACE" \
                 --values "$VALUES_FILE" \
                 "${set_args[@]}" \
-                --rollback-on-failure \
+                --atomic \
                 --cleanup-on-fail \
                 --timeout 15m \
                 --wait
