@@ -83,7 +83,16 @@ module "identity_providers" {
   environment  = var.environment
   aws_region   = var.aws_region
 
-  api_key_providers = {
+  # Only enabled engines get a credential provider. The map below is built
+  # with `enable_x ? {...} : null` and then null entries are filtered out
+  # (see local.enabled_api_key_providers) so a disabled engine creates NO
+  # provider — matching the spec's "key empty → resource not created" rule
+  # and avoiding account-wide name collisions with other stacks.
+  api_key_providers = local.enabled_api_key_providers
+}
+
+locals {
+  _api_key_providers_all = {
     tavily = var.enable_tavily ? {
       display_name = "Tavily Search"
       description  = "Tavily web search API"
@@ -124,6 +133,10 @@ module "identity_providers" {
       description  = "You.com web search API"
     } : null
   }
+
+  enabled_api_key_providers = {
+    for k, v in local._api_key_providers_all : k => v if v != null
+  }
 }
 
 # Flatten and filter identity provider map.
@@ -140,15 +153,22 @@ locals {
 # Per-engine Secrets Manager containers (values seeded out-of-band)
 # ============================================================
 locals {
+  # Secret containers are created ONLY for enabled key-based engines. A
+  # disabled engine gets no secret (spec: "key empty → resource not created").
+  # DuckDuckGo is intentionally absent — it needs no API key.
+  _tool_secret_engines_all = {
+    serper        = { enabled = local.serper_enabled, desc = "Serper SERP API key" }
+    exa           = { enabled = local.exa_enabled, desc = "Exa neural search API key" }
+    perplexity    = { enabled = local.perplexity_enabled, desc = "Perplexity Sonar API key" }
+    brave         = { enabled = local.brave_enabled, desc = "Brave Search API key" }
+    anthropic     = { enabled = local.anthropic_enabled, desc = "Anthropic Claude API key" }
+    firecrawl     = { enabled = local.firecrawl_enabled, desc = "Firecrawl web search API key" }
+    you           = { enabled = local.you_enabled, desc = "You.com search API key" }
+    tavily_lambda = { enabled = local.tavily_lambda_enabled, desc = "Tavily API key (Lambda tool)" }
+  }
+
   tool_secret_engines = {
-    serper        = "Serper SERP API key"
-    exa           = "Exa neural search API key"
-    perplexity    = "Perplexity Sonar API key"
-    brave         = "Brave Search API key"
-    anthropic     = "Anthropic Claude API key"
-    firecrawl     = "Firecrawl web search API key"
-    you           = "You.com search API key"
-    tavily_lambda = "Tavily API key (Lambda tool)"
+    for k, v in local._tool_secret_engines_all : k => v.desc if v.enabled
   }
 }
 
