@@ -32,7 +32,7 @@ ChartJS.register(
 );
 
 interface MetricsDataPoint {
-  timestamp: number;
+  timestamp: string;
   value?: number;
   p50?: number;
   p90?: number;
@@ -42,7 +42,7 @@ interface MetricsDataPoint {
 }
 
 interface ErrorDataPoint {
-  timestamp: number;
+  timestamp: string;
   system_errors: number;
   user_errors: number;
 }
@@ -123,8 +123,10 @@ export function MetricsCharts() {
     fetchMetrics();
   }, [timeRange]);
 
-  const formatTime = (timestamp: number): string => {
-    return new Date(timestamp * 1000).toLocaleTimeString('ko-KR', {
+  // CloudWatch timestamps arrive as ISO 8601 strings (Date.toISOString()), not
+  // epoch numbers — parse directly (multiplying a string by 1000 yields NaN).
+  const formatTime = (timestamp: string): string => {
+    return new Date(timestamp).toLocaleTimeString('ko-KR', {
       hour: '2-digit',
       minute: '2-digit',
     });
