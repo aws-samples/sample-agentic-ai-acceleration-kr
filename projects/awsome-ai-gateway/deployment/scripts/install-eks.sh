@@ -468,6 +468,17 @@ verify_deployment() {
     echo "    kubectl logs <pod-name> -n $NAMESPACE --tail=50"
 }
 
+# ---- (옵션) Tool Gateway 프로비저닝 ----
+# ENABLE_TOOL_GATEWAY=true 일 때만 실행. 기본 off → 기존 흐름 무영향.
+maybe_provision_tool_gateway() {
+    if [ "${ENABLE_TOOL_GATEWAY:-false}" != "true" ]; then
+        return 0
+    fi
+    info "ENABLE_TOOL_GATEWAY=true → Tool Gateway 프로비저닝 실행"
+    "$SCRIPT_DIR/provision_tool_gateway.sh" deploy \
+        || warn "Tool Gateway 프로비저닝 실패 — 기존 배포에는 영향 없음"
+}
+
 # ---- main ----
 main() {
     echo "=============================================================="
@@ -495,6 +506,7 @@ main() {
     helm_install
     patch_nextauth_url
     verify_deployment
+    maybe_provision_tool_gateway
 
     echo ""
     ok "배포 완료"
