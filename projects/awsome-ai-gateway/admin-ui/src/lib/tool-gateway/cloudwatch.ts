@@ -58,7 +58,9 @@ export interface MetricsResponse {
     avg_latency: number;
     avg_target_exec: number;
   };
-  status: 'Complete' | 'NoData' | 'Unavailable';
+  // 'Disabled' = feature flag off; the API route short-circuits before calling
+  // AWS and returns this so the UI can render a dormant state.
+  status: 'Complete' | 'NoData' | 'Unavailable' | 'Disabled';
 }
 
 function metricQuery(

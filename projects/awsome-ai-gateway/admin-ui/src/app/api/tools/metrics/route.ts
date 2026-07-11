@@ -1,13 +1,16 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 import { NextRequest, NextResponse } from 'next/server';
 import { TOOL_GATEWAY_ENABLED, TIME_RANGES, type TimeRangeKey } from '@/lib/tool-gateway/constants';
-import { fetchMetrics } from '@/lib/tool-gateway/cloudwatch';
+import { fetchMetrics, type MetricsResponse } from '@/lib/tool-gateway/cloudwatch';
 
 export const dynamic = 'force-dynamic';
 
 // Helper to return empty metrics payload for disabled or error states.
 // UI treats non-Complete status as empty, so minimal payload is sufficient.
-function emptyMetricsResponse(range: TimeRangeKey, status: 'Disabled' | 'Unavailable') {
+function emptyMetricsResponse(
+  range: TimeRangeKey,
+  status: 'Disabled' | 'Unavailable',
+): MetricsResponse {
   return {
     timeRange: range,
     period: 0,
@@ -36,7 +39,7 @@ function emptyMetricsResponse(range: TimeRangeKey, status: 'Disabled' | 'Unavail
       avg_latency: 0,
       avg_target_exec: 0,
     },
-    status: status as any,
+    status,
   };
 }
 
