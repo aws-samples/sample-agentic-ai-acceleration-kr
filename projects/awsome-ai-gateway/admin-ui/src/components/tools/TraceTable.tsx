@@ -3,7 +3,11 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 import { useEffect, useState } from 'react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { TRACE_TIME_RANGES, type TraceTimeRangeKey } from '@/lib/tool-gateway/constants';
+import { TraceDetail, type Span, type GatewayLogEntry } from './TraceDetail';
+
+const TRACES_PER_PAGE = 10;
 
 interface TraceListItem {
   id: string;
@@ -20,63 +24,92 @@ interface TraceListItem {
 interface TraceResponse {
   traces: TraceListItem[];
   count: number;
-  status: 'Complete' | 'Unavailable' | 'Disabled';
+  status: 'Complete' | 'Unavailable' | 'Disabled' | 'NoData';
   note?: string;
+}
+
+interface TraceDetailResponse {
+  traceId: string;
+  spans: Span[];
+  logs: GatewayLogEntry[];
+  status: 'Complete' | 'NotFound' | 'Unavailable' | 'Disabled';
 }
 
 export function TraceTable() {
   const [timeRange, setTimeRange] = useState<TraceTimeRangeKey>('24h');
   const [errorsOnly, setErrorsOnly] = useState(false);
+  const [toolFilter, setToolFilter] = useState<string>('all');
+  const [page, setPage] = useState(1);
   const [data, setData] = useState<TraceResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Trace-detail state.
+  const [selected, setSelected] = useState<string | null>(null);
+  const [spans, setSpans] = useState<Span[]>([]);
+  const [logs, setLogs] = useState<GatewayLogEntry[]>([]);
+  const [detailLoading, setDetailLoading] = useState(false);
 
   useEffect(() => {
     const fetchTraces = async () => {
       try {
         setLoading(true);
         setError(null);
+        setSelected(null);
+        setSpans([]);
+        setLogs([]);
         const response = await fetch(`/api/tools/traces?timeRange=${timeRange}`);
-        if (!response.ok) {
-          throw new Error(`API error: ${response.status}`);
-        }
-        const result = (await response.json()) as TraceResponse;
-        setData(result);
+        if (!response.ok) throw new Error(`API error: ${response.status}`);
+        setData((await response.json()) as TraceResponse);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Unknown error');
       } finally {
         setLoading(false);
       }
     };
-
     fetchTraces();
   }, [timeRange]);
 
-  const formatTime = (epochSec: number): string => {
-    return new Date(epochSec * 1000).toLocaleString('ko-KR');
+  // Reset to page 1 whenever the filtered set changes underneath us.
+  useEffect(() => {
+    setPage(1);
+  }, [errorsOnly, toolFilter, timeRange]);
+
+  const selectTrace = async (traceId: string) => {
+    setSelected(traceId);
+    setDetailLoading(true);
+    try {
+      const response = await fetch(`/api/tools/traces/${traceId}`);
+      const detail = (await response.json()) as TraceDetailResponse;
+      if (!response.ok || detail.status !== 'Complete') {
+        setSpans([]);
+        setLogs([]);
+      } else {
+        setSpans(detail.spans || []);
+        setLogs(detail.logs || []);
+      }
+    } catch {
+      setSpans([]);
+      setLogs([]);
+    } finally {
+      setDetailLoading(false);
+    }
   };
 
+  const formatTime = (epochSec: number): string => new Date(epochSec * 1000).toLocaleString('ko-KR');
+
   const getStatusBadge = (trace: TraceListItem): { label: string; color: string } => {
-    if (trace.hasFault) {
-      return { label: '오류', color: 'bg-red-100 text-red-800' };
-    }
-    if (trace.hasError) {
-      return { label: '에러', color: 'bg-red-100 text-red-800' };
-    }
-    if (trace.hasThrottle) {
-      return { label: '스로틀', color: 'bg-yellow-100 text-yellow-800' };
-    }
+    if (trace.hasFault) return { label: '오류', color: 'bg-red-100 text-red-800' };
+    if (trace.hasError) return { label: '에러', color: 'bg-red-100 text-red-800' };
+    if (trace.hasThrottle) return { label: '스로틀', color: 'bg-yellow-100 text-yellow-800' };
     return { label: '정상', color: 'bg-green-100 text-green-800' };
   };
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-48 text-sm text-muted-foreground">
-        불러오는 중…
-      </div>
+      <div className="flex items-center justify-center h-48 text-sm text-muted-foreground">불러오는 중…</div>
     );
   }
-
   if (data?.status === 'Disabled') {
     return (
       <div className="flex items-center justify-center h-48 text-sm text-muted-foreground">
@@ -84,7 +117,6 @@ export function TraceTable() {
       </div>
     );
   }
-
   if (data?.status === 'Unavailable') {
     return (
       <div className="flex items-center justify-center h-48 text-sm text-muted-foreground">
@@ -92,15 +124,9 @@ export function TraceTable() {
       </div>
     );
   }
-
   if (error) {
-    return (
-      <div className="flex items-center justify-center h-48 text-sm text-destructive">
-        오류: {error}
-      </div>
-    );
+    return <div className="flex items-center justify-center h-48 text-sm text-destructive">오류: {error}</div>;
   }
-
   if (!data) {
     return (
       <div className="flex items-center justify-center h-48 text-sm text-muted-foreground">
@@ -109,10 +135,21 @@ export function TraceTable() {
     );
   }
 
-  // Filter traces based on errorsOnly
-  const filteredTraces = errorsOnly
-    ? data.traces.filter((trace) => trace.hasFault || trace.hasError || trace.hasThrottle)
-    : data.traces;
+  // Distinct tools present in the current list (for the filter dropdown).
+  const toolOptions = Array.from(
+    new Set(data.traces.map((t) => t.tool).filter((t): t is string => Boolean(t)))
+  ).sort();
+
+  const filteredTraces = data.traces.filter((trace) => {
+    if (errorsOnly && !(trace.hasFault || trace.hasError || trace.hasThrottle)) return false;
+    if (toolFilter !== 'all' && trace.tool !== toolFilter) return false;
+    return true;
+  });
+
+  const totalPages = Math.max(1, Math.ceil(filteredTraces.length / TRACES_PER_PAGE));
+  const currentPage = Math.min(page, totalPages);
+  const pageStart = (currentPage - 1) * TRACES_PER_PAGE;
+  const pagedTraces = filteredTraces.slice(pageStart, pageStart + TRACES_PER_PAGE);
 
   return (
     <div className="space-y-4">
@@ -134,20 +171,36 @@ export function TraceTable() {
           ))}
         </div>
 
-        <label className="flex items-center gap-2 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={errorsOnly}
-            onChange={(e) => setErrorsOnly(e.target.checked)}
-            className="w-4 h-4 rounded border-gray-300"
-          />
-          <span className="text-sm font-medium">오류만 보기</span>
-        </label>
+        <div className="flex items-center gap-3">
+          {toolOptions.length > 0 && (
+            <select
+              value={toolFilter}
+              onChange={(e) => setToolFilter(e.target.value)}
+              className="h-8 rounded-md border border-input bg-background px-2 font-mono text-xs"
+            >
+              <option value="all">모든 도구</option>
+              {toolOptions.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          )}
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={errorsOnly}
+              onChange={(e) => setErrorsOnly(e.target.checked)}
+              className="w-4 h-4 rounded border-gray-300"
+            />
+            <span className="text-sm font-medium">오류만 보기</span>
+          </label>
+        </div>
       </div>
 
       {/* Traces Table */}
       <div className="border rounded-lg bg-card overflow-x-auto">
-        {filteredTraces.length > 0 ? (
+        {pagedTraces.length > 0 ? (
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b bg-muted/50">
@@ -159,13 +212,18 @@ export function TraceTable() {
               </tr>
             </thead>
             <tbody>
-              {filteredTraces.map((trace) => {
+              {pagedTraces.map((trace) => {
                 const status = getStatusBadge(trace);
+                const isSel = selected === trace.id;
                 return (
-                  <tr key={trace.id} className="border-b hover:bg-muted/30">
-                    <td className="py-3 px-4 text-xs font-mono">
-                      {formatTime(trace.startTime)}
-                    </td>
+                  <tr
+                    key={trace.id}
+                    onClick={() => selectTrace(trace.id)}
+                    className={`border-b cursor-pointer transition-colors hover:bg-muted/30 ${
+                      isSel ? 'bg-muted/60' : ''
+                    }`}
+                  >
+                    <td className="py-3 px-4 text-xs font-mono">{formatTime(trace.startTime)}</td>
                     <td className="py-3 px-4">
                       {trace.tool ? (
                         <span className="font-mono">{trace.tool}</span>
@@ -173,9 +231,7 @@ export function TraceTable() {
                         <span className="text-muted-foreground">—</span>
                       )}
                     </td>
-                    <td className="text-right py-3 px-4">
-                      {(trace.duration * 1000).toFixed(0)}
-                    </td>
+                    <td className="text-right py-3 px-4">{(trace.duration * 1000).toFixed(0)}</td>
                     <td className="py-3 px-4">
                       {trace.httpMethod && trace.httpStatus ? (
                         <span className="font-mono text-xs">
@@ -186,9 +242,7 @@ export function TraceTable() {
                       )}
                     </td>
                     <td className="py-3 px-4">
-                      <span
-                        className={`inline-block px-2 py-1 rounded text-xs font-semibold ${status.color}`}
-                      >
+                      <span className={`inline-block px-2 py-1 rounded text-xs font-semibold ${status.color}`}>
                         {status.label}
                       </span>
                     </td>
@@ -199,15 +253,41 @@ export function TraceTable() {
           </table>
         ) : (
           <div className="flex items-center justify-center h-32 text-sm text-muted-foreground">
-            {errorsOnly ? '오류가 없습니다.' : '데이터가 없습니다.'}
+            {errorsOnly || toolFilter !== 'all' ? '조건에 맞는 트레이스가 없습니다.' : '데이터가 없습니다.'}
           </div>
         )}
       </div>
 
-      {/* Count Info */}
-      <div className="text-xs text-muted-foreground">
-        표시된 항목: {filteredTraces.length} / 전체: {data.count}
+      {/* Pagination + count */}
+      <div className="flex items-center justify-between">
+        <span className="text-xs text-muted-foreground">
+          표시된 항목: {filteredTraces.length} / 전체: {data.count}
+        </span>
+        {totalPages > 1 && (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={currentPage <= 1}
+              className="inline-flex items-center rounded-md border border-input px-2 py-1 text-sm disabled:opacity-40"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+            <span className="text-xs text-muted-foreground tabular-nums">
+              {currentPage} / {totalPages}
+            </span>
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={currentPage >= totalPages}
+              className="inline-flex items-center rounded-md border border-input px-2 py-1 text-sm disabled:opacity-40"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </div>
+        )}
       </div>
+
+      {/* Detail when a trace is selected */}
+      {selected && <TraceDetail traceId={selected} spans={spans} logs={logs} loading={detailLoading} />}
     </div>
   );
 }
