@@ -372,7 +372,59 @@ admin-ui(Next.js)는 server-only `adminAPI` 클라이언트(`src/lib/api-client.
 
 ---
 
-## 15. Source map (where to look)
+## 15. Tool Gateway (optional, us-east-1)
+
+다중 검색 엔진(DuckDuckGo, Serper, Exa, Brave, Tavily, You.com, Firecrawl 등)을 지원하는 **선택적 AgentCore Tool Gateway**. 기존 단일 WebSearch 경로(AWS_IAM/SigV4)와는 **완전히 독립**.
+
+### 아키텍처
+
+```
+[Tool Gateway Admin Dashboard (admin-ui /tools)]  ← NEXT_PUBLIC_TOOL_GATEWAY_* 플래그로 활성화
+                 │ ADMIN 권한만
+                 ▼
+[AgentCore Tool Gateway] ◄─── Cognito M2M JWT (CUSTOM_JWT, service-to-service)
+     │ (us-east-1)
+     ├─ DuckDuckGo (keyless)
+     ├─ Serper (API key)
+     ├─ Exa (API key)
+     ├─ Brave (API key)
+     ├─ Tavily Lambda (API key)
+     ├─ You.com (API key)
+     └─ Firecrawl (API key)
+
+[Existing WebSearch Path] ◄─── AWS_IAM / SigV4 (separate, independent)
+     │ (기존 aws-managed 커넥터)
+     └─ (단일 엔진 또는 구성된 검색만)
+```
+
+### 인증 모델
+
+- **CUSTOM_JWT (tool gateway only):** terraform 모듈이 **자체 Cognito user pool** 생성 (`TOOL_` 프리픽스 env vars). OIDC login Cognito 와 분리.
+- **Credentials:** admin-ui 서버가 `COGNITO_TOOL_M2M_CLIENT_ID` + `COGNITO_TOOL_M2M_CLIENT_SECRET` 로 client_credentials 그랜트 → bearer 토큰 취득 → gateway 호출.
+- **Scoping:** `COGNITO_TOOL_M2M_SCOPE=<resource_server>/invoke` 로 gateway invoke 권한만 보유 (least privilege).
+
+### 배포 & 상태
+
+- **Terraform tfstate:** 격리된 `deployment/terraform/environments/tool-gateway-dev/` (llm-gateway-dev 와 분리)
+- **Region:** **us-east-1 only** (AgentCore 커넥터 제약)
+- **Enable/Disable:** `deployment/scripts/provision_tool_gateway.sh {deploy|status|teardown}` 로 제어
+- **Secret seeding:** 엔진 API 키는 Secrets Manager(`${project}/${env}/tool/{engine}`) 에 저장, terraform 을 거치지 않음
+- **Dashboard:** 공개/서버 env vars 설정 시 admin-ui `/tools` 대시보드 활성화 (ADMIN 만)
+
+### 기존 WebSearch 와의 관계
+
+| 항목 | Tool Gateway (JWT) | WebSearch (AWS_IAM) |
+|------|---|---|
+| **인증** | Cognito M2M (자체 user pool) | AWS_IAM / SigV4 |
+| **엔진** | 다중 (DuckDuckGo, Serper, Exa, ...) | 단일 또는 기본 설정 |
+| **Region** | us-east-1 only | us-east-1 only |
+| **Provisioning** | `provision_tool_gateway.sh` | `provision_agentcore_websearch.py` |
+| **독립성** | 완전히 독립 | 기존 경로 유지 |
+| **사용자 설정** | 대시보드 (/tools) 에서 엔진 선택 | 자동 주입 (클라이언트 무설정) |
+
+---
+
+## 17. Source map (where to look)
 
 | Concern | Path |
 |---|---|
@@ -395,7 +447,7 @@ admin-ui(Next.js)는 server-only `adminAPI` 클라이언트(`src/lib/api-client.
 
 ---
 
-## 16. Multi-app status (spec `capability-requirements.md`)
+## 18. Multi-app status (spec `capability-requirements.md`)
 
 | # | Requirement | Status |
 |---|---|---|
