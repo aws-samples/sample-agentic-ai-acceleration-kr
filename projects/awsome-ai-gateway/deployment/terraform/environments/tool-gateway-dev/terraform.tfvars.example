@@ -45,21 +45,11 @@ you_api_key = "" # Set your You.com API key to enable
 # Tavily MCP server target above. Reuses tavily_api_key.
 enable_tavily_lambda = false
 
-# SearXNG: self-hosted metasearch. No API key — enabling provisions a VPC +
-# ECS Fargate SearXNG instance (internal ALB) and a VPC-attached Lambda tool.
-# Costs ~$70-85/mo while on (NAT gateway + Fargate + ALB); $0 when off.
-enable_searxng = false
-
 # AgentCore Web Search Tool: fully-managed connector target backed by Amazon's
 # web index. No API key, queries stay within AWS. us-east-1 only. The target is
 # created by scripts/create-web-search-target.sh after apply (the AWS provider
 # can't express the connector target type yet).
 enable_web_search = false
-
-# AgentCore Inference Target: Register a Bedrock model as an LLM-routing gateway
-# target via the out-of-band script. us-east-1 only; the target is created by
-# scripts/create-inference-target.sh after apply.
-# enable_inference_target = false  # demo: route an LLM through the gateway (out-of-band script)
 
 # ============================================================
 # Authentication
