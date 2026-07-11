@@ -101,9 +101,10 @@ function searchQuery(
   };
 }
 
-// Escape a double quote for safe interpolation inside a SEARCH expression literal.
+// Escape backslashes and double quotes for safe interpolation inside
+// a SEARCH expression quoted literal.
 function q(value: string): string {
-  return value.replace(/"/g, '\\"');
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
 // Choose a period that yields a reasonable number of buckets for the range.
