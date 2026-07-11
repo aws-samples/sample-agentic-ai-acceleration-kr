@@ -1,0 +1,35 @@
+[tool.poetry]
+name = "websearch-handlers"
+version = "0.1.0"
+description = "Lambda handlers for search tool gateway"
+authors = ["WebSearch Team"]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+boto3 = "^1.28.0"
+requests = "^2.31.0"
+ddgs = "^9.14.4"
+opentelemetry-api = "^1.20.0"
+opentelemetry-sdk = "^1.20.0"
+opentelemetry-exporter-otlp = "^1.20.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.0"
+pytest-cov = "^4.1.0"
+responses = "^0.23.0"
+black = "^23.7.0"
+ruff = "^0.1.0"
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+select = ["E", "F", "W"]
+ignore = ["E501"]
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
