@@ -1,0 +1,28 @@
+# ============================================================
+# Tool Gateway override (opt-in) — ./run.sh up --tools 로만 사용
+# ============================================================
+# 이미 배포된 AgentCore Tool Gateway 에 로컬 admin-ui 를 연결한다.
+# 값은 deployment/tool-gateway/dashboard.generated.env 에서 run.sh 가 source 한다.
+# 모든 변수는 기본 빈 문자열이라 값이 없어도 compose 파싱은 깨지지 않는다.
+services:
+  admin-ui:
+    build:
+      context: ./admin-ui
+      args:
+        # NEXT_PUBLIC_* 는 빌드타임 인라인 → 브라우저 번들 게이트용
+        NEXT_PUBLIC_TOOL_GATEWAY_ENABLED: ${NEXT_PUBLIC_TOOL_GATEWAY_ENABLED:-false}
+        NEXT_PUBLIC_TOOL_GATEWAY_URL: ${NEXT_PUBLIC_TOOL_GATEWAY_URL:-}
+        NEXT_PUBLIC_TOOL_GATEWAY_ID: ${NEXT_PUBLIC_TOOL_GATEWAY_ID:-}
+        NEXT_PUBLIC_TOOL_GATEWAY_REGION: ${NEXT_PUBLIC_TOOL_GATEWAY_REGION:-us-east-1}
+    environment:
+      # 서버 사이드 route(/api/tools/*)도 NEXT_PUBLIC_* 를 읽는다
+      NEXT_PUBLIC_TOOL_GATEWAY_ENABLED: ${NEXT_PUBLIC_TOOL_GATEWAY_ENABLED:-false}
+      NEXT_PUBLIC_TOOL_GATEWAY_URL: ${NEXT_PUBLIC_TOOL_GATEWAY_URL:-}
+      NEXT_PUBLIC_TOOL_GATEWAY_ID: ${NEXT_PUBLIC_TOOL_GATEWAY_ID:-}
+      NEXT_PUBLIC_TOOL_GATEWAY_REGION: ${NEXT_PUBLIC_TOOL_GATEWAY_REGION:-us-east-1}
+      TOOL_GATEWAY_ARN: ${TOOL_GATEWAY_ARN:-}
+      # 서버 route 가 Cognito M2M 토큰 발급 → gateway 호출에 사용
+      COGNITO_TOOL_TOKEN_ENDPOINT: ${COGNITO_TOOL_TOKEN_ENDPOINT:-}
+      COGNITO_TOOL_M2M_CLIENT_ID: ${COGNITO_TOOL_M2M_CLIENT_ID:-}
+      COGNITO_TOOL_M2M_CLIENT_SECRET: ${COGNITO_TOOL_M2M_CLIENT_SECRET:-}
+      COGNITO_TOOL_M2M_SCOPE: ${COGNITO_TOOL_M2M_SCOPE:-agentcore/invoke}
