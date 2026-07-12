@@ -41,10 +41,6 @@ firecrawl_api_key = "" # Set your Firecrawl API key to enable
 enable_you = false
 you_api_key = "" # Set your You.com API key to enable
 
-# Tavily (Lambda): Lambda-backed Tavily target, distinct from the hosted
-# Tavily MCP server target above. Reuses tavily_api_key.
-enable_tavily_lambda = false
-
 # AgentCore Web Search Tool: fully-managed connector target backed by Amazon's
 # web index. No API key, queries stay within AWS. us-east-1 only. The target is
 # created by scripts/create-web-search-target.sh after apply (the AWS provider

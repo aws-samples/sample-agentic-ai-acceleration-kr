@@ -16,18 +16,16 @@ locals {
   anthropic_enabled     = var.enable_anthropic
   firecrawl_enabled     = var.enable_firecrawl
   you_enabled           = var.enable_you
-  tavily_lambda_enabled = var.enable_tavily_lambda
 
   lambda_tools_enabled = {
-    serper        = local.serper_enabled
-    exa           = local.exa_enabled
-    duckduckgo    = local.duckduckgo_enabled
-    perplexity    = local.perplexity_enabled
-    brave         = local.brave_enabled
-    anthropic     = local.anthropic_enabled
-    firecrawl     = local.firecrawl_enabled
-    you           = local.you_enabled
-    tavily_lambda = local.tavily_lambda_enabled
+    serper     = local.serper_enabled
+    exa        = local.exa_enabled
+    duckduckgo = local.duckduckgo_enabled
+    perplexity = local.perplexity_enabled
+    brave      = local.brave_enabled
+    anthropic  = local.anthropic_enabled
+    firecrawl  = local.firecrawl_enabled
+    you        = local.you_enabled
   }
 
   # Filter to only enabled tools
@@ -157,14 +155,13 @@ locals {
   # disabled engine gets no secret (spec: "key empty → resource not created").
   # DuckDuckGo is intentionally absent — it needs no API key.
   _tool_secret_engines_all = {
-    serper        = { enabled = local.serper_enabled, desc = "Serper SERP API key" }
-    exa           = { enabled = local.exa_enabled, desc = "Exa neural search API key" }
-    perplexity    = { enabled = local.perplexity_enabled, desc = "Perplexity Sonar API key" }
-    brave         = { enabled = local.brave_enabled, desc = "Brave Search API key" }
-    anthropic     = { enabled = local.anthropic_enabled, desc = "Anthropic Claude API key" }
-    firecrawl     = { enabled = local.firecrawl_enabled, desc = "Firecrawl web search API key" }
-    you           = { enabled = local.you_enabled, desc = "You.com search API key" }
-    tavily_lambda = { enabled = local.tavily_lambda_enabled, desc = "Tavily API key (Lambda tool)" }
+    serper     = { enabled = local.serper_enabled, desc = "Serper SERP API key" }
+    exa        = { enabled = local.exa_enabled, desc = "Exa neural search API key" }
+    perplexity = { enabled = local.perplexity_enabled, desc = "Perplexity Sonar API key" }
+    brave      = { enabled = local.brave_enabled, desc = "Brave Search API key" }
+    anthropic  = { enabled = local.anthropic_enabled, desc = "Anthropic Claude API key" }
+    firecrawl  = { enabled = local.firecrawl_enabled, desc = "Firecrawl web search API key" }
+    you        = { enabled = local.you_enabled, desc = "You.com search API key" }
   }
 
   tool_secret_engines = {
@@ -219,7 +216,7 @@ module "lambda_tools" {
     # Secrets Manager ARN for the engine's API key (primary path). The Lambda
     # fetches the value at runtime with its own IAM role — no key in env/state.
     lookup(local.tool_secret_arns, each.key, "") != "" ? {
-      "${upper(each.key == "tavily_lambda" ? "tavily" : each.key)}_SECRET_ARN" = local.tool_secret_arns[each.key]
+      "${upper(each.key)}_SECRET_ARN" = local.tool_secret_arns[each.key]
     } : {},
   )
 
