@@ -32,6 +32,15 @@ def test_install_eks_isolates_kubeconfig():
     assert install.env["KUBECONFIG"] == "/tmp/my-cluster.kubeconfig"
 
 
+def test_verify_migration_shares_install_kubeconfig():
+    # smoke-test 스텝도 install-eks와 동일 격리 KUBECONFIG를 써야 한다. 없으면
+    # 기본 ~/.kube/config(다른 클러스터로 오염됨)를 봐서 pod를 못 찾고 오탐한다.
+    wf = steps.build_llm_workflow(env="dev", backend=BE, enable_chat_db_tools=False,
+                                  flags={}, cluster_name="my-cluster")
+    verify = next(s for s in wf if s.name == "verify-migration")
+    assert verify.env["KUBECONFIG"] == "/tmp/my-cluster.kubeconfig"
+
+
 def test_install_eks_passes_flags_as_env():
     wf = steps.build_llm_workflow(env="dev", backend=BE, enable_chat_db_tools=False,
                                   flags={"DEBUG_MODE": True, "MIGRATION_ENABLED": False})
@@ -49,9 +58,26 @@ def test_llm_workflow_order():
 
 
 def test_tool_workflow_order():
-    wf = steps.build_tool_workflow(backend=BE, has_key_file=False)
+    wf = steps.build_tool_workflow(backend=BE)
     names = _names(wf)
     assert names.index("tf-init") < names.index("tf-apply")
+
+
+def test_tool_workflow_injects_key_file_env_not_tfvars():
+    # ★함정: API 키는 tfvars가 아니라 TOOL_KEY_FILE env로만 넘어가야 한다
+    #   (tfstate 평문 저장 + undeclared variable 경고 방지).
+    from pathlib import Path
+
+    wf = steps.build_tool_workflow(backend=BE, key_file=Path("/tmp/keys.env"))
+    apply = next(s for s in wf if s.name == "tf-apply")
+    assert apply.env["TOOL_KEY_FILE"] == "/tmp/keys.env"
+
+
+def test_tool_workflow_no_key_file_leaves_env_unset():
+    # 키가 없으면(예: DuckDuckGo만) TOOL_KEY_FILE을 주입하지 않는다 → seed 스킵.
+    wf = steps.build_tool_workflow(backend=BE)
+    apply = next(s for s in wf if s.name == "tf-apply")
+    assert apply.env is None
 
 
 def test_llm_teardown_order_helm_before_destroy():

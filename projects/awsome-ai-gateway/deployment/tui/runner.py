@@ -38,11 +38,12 @@ def run_step(step: Step, on_line=None, base_env=None) -> StepResult:
         bufsize=1,
     )
     assert proc.stdout is not None
-    for raw in proc.stdout:
-        line = raw.rstrip("\n")
-        lines.append(line)
-        if on_line:
-            on_line(line)
+    with proc.stdout as out:  # 명시적 close — 다단계 워크플로우에서 FD 누수 방지
+        for raw in out:
+            line = raw.rstrip("\n")
+            lines.append(line)
+            if on_line:
+                on_line(line)
     proc.wait()
     return StepResult(step=step, returncode=proc.returncode, lines=lines)
 

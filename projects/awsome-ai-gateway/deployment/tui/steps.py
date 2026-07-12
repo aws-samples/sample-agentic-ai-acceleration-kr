@@ -39,26 +39,39 @@ def build_llm_workflow(*, env: str, backend: BackendConfig,
     wf.append(Step("tf-plan", ["terraform", "plan", "-input=false"], cwd=tf_dir))
     wf.append(Step("tf-apply", ["terraform", "apply", "-auto-approve", "-input=false"], cwd=tf_dir))
 
-    # ★함정③: install-eks에 격리 KUBECONFIG + 실행 플래그 env 주입
-    install_env = {"KUBECONFIG": f"/tmp/{cluster_name}.kubeconfig", **_flags_to_env(flags)}
+    # ★함정③: install-eks에 격리 KUBECONFIG + 실행 플래그 env 주입.
+    #   install-eks.sh가 이 파일에 kubectl context를 써 넣는다.
+    kubeconfig = f"/tmp/{cluster_name}.kubeconfig"
+    install_env = {"KUBECONFIG": kubeconfig, **_flags_to_env(flags)}
     wf.append(Step("install-eks", ["bash", str(paths.script("install-eks.sh")), env],
                    env=install_env))
 
-    # ★함정⑥: 배포 후 migration 적용 검증 (smoke-test가 db_health 포함 검증)
+    # ★함정⑥+④: 배포 후 migration 적용 검증 (smoke-test가 db_health 포함 검증).
+    #   반드시 install-eks와 동일한 격리 KUBECONFIG를 써야 한다. 안 그러면 기본
+    #   ~/.kube/config(이 계정의 다른 EKS 클러스터로 오염됨)를 봐서 pod를 못 찾고
+    #   "Pod 없음"으로 전부 오탐한다(실제 배포는 정상인데 smoke-test만 FAIL).
     wf.append(Step("verify-migration",
                    ["bash", str(paths.script("smoke-test.sh")), "--env", env],
+                   env={"KUBECONFIG": kubeconfig},
                    skippable=True))
     return wf
 
 
-def build_tool_workflow(*, backend: BackendConfig, has_key_file: bool) -> list[Step]:
+def build_tool_workflow(*, backend: BackendConfig,
+                        key_file: Path | None = None) -> list[Step]:
     tf_dir = paths.TOOL_TF_DIR
+    # ★함정: API 키는 terraform(tfvars/tfstate)을 거치면 안 된다. tfvars에 넣으면
+    #   "undeclared variable" 경고 + 키가 tfstate에 평문 저장된다. provision 스크립트가
+    #   TOOL_KEY_FILE(engine=value 형식)을 읽어 seed-tool-secrets.sh로 Secrets Manager에
+    #   직접 주입하는 게 유일한 정식 경로다.
+    deploy_env = {"TOOL_KEY_FILE": str(key_file)} if key_file else None
     wf: list[Step] = [
         Step("tf-init",
              ["terraform", "init", "-input=false", "-reconfigure", *backend.backend_args()],
              cwd=tf_dir),
         Step("tf-apply",
-             ["bash", str(paths.script("provision_tool_gateway.sh")), "deploy"]),
+             ["bash", str(paths.script("provision_tool_gateway.sh")), "deploy"],
+             env=deploy_env),
     ]
     return wf
 

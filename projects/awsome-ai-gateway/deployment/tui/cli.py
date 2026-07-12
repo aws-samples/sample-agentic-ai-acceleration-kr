@@ -204,14 +204,20 @@ def flow_llm() -> bool:
 
     # 기존 terraform.tfvars가 있으면 값 프리필 → Enter로 바로 넘어감
     tf_path = paths.llm_tf_dir(env) / "terraform.tfvars"
-    existing = config.parse_tfvars(tf_path.read_text()) if tf_path.exists() else {}
+    existing_text = tf_path.read_text() if tf_path.exists() else ""
+    existing = config.parse_tfvars(existing_text) if existing_text else {}
 
     # ★region: tfvars(aws_region)와 tfstate backend init 양쪽에 주입.
     #   azs는 region 기반으로 자동 유도(a/c 2 AZ — dev 비용 규칙)하되,
     #   기존 tfvars에 azs가 있으면 존중한다(멀티라인 list라 parse_tfvars엔 안 잡힘).
     region = ask_text("aws_region", default=existing.get("aws_region", "ap-northeast-2"))
     cognito = ask_text("cognito_domain_suffix", default=existing.get("cognito_domain_suffix", ""))
-    principal = ask_text("eks_access_entries principal_arn")
+    # principal_arn은 eks_access_entries 블록 안에 있어 parse_tfvars엔 안 잡힘 →
+    # 원문에서 직접 프리필해 재입력 없이 Enter로 넘어가게 한다.
+    principal = ask_text(
+        "eks_access_entries principal_arn",
+        default=config.prefill_scalar(existing_text, "principal_arn"),
+    )
 
     placeholders = config.find_placeholders(
         {"cognito_domain_suffix": cognito, "principal_arn": principal}
@@ -250,6 +256,22 @@ def flow_llm() -> bool:
     existing["azs"] = [f"{region}a", f"{region}c"]
     existing["enable_chat_agent"] = enable_chat_agent
     existing["enable_chat_db_tools"] = enable_chat_db
+    # ★eks_access_entries는 중첩 블록으로 기록해야 한다. 이전엔 principal_arn/policy_arn/
+    #   type이 최상위 scalar로 새어나가 'undeclared variable' 경고 + access entry 소실
+    #   ('cluster unreachable')을 유발했다. dict로 넣어 write_tfvars가 블록으로 직렬화.
+    existing["eks_access_entries"] = {
+        "developer": {
+            "principal_arn": principal,
+            "policy_associations": {
+                "admin": {
+                    "policy_arn": "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy",
+                    "access_scope": {"type": "cluster"},
+                }
+            },
+        }
+    }
+    # tags도 최상위가 아니라 map으로 기록(변수 선언이 map(string)).
+    existing["tags"] = {"CostCenter": "platform-ai", "Owner": "llm-gateway-team"}
     config.write_tfvars(tf_path, existing)
     console.print(f"[dim]tfvars 기록: {tf_path}[/dim]")
 
@@ -283,16 +305,23 @@ def flow_tool() -> bool:
         "검색엔진 활성화 (스페이스로 토글, Enter 확정)",
         [(eid, eid, False) for eid, _t, _k in ENGINES],
     )
+    # ★함정: API 키는 tfvars에 넣지 않는다. 넣으면 (1) terraform "undeclared variable"
+    #   경고 (2) 키가 tfstate(S3)에 평문 저장. 키는 별도 key file로 모아 TOOL_KEY_FILE로
+    #   provision 스크립트에 넘기고, seed-tool-secrets.sh가 Secrets Manager에 직접 주입한다.
+    keys: dict[str, str] = {}
     for eid, toggle, needs_key in ENGINES:
         enabled = eid in enabled_ids
         tfvars[toggle] = enabled
         if needs_key and enabled:
-            key = ask_password(f"{eid} API key")
-            tfvars[f"{eid}_api_key"] = key
+            keys[eid] = ask_password(f"{eid} API key")
 
     tf_path = paths.TOOL_TF_DIR / "terraform.tfvars"
     config.write_tfvars(tf_path, tfvars)
     console.print(f"[dim]tfvars 기록: {tf_path}[/dim]")
+
+    key_file = config.write_key_file(keys)
+    if key_file:
+        console.print(f"[dim]API 키 {len(keys)}개 → Secrets Manager 주입 예정 (tfstate 미경유)[/dim]")
 
     # tool-gateway tfstate bucket은 account-id 포함이 규칙 → 자동 조회해 default 구성
     acct = aws_account_id()
@@ -301,14 +330,27 @@ def flow_tool() -> bool:
     table = ask_text("tfstate dynamodb table", default="tool-gateway-tflock")
     # Tool GW는 us-east-1 고정(terraform validation) → backend region도 고정.
     backend = BackendConfig(bucket=bucket, dynamodb_table=table, region="us-east-1")
-    wf = build_tool_workflow(backend=backend, has_key_file=False)
+    wf = build_tool_workflow(backend=backend, key_file=key_file)
 
     _preview_steps(wf)
     console.print("[dim]Tool Gateway는 non-fatal 애드온 — 실패해도 LLM GW에 영향 없음[/dim]")
     if not ask_confirm("위 스텝을 실행합니다 (실제 배포) — 계속?", default=False):
         console.print("[dim]취소됨[/dim]")
+        _cleanup_key_file(key_file)
         return False
-    return run_and_report(wf, "Tool Gateway")
+    try:
+        return run_and_report(wf, "Tool Gateway")
+    finally:
+        # 키 파일은 seed 후 즉시 제거 — 평문 키가 디스크에 남지 않도록.
+        _cleanup_key_file(key_file)
+
+
+def _cleanup_key_file(key_file) -> None:
+    if key_file:
+        try:
+            key_file.unlink()
+        except OSError:
+            pass
 
 
 # --------------------------------------------------------------------------- #
