@@ -57,6 +57,9 @@ def run_workflow(wf, on_line=None, on_step_done=None, base_env=None,
         results.append(result)
         if on_step_done:
             on_step_done(result)
-        if not result.ok:
-            break  # 실패 시 정지 — 이후 스텝 미실행
+        # skippable 스텝은 실패해도 계속 진행(best-effort). 예: teardown의
+        # helm-uninstall은 릴리스/클러스터가 이미 없으면 non-zero로 끝날 수
+        # 있는데, 그렇다고 뒤따르는 tf-destroy를 건너뛰면 안 된다.
+        if not result.ok and not step.skippable:
+            break  # 필수 스텝 실패 시 정지 — 이후 스텝 미실행
     return results

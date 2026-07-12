@@ -26,7 +26,7 @@ Claude Code처럼 **인라인 콘솔**로 동작한다 — 전체 화면을 점�
 대부분의 입력은 **default가 채워져 있어 Enter만 치면 넘어간다**:
 
 - aws_region (LLM GW): 기본 `ap-northeast-2`. tfvars의 `aws_region`과 `tf-init` backend region에 함께 주입되고, `azs`는 이 region 기반으로 자동 유도(`<region>a`/`<region>c`, 2 AZ). Tool GW는 us-east-1 고정(terraform validation)이라 입력받지 않는다.
-- tfstate bucket/table: `bootstrap-tfstate.sh` 네이밍 규칙 (`llm-gateway-tfstate` / `-tflock`)
+- tfstate bucket/table (LLM GW): 계정 접미 규칙 `llm-gateway-vanilla-tfstate-<account-id>` / `llm-gateway-vanilla-tflock` (account id는 `aws sts`로 자동 조회, backend.tf 주석과 일치). 버킷은 S3 전역 유일성 때문에 계정 접미가 필수다.
 - Tool GW bucket: `tool-gateway-tfstate-<account-id>` (account id는 `aws sts`로 자동 조회)
 - cognito_domain_suffix 등: 기존 `terraform.tfvars`가 있으면 그 값으로 프리필
 

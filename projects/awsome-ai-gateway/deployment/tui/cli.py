@@ -110,6 +110,20 @@ def run_preflight(tools) -> bool:
     return preflight_table(checks)
 
 
+def tool_gateway_assets_ok() -> bool:
+    """Tool Gateway 스크립트/terraform이 이 리포에 있는지 확인하고 표로 출력.
+    없으면(별도 PR 미머지 등) 안내하고 False."""
+    checks = preflight.check_tool_gateway_assets()
+    ok = preflight_table(checks)
+    if not ok:
+        console.print(
+            "[yellow]Tool Gateway 자산(provision 스크립트/terraform)이 이 리포에 없습니다.[/yellow]\n"
+            "[dim]Tool Gateway 통합 PR이 머지된 브랜치에서 실행하세요. "
+            "LLM Gateway 워크플로우는 영향받지 않습니다.[/dim]"
+        )
+    return ok
+
+
 def aws_account_id() -> str | None:
     """현재 자격증명의 AWS account ID (best-effort). 실패 시 None."""
     import subprocess
@@ -123,6 +137,16 @@ def aws_account_id() -> str | None:
         return None
     acct = proc.stdout.strip()
     return acct if proc.returncode == 0 and acct else None
+
+
+def llm_tfstate_defaults(acct: str | None) -> tuple[str, str]:
+    """LLM Gateway tfstate 버킷/락테이블 default.
+
+    실제 배포·backend.tf 주석의 규칙은 `llm-gateway-vanilla-tfstate-<account>`
+    (버킷은 S3 전역 유일성 때문에 계정 접미 필수) + `llm-gateway-vanilla-tflock`.
+    account id를 못 구하면 접미 없는 형태로 fallback(사용자가 직접 수정)."""
+    suffix = f"-{acct}" if acct else ""
+    return f"llm-gateway-vanilla-tfstate{suffix}", "llm-gateway-vanilla-tflock"
 
 
 # --------------------------------------------------------------------------- #
@@ -145,17 +169,22 @@ def run_and_report(wf, title: str) -> bool:
     def on_step_done(result) -> None:
         if result.ok:
             console.print(f"[green]✓[/green] {result.step.name}")
+        elif result.step.skippable:
+            # best-effort 스텝 실패는 경고로만 — 워크플로우는 계속 진행된다
+            console.print(f"[yellow]⚠[/yellow] {result.step.name} (exit {result.returncode}, skippable — 계속 진행)")
         else:
             console.print(f"[red]✗[/red] {result.step.name} (exit {result.returncode})")
 
     results = run_workflow(
         wf, on_line=on_line, on_step_done=on_step_done, on_step_start=on_step_start
     )
-    ok = bool(results) and all(r.ok for r in results)
+    # skippable 스텝 실패는 전체 성공 판정에서 제외(best-effort). 필수 스텝만 성공하면 완료.
+    ok = bool(results) and all(r.ok or r.step.skippable for r in results)
     if ok:
         console.print(f"\n[bold green]완료[/bold green] — {title}")
     else:
-        failed = next((r for r in results if not r.ok), None)
+        # 정지 사유는 필수(non-skippable) 스텝 실패 — 그걸 가리킨다
+        failed = next((r for r in results if not r.ok and not r.step.skippable), None)
         where = f" ({failed.step.name})" if failed else ""
         console.print(f"\n[bold red]실패[/bold red]{where} — 위 로그를 확인하세요")
     return ok
@@ -191,9 +220,11 @@ def flow_llm() -> bool:
         console.print(f"[red]플레이스홀더 남음:[/red] {', '.join(placeholders)}")
         return False
 
-    # bootstrap-tfstate.sh 기본 네이밍 규칙 → default로 제공 (Enter로 수락)
-    bucket = ask_text("tfstate bucket", default="llm-gateway-tfstate")
-    table = ask_text("tfstate dynamodb table", default="llm-gateway-tflock")
+    # tfstate 버킷은 계정 접미 규칙(llm-gateway-vanilla-tfstate-<account>) →
+    # account id를 조회해 default 구성(Enter로 수락). backend.tf 주석과 일치.
+    b_default, t_default = llm_tfstate_defaults(aws_account_id())
+    bucket = ask_text("tfstate bucket", default=b_default)
+    table = ask_text("tfstate dynamodb table", default=t_default)
     enable_chat_agent = ask_confirm("enable_chat_agent?", default=True)
     enable_chat_db = ask_confirm("enable_chat_db_tools? (Lambda 빌드 선행)", default=True)
     # 실행 플래그는 체크박스 한 화면에서 토글
@@ -242,6 +273,8 @@ def flow_tool() -> bool:
     console.rule("[bold]Tool Gateway 배포[/bold]")
     if not run_preflight(preflight.TOOL_GW_TOOLS):
         console.print("[red]사전검증 실패[/red] — 누락 도구/인증을 해결한 뒤 다시 실행하세요.")
+        return False
+    if not tool_gateway_assets_ok():
         return False
 
     tfvars = {"project_name": "toolgw-demo", "environment": "dev", "aws_region": "us-east-1"}
@@ -343,8 +376,10 @@ def flow_teardown() -> bool:
         env = ask_select("환경", ["dev", "prod"])
         # destroy도 backend init이 필요 → 배포 시 쓴 region과 일치해야 state를 찾는다.
         region = ask_text("aws_region", default="ap-northeast-2")
-        bucket = ask_text("tfstate bucket", default="llm-gateway-tfstate")
-        tftable = ask_text("tfstate dynamodb table", default="llm-gateway-tflock")
+        # 배포와 동일한 계정 접미 규칙으로 default 구성(불일치 시 AccessDenied/301).
+        b_default, t_default = llm_tfstate_defaults(aws_account_id())
+        bucket = ask_text("tfstate bucket", default=b_default)
+        tftable = ask_text("tfstate dynamodb table", default=t_default)
         backend = BackendConfig(bucket=bucket, dynamodb_table=tftable, region=region)
         wf = build_llm_teardown(env=env, backend=backend)
         summary = (
@@ -356,6 +391,8 @@ def flow_teardown() -> bool:
     else:  # tool
         if not run_preflight(preflight.TOOL_GW_TOOLS):
             console.print("[red]사전검증 실패[/red] — 누락 도구/인증을 해결하세요.")
+            return False
+        if not tool_gateway_assets_ok():
             return False
         wf = build_tool_teardown()
         summary = "tool-gateway-dev 의 [bold]모든 terraform 리소스[/bold] (Gateway, Lambda tools, secrets 등)"
