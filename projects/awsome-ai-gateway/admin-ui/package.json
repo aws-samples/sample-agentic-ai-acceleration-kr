@@ -13,6 +13,10 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@aws-sdk/client-bedrock-agentcore": "^3.1085.0",
+    "@aws-sdk/client-cloudwatch": "^3.1085.0",
+    "@aws-sdk/client-cloudwatch-logs": "^3.1085.0",
+    "@aws-sdk/client-xray": "^3.1085.0",
     "@opentelemetry/auto-instrumentations-node": "^0.49.1",
     "@opentelemetry/exporter-trace-otlp-grpc": "^0.53.0",
     "@opentelemetry/resources": "^1.26.0",
@@ -39,6 +43,7 @@
     "@radix-ui/react-tabs": "^1.1.0",
     "@radix-ui/react-toast": "^1.2.1",
     "@radix-ui/react-tooltip": "^1.1.2",
+    "@uiw/react-json-view": "^2.0.0-alpha.39",
     "chart.js": "^4.4.4",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",

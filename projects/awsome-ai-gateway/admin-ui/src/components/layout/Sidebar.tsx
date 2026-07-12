@@ -15,9 +15,11 @@ import {
   UserCircle,
   Activity,
   Sparkles,
+  Wrench,
 } from 'lucide-react';
 import type { UserRole } from '@/types/enums';
 import { UserRole as UserRoleConst } from '@/types/enums';
+import { TOOL_GATEWAY_ENABLED } from '@/lib/tool-gateway/constants';
 import { ThemeToggle } from '@/components/common/ThemeToggle';
 import { BrandLogo } from '@/components/brand/BrandLogo';
 
@@ -75,6 +77,18 @@ const NAV_ITEMS: NavItem[] = [
     icon: <Activity size={18} />,
     allowedRoles: [UserRoleConst.ADMIN],
   },
+  // Tool Gateway 대시보드 — feature-flag(NEXT_PUBLIC_TOOL_GATEWAY_ENABLED)가
+  // 켜지고 gateway URL이 설정된 경우에만 노출(ADMIN 전용). 미설정 시 완전 비노출.
+  ...(TOOL_GATEWAY_ENABLED
+    ? [
+        {
+          label: 'Tool Gateway',
+          href: '/tools',
+          icon: <Wrench size={18} />,
+          allowedRoles: [UserRoleConst.ADMIN],
+        } as NavItem,
+      ]
+    : []),
   {
     label: 'BI Insight',
     href: '/chat',
