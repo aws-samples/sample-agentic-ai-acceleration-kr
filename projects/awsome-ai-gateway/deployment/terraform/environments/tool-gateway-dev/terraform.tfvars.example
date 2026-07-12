@@ -1,0 +1,71 @@
+project_name = "websearch-gw"
+environment  = "dev"
+aws_region   = "us-east-1"
+
+# ============================================================
+# Search Engines (toggle and provide API keys as needed)
+# ============================================================
+
+# Tavily: Hosted MCP server target
+enable_tavily    = true
+tavily_api_key   = "tvly-..." # Set your Tavily API key here
+
+# Brave: Hosted MCP server target (placeholder)
+enable_brave     = true
+brave_api_key    = "BSA..." # Set your Brave Search API key here
+
+# Serper: Lambda target
+enable_serper    = false
+serper_api_key   = "" # Set your Serper API key to enable
+
+# Exa: Lambda target
+enable_exa       = false
+exa_api_key      = "" # Set your Exa API key to enable
+
+# DuckDuckGo: Lambda target (no API key required)
+enable_duckduckgo = true
+
+# Perplexity: Lambda target
+enable_perplexity = false
+perplexity_api_key = "" # Set your Perplexity Sonar API key to enable
+
+# Anthropic: Lambda target (Claude built-in web search)
+enable_anthropic  = false
+anthropic_api_key = "" # Set your Anthropic API key to enable
+
+# Firecrawl: Lambda target
+enable_firecrawl  = false
+firecrawl_api_key = "" # Set your Firecrawl API key to enable
+
+# You.com: Lambda target
+enable_you = false
+you_api_key = "" # Set your You.com API key to enable
+
+# Tavily (Lambda): Lambda-backed Tavily target, distinct from the hosted
+# Tavily MCP server target above. Reuses tavily_api_key.
+enable_tavily_lambda = false
+
+# AgentCore Web Search Tool: fully-managed connector target backed by Amazon's
+# web index. No API key, queries stay within AWS. us-east-1 only. The target is
+# created by scripts/create-web-search-target.sh after apply (the AWS provider
+# can't express the connector target type yet).
+enable_web_search = false
+
+# ============================================================
+# Authentication
+# ============================================================
+
+auth_mode = "cognito" # or "external_oidc"
+
+# If using external_oidc:
+# external_oidc_issuer = "https://your-oidc-provider.com"
+# external_oidc_audience = "your-audience"
+
+cowork_redirect_uris = ["http://localhost:3000/callback"]
+
+# ============================================================
+# Observability
+# ============================================================
+
+enable_otlp_export = false
+# otlp_endpoint    = "http://localhost:4317"

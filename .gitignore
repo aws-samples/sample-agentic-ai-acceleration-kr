@@ -44,3 +44,7 @@ data/sample/*.csv
 
 # Evaluation / output
 evaluation/results/
+
+# Terraform / build artifacts (vendored modules only)
+projects/awsome-ai-gateway/deployment/terraform/modules/tool-gateway/**/.terraform/
+projects/awsome-ai-gateway/deployment/terraform/modules/tool-gateway/**/.build/

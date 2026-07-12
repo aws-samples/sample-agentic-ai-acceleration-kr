@@ -183,6 +183,86 @@ test_ingress() {
     done
 }
 
+# ---- 6. (선택) Tool Gateway tools/list ----
+test_tool_gateway_tools_list() {
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local gen_env="${script_dir}/../tool-gateway/dashboard.generated.env"
+
+    # Skip if env file does not exist (default: gateway not provisioned)
+    if [ ! -f "$gen_env" ]; then
+        echo ""
+        echo "━━━ 6. Tool Gateway tools/list (선택) ━━━"
+        warn "Tool Gateway 미프로비저닝 — tools/list 스킵"
+        return 0
+    fi
+
+    echo ""
+    echo "━━━ 6. Tool Gateway tools/list ━━━"
+
+    # Source env file safely with set -a/-e guards
+    set +u  # Allow unset variables temporarily
+    set -a
+    # shellcheck source=/dev/null
+    . "$gen_env"
+    set +a
+    set -u  # Re-enable unset variable check
+
+    # Validate required env vars
+    if [ -z "${NEXT_PUBLIC_TOOL_GATEWAY_URL:-}" ] || \
+       [ -z "${COGNITO_TOOL_TOKEN_ENDPOINT:-}" ] || \
+       [ -z "${COGNITO_TOOL_M2M_CLIENT_ID:-}" ] || \
+       [ -z "${COGNITO_TOOL_M2M_CLIENT_SECRET:-}" ]; then
+        warn "Tool Gateway env 불완전 — 스킵"
+        return 0
+    fi
+
+    # Fetch M2M token
+    local token
+    set +e
+    token=$(curl -s -X POST "$COGNITO_TOOL_TOKEN_ENDPOINT" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -d "grant_type=client_credentials" \
+        -d "client_id=$COGNITO_TOOL_M2M_CLIENT_ID" \
+        -d "client_secret=$COGNITO_TOOL_M2M_CLIENT_SECRET" \
+        ${COGNITO_TOOL_M2M_SCOPE:+-d "scope=$COGNITO_TOOL_M2M_SCOPE"} \
+        2>/dev/null | jq -r '.access_token // empty')
+    local token_exit=$?
+    set -e
+
+    if [ -z "$token" ] || [ "$token_exit" -ne 0 ]; then
+        fail "Tool Gateway: Cognito M2M 토큰 발급 실패"
+        return 0
+    fi
+
+    # POST JSON-RPC tools/list
+    local resp count
+    set +e
+    resp=$(curl -s -X POST "$NEXT_PUBLIC_TOOL_GATEWAY_URL" \
+        -H "Authorization: Bearer $token" \
+        -H "Content-Type: application/json" \
+        -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
+        2>/dev/null)
+    local resp_exit=$?
+    set -e
+
+    if [ $resp_exit -ne 0 ]; then
+        fail "Tool Gateway tools/list: 요청 실패"
+        return 0
+    fi
+
+    # Extract tool count from response
+    count=$(echo "$resp" | jq -r '(.result.tools // .tools // []) | length' 2>/dev/null || echo 0)
+
+    if [ "$count" -ge 1 ]; then
+        pass "Tool Gateway tools/list: $count tools"
+    else
+        fail "Tool Gateway tools/list: 0 tools 또는 오류 응답"
+    fi
+
+    return 0
+}
+
 # ---- main ----
 echo "=============================================================="
 echo "  LLM Gateway Smoke Test"
@@ -194,6 +274,7 @@ test_health_endpoints
 test_models_endpoint
 test_ingress
 test_bedrock_e2e
+test_tool_gateway_tools_list
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
