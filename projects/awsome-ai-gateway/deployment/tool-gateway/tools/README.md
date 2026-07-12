@@ -1,6 +1,11 @@
 # Lambda Search Handlers
 
-Python 3.12 Lambda handlers for the WebSearch Tool Gateway. Each handler implements a search engine interface following the standardized `SearchResponse` contract schema.
+Python 3.12 Lambda handlers for the WebSearch Tool Gateway. Each handler queries
+its provider and returns the provider's **native response as-is**, stamped only
+with `engine` and `latency_ms`. There is no common `SearchResponse` schema: the
+gateway feeds the JSON to the model verbatim, so preserving each provider's own
+shape keeps its richest fields intact (Perplexity's synthesized answer, Tavily's
+`answer`, Exa highlights) instead of flattening everything into one schema.
 
 ## Architecture
 
@@ -11,10 +16,10 @@ Python 3.12 Lambda handlers for the WebSearch Tool Gateway. Each handler impleme
   - Caches keys for the Lambda warm window
   - Raises RuntimeError if WORKLOAD_TOKEN or IDENTITY_PROVIDER_ARN is missing
 
-- **response.py** — Response normalization utilities
-  - `normalize_response()` — Converts raw results to SearchResponse schema
-  - `measure_latency()` — Decorator for timing execution
-  - `rfc3339_timestamp()` — Converts datetime to RFC3339 format
+- **response.py** — Response stamping utilities
+  - `stamp(payload, engine, latency_ms)` — Returns the provider payload with
+    `engine`/`latency_ms` added (provider shape preserved)
+  - `error_response(engine, latency_ms, error)` — Uniform error envelope
 
 - **otel.py** — Optional OpenTelemetry exporter
   - `get_tracer()` — Initializes OTEL tracer if OTEL_EXPORTER_OTLP_ENDPOINT is set
@@ -32,13 +37,10 @@ def lambda_handler(event, context):
 
     Event shape:
         {"query": str, "num_results": int, "country": str (optional)}
-    
-    Returns SearchResponse:
-        {
-            "results": [{title, url, snippet, score?, published_at?}, ...],
-            "engine": "serper|exa|duckduckgo|perplexity|tavily|brave",
-            "latency_ms": int
-        }
+
+    Returns the provider's native JSON, stamped with metadata:
+        { ...provider payload..., "engine": "<name>", "latency_ms": int }
+    On failure: { "engine": "<name>", "latency_ms": int, "error": str }
     """
 ```
 
@@ -67,15 +69,15 @@ def lambda_handler(event, context):
 - Model: `sonar-medium-online`
 - Requires: `WORKLOAD_TOKEN`, `IDENTITY_PROVIDER_ARN`
 - Supports: `query`, `num_results`
-- Returns: Citations from the model response
+- Returns: the native chat-completion response (synthesized answer + citations)
 
 #### Anthropic Handler (`anthropic/handler.py`)
 
 - API: `https://api.anthropic.com/v1/messages` (server-side `web_search` tool)
 - Model: `claude-haiku-4-5` (override via `ANTHROPIC_MODEL`)
 - Requires: `ANTHROPIC_API_KEY`
-- Supports: `query`, `num_results`
-- Returns: ranked results (snippet is best-effort `page_age`) + model `answer`
+- Supports: `query`
+- Returns: the native Messages response (content blocks: text + web_search_tool_result)
 
 #### Firecrawl Handler (`firecrawl/handler.py`)
 
@@ -89,14 +91,8 @@ def lambda_handler(event, context):
 - Requires: `YOU_API_KEY`
 - Supports: `query`, `num_results`
 
-#### Tavily Handler (Lambda) (`tavily_lambda/handler.py`)
-
-- API: `https://api.tavily.com/search`
-- Requires: `TAVILY_API_KEY` (reused from the Tavily key)
-- Distinct from the hosted Tavily MCP server target (`tavily`); this is the
-  Lambda-backed target named `tavily_lambda` to avoid a gateway name collision
-- Supports: `query`, `num_results`, `search_depth`, `topic`
-- Returns: ranked results + `answer`
+> Tavily is served by the hosted Tavily MCP server target (`tavily`), not a
+> Lambda handler.
 
 ## Environment Variables
 
@@ -142,7 +138,7 @@ def test_success(self, mock_get_api_key):
 - Malformed input (missing query, invalid num_results)
 - Upstream errors (5xx responses)
 - Missing API keys
-- Response normalization
+- Metadata stamping (`engine`/`latency_ms` added to the native payload)
 
 ## Development
 
@@ -175,7 +171,7 @@ ruff check .
 1. Create `<engine>/handler.py` with `lambda_handler(event, context)` function
 2. Import shared utilities: `from _shared.identity import get_api_key`
 3. Handle both Gateway event shape and direct invocation
-4. Return `normalize_response(results, engine, latency_ms)`
+4. Return `stamp(provider_payload, engine, latency_ms)` (preserve the provider's native shape)
 5. Add unit tests in `tests/test_handlers.py`
 6. Update `requirements.txt` if new dependencies
 
@@ -183,27 +179,39 @@ ruff check .
 
 **Input Schema** (passed by Gateway):
 
+The tool is named `web_search` and accepts the following properties. Each engine advertises only the properties it supports (capability-gated schema, generated per-engine in the Terraform gateway module):
+
+**Property Vocabulary:**
+- `query` (string, required) — Search query; always present
+- `num_results` (integer 1-20, optional) — Number of results to return; omitted for perplexity and anthropic
+- `country` (ISO 3166-1 alpha-2 string, optional) — Filter results by country
+- `freshness` (string: `day|week|month|year`, optional) — Filter results by recency; omitted for anthropic
+- `include_domains` (array of string, optional) — Include results from specific domains; advertised for exa, perplexity, anthropic, firecrawl
+- `exclude_domains` (array of string, optional) — Exclude results from specific domains; advertised for exa, perplexity, anthropic, firecrawl
+
+**Example input** (with all optional fields; engines advertise only supported properties):
+
 ```json
 {
   "query": "search query string",
   "num_results": 10,
-  "country": "US"
+  "country": "US",
+  "freshness": "week",
+  "include_domains": ["example.com"],
+  "exclude_domains": ["spam.com"]
 }
 ```
 
-**Output Schema** (SearchResponse):
+**Output** — the provider's native JSON, stamped with `engine` and `latency_ms`.
+There is no shared output schema: each engine returns its own shape. For example
+Serper returns its `organic`/`knowledgeGraph` fields, Perplexity returns the
+chat-completion response with the synthesized `answer` and `citations`, DuckDuckGo
+returns `{"results": [{title, href, body}, ...]}`. Only the two metadata keys are
+guaranteed:
 
 ```json
 {
-  "results": [
-    {
-      "title": "Result Title",
-      "url": "https://example.com",
-      "snippet": "Result snippet text",
-      "score": 0.95,
-      "published_at": "2025-01-15T10:30:00Z"
-    }
-  ],
+  "...": "provider's native payload, preserved verbatim",
   "engine": "serper",
   "latency_ms": 234
 }

@@ -4,7 +4,7 @@ import time
 from typing import Any, Dict
 import requests
 from _shared.identity import get_api_key
-from _shared.response import normalize_response
+from _shared.response import error_response, stamp
 from _shared.search_params import apply_perplexity
 from _shared.otel import create_span
 from _shared.caller_identity import extract_caller_identity
@@ -31,14 +31,13 @@ def lambda_handler(event, context):
         num_results = int(input_params.get("num_results", 10))
         country = input_params.get("country", "")
         freshness = input_params.get("freshness", "")
+        include_domains = input_params.get("include_domains")
+        exclude_domains = input_params.get("exclude_domains")
 
         if not query:
-            return {
-                "results": [],
-                "engine": "perplexity",
-                "latency_ms": int((time.time() - start_time) * 1000),
-                "error": "Missing required parameter: query",
-            }
+            return error_response(
+                "perplexity", int((time.time() - start_time) * 1000),
+                "Missing required parameter: query")
 
         # Clamp num_results to contract limits
         num_results = max(1, min(num_results, 20))
@@ -65,7 +64,8 @@ def lambda_handler(event, context):
                 ],
                 "max_tokens": 500,
             }
-            apply_perplexity(payload, freshness, country)
+            apply_perplexity(payload, freshness, country,
+                             include_domains=include_domains, exclude_domains=exclude_domains)
 
             response = requests.post(
                 "https://api.perplexity.ai/chat/completions",
@@ -76,32 +76,16 @@ def lambda_handler(event, context):
             response.raise_for_status()
             data = response.json()
 
-        # Extract citations from response (Perplexity provides citations in the message)
-        results = []
-        if "citations" in data:
-            for idx, citation in enumerate(data.get("citations", [])[:num_results]):
-                results.append({
-                    "title": f"Result {idx + 1}",
-                    "url": citation,
-                    "snippet": "Online search result from Perplexity",
-                })
-
+        # Perplexity is a chat-completion API, not a search API: its value is the
+        # synthesized answer (choices[].message.content) plus citations. Return
+        # the native payload as-is instead of discarding the answer and faking
+        # "Result N" placeholders. The model reads the answer + citations directly.
         latency_ms = int((time.time() - start_time) * 1000)
-        return normalize_response(results, "perplexity", latency_ms)
+        return stamp(data, "perplexity", latency_ms)
 
     except requests.exceptions.RequestException as e:
         latency_ms = int((time.time() - start_time) * 1000)
-        return {
-            "results": [],
-            "engine": "perplexity",
-            "latency_ms": latency_ms,
-            "error": f"Perplexity API error: {str(e)}",
-        }
+        return error_response("perplexity", latency_ms, f"Perplexity API error: {str(e)}")
     except Exception as e:
         latency_ms = int((time.time() - start_time) * 1000)
-        return {
-            "results": [],
-            "engine": "perplexity",
-            "latency_ms": latency_ms,
-            "error": f"Handler error: {str(e)}",
-        }
+        return error_response("perplexity", latency_ms, f"Handler error: {str(e)}")

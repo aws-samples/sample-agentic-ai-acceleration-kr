@@ -1,5 +1,50 @@
 locals {
   gateway_name = "${var.project_name}-${var.environment}-gateway"
+
+  # Which web_search properties each Lambda engine actually honors, verified
+  # against each provider's API docs (see specs/2026-07-12-per-engine-search-schema-design.md).
+  # Engines absent from this map fall back to base_search_properties.
+  base_search_properties = ["query", "num_results", "country", "freshness"]
+
+  engine_capabilities = {
+    serper     = ["query", "num_results", "country", "freshness"]
+    exa        = ["query", "num_results", "country", "freshness", "include_domains", "exclude_domains"]
+    duckduckgo = ["query", "num_results", "country", "freshness"]
+    perplexity = ["query", "country", "freshness", "include_domains", "exclude_domains"]
+    brave      = ["query", "num_results", "country", "freshness"]
+    anthropic  = ["query", "country", "include_domains", "exclude_domains"]
+    you        = ["query", "num_results", "country", "freshness"]
+    firecrawl  = ["query", "num_results", "country", "freshness", "include_domains", "exclude_domains"]
+  }
+
+  # Schema fragment for each property. query is required; all others optional.
+  # include_domains/exclude_domains are arrays of string.
+  search_property_catalog = {
+    query = {
+      type        = "string", required = true, is_array = false
+      description = "The search query string."
+    }
+    num_results = {
+      type        = "integer", required = false, is_array = false
+      description = "Maximum number of results to return (1-20)."
+    }
+    country = {
+      type        = "string", required = false, is_array = false
+      description = "Two-letter country code (e.g., KR, US) to localize results."
+    }
+    freshness = {
+      type        = "string", required = false, is_array = false
+      description = "Restrict results by recency. One of: day, week, month, year."
+    }
+    include_domains = {
+      type        = "array", required = false, is_array = true
+      description = "Only return results from these domains (e.g., [\"example.com\"])."
+    }
+    exclude_domains = {
+      type        = "array", required = false, is_array = true
+      description = "Omit results from these domains. Behavior when combined with include_domains varies by engine."
+    }
+  }
 }
 
 # ============================================================
@@ -152,8 +197,9 @@ resource "time_sleep" "wait_for_iam_propagation" {
 # Lambda-backed Gateway Targets
 # ============================================================
 # Every Lambda search tool exposes the same MCP tool:
-#   web_search(query, num_results, country, freshness).
-# Schema is defined inline because all engines share an identical contract.
+#   web_search with a per-engine capability-gated subset of:
+#   query, num_results, country, freshness, include_domains, exclude_domains.
+# Schema is defined inline with per-engine property filtering via engine_capabilities.
 # country/freshness are normalized here and each handler translates them into
 # its provider's native parameters (see tools/_shared/search_params.py).
 
@@ -162,7 +208,7 @@ resource "aws_bedrockagentcore_gateway_target" "lambda" {
 
   gateway_identifier = aws_bedrockagentcore_gateway.this.gateway_id
   # Gateway target names must match ^([0-9a-zA-Z][-]?){1,100}$ — no underscores,
-  # so engine keys like "tavily_lambda" are rendered with a hyphen here.
+  # so any engine key containing an underscore is rendered with a hyphen here.
   name        = replace(each.key, "_", "-")
   description = "Web search via ${each.key}"
 
@@ -181,29 +227,25 @@ resource "aws_bedrockagentcore_gateway_target" "lambda" {
             input_schema {
               type        = "object"
               description = "Search query parameters."
-              property {
-                name        = "query"
-                type        = "string"
-                description = "The search query string."
-                required    = true
-              }
-              property {
-                name        = "num_results"
-                type        = "integer"
-                description = "Maximum number of results to return (1-20)."
-                required    = false
-              }
-              property {
-                name        = "country"
-                type        = "string"
-                description = "Two-letter country code (e.g., KR, US) to localize results. Not all engines honor this."
-                required    = false
-              }
-              property {
-                name        = "freshness"
-                type        = "string"
-                description = "Restrict results by recency. One of: day, week, month, year. Not all engines honor this."
-                required    = false
+
+              dynamic "property" {
+                for_each = {
+                  for name in lookup(local.engine_capabilities, each.key, local.base_search_properties) :
+                  name => local.search_property_catalog[name]
+                }
+                content {
+                  name        = property.key
+                  type        = property.value.type
+                  description = property.value.description
+                  required    = property.value.required
+
+                  dynamic "items" {
+                    for_each = property.value.is_array ? [1] : []
+                    content {
+                      type = "string"
+                    }
+                  }
+                }
               }
             }
           }

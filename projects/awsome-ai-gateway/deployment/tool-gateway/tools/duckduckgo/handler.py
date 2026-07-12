@@ -11,7 +11,7 @@ try:
 except ImportError:
     DDGS_AVAILABLE = False
 
-from _shared.response import normalize_response
+from _shared.response import error_response, stamp
 from _shared.search_params import ddg_kwargs
 from _shared.otel import create_span
 from _shared.caller_identity import extract_caller_identity
@@ -43,12 +43,9 @@ def lambda_handler(event, context):
         freshness = input_params.get("freshness", "")
 
         if not query:
-            return {
-                "results": [],
-                "engine": "duckduckgo",
-                "latency_ms": int((time.time() - start_time) * 1000),
-                "error": "Missing required parameter: query",
-            }
+            return error_response(
+                "duckduckgo", int((time.time() - start_time) * 1000),
+                "Missing required parameter: query")
 
         # Clamp num_results to contract limits
         num_results = max(1, min(num_results, 20))
@@ -58,23 +55,11 @@ def lambda_handler(event, context):
             ddgs = DDGS(timeout=10)
             raw_results = ddgs.text(query, max_results=num_results, **ddg_kwargs(freshness, country))
 
-        # Parse results
-        results = []
-        for item in raw_results:
-            results.append({
-                "title": item.get("title", ""),
-                "url": item.get("href", ""),
-                "snippet": item.get("body", ""),
-            })
-
+        # DDGS returns a bare list of {title, href, body}; wrap it (no provider
+        # envelope exists) but keep the items' native keys verbatim.
         latency_ms = int((time.time() - start_time) * 1000)
-        return normalize_response(results, "duckduckgo", latency_ms)
+        return stamp({"results": list(raw_results)}, "duckduckgo", latency_ms)
 
     except Exception as e:
         latency_ms = int((time.time() - start_time) * 1000)
-        return {
-            "results": [],
-            "engine": "duckduckgo",
-            "latency_ms": latency_ms,
-            "error": f"Handler error: {str(e)}",
-        }
+        return error_response("duckduckgo", latency_ms, f"Handler error: {str(e)}")

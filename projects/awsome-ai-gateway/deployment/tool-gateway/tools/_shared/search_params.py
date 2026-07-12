@@ -76,6 +76,28 @@ def normalize_country(value: Optional[str]) -> Optional[str]:
     return v if len(v) == 2 and v.isalpha() else None
 
 
+def normalize_domains(value: Any) -> list:
+    """Normalize include/exclude domains to a clean list of strings.
+
+    Accepts either a list or a comma-separated string. Trims whitespace, drops
+    empty entries, and coerces non-strings via str(). Returns [] when absent.
+    """
+    if not value:
+        return []
+    if isinstance(value, str):
+        items = value.split(",")
+    elif isinstance(value, (list, tuple)):
+        items = value
+    else:
+        items = [value]
+    out = []
+    for item in items:
+        s = str(item).strip()
+        if s:
+            out.append(s)
+    return out
+
+
 def apply_brave(params: Dict[str, Any], freshness: Optional[str], country: Optional[str]) -> Dict[str, Any]:
     f = normalize_freshness(freshness)
     if f:
@@ -96,17 +118,26 @@ def apply_serper(payload: Dict[str, Any], freshness: Optional[str], country: Opt
     return payload
 
 
-def apply_firecrawl(payload: Dict[str, Any], freshness: Optional[str], country: Optional[str]) -> Dict[str, Any]:
+def apply_firecrawl(payload: Dict[str, Any], freshness: Optional[str], country: Optional[str],
+                    include_domains=None, exclude_domains=None) -> Dict[str, Any]:
     f = normalize_freshness(freshness)
     if f:
         payload["tbs"] = _GOOGLE_TBS[f]
     c = normalize_country(country)
     if c:
         payload["country"] = c
+    # Firecrawl treats include/exclude as mutually exclusive; include wins.
+    inc = normalize_domains(include_domains)
+    exc = normalize_domains(exclude_domains)
+    if inc:
+        payload["includeDomains"] = inc
+    elif exc:
+        payload["excludeDomains"] = exc
     return payload
 
 
 def apply_exa(payload: Dict[str, Any], freshness: Optional[str], country: Optional[str],
+              include_domains=None, exclude_domains=None,
               now: Optional[datetime] = None) -> Dict[str, Any]:
     """Exa has no freshness enum; it filters by absolute publish date range."""
     f = normalize_freshness(freshness)
@@ -117,6 +148,12 @@ def apply_exa(payload: Dict[str, Any], freshness: Optional[str], country: Option
     c = normalize_country(country)
     if c:
         payload["userLocation"] = c
+    inc = normalize_domains(include_domains)
+    if inc:
+        payload["includeDomains"] = inc
+    exc = normalize_domains(exclude_domains)
+    if exc:
+        payload["excludeDomains"] = exc
     return payload
 
 
@@ -140,7 +177,8 @@ def apply_you(params: Dict[str, Any], freshness: Optional[str], country: Optiona
     return params
 
 
-def apply_perplexity(payload: Dict[str, Any], freshness: Optional[str], country: Optional[str]) -> Dict[str, Any]:
+def apply_perplexity(payload: Dict[str, Any], freshness: Optional[str], country: Optional[str],
+                     include_domains=None, exclude_domains=None) -> Dict[str, Any]:
     f = normalize_freshness(freshness)
     if f:
         payload["search_recency_filter"] = f  # top-level: hour|day|week|month|year
@@ -149,6 +187,12 @@ def apply_perplexity(payload: Dict[str, Any], freshness: Optional[str], country:
         # Perplexity takes country nested under web_search_options, not top-level.
         opts = payload.setdefault("web_search_options", {})
         opts.setdefault("user_location", {})["country"] = c
+    # Perplexity has one domain list; excludes are expressed with a "-" prefix.
+    domain_filter = normalize_domains(include_domains) + [
+        f"-{d}" for d in normalize_domains(exclude_domains)
+    ]
+    if domain_filter:
+        payload["search_domain_filter"] = domain_filter
     return payload
 
 

@@ -7,7 +7,7 @@ from typing import Any, Dict
 import requests
 
 from _shared.identity import get_api_key
-from _shared.response import normalize_response
+from _shared.response import error_response, stamp
 from _shared.search_params import apply_serper
 from _shared.otel import create_span
 from _shared.caller_identity import extract_caller_identity
@@ -39,12 +39,9 @@ def lambda_handler(event, context):
         freshness = input_params.get("freshness", "")
 
         if not query:
-            return {
-                "results": [],
-                "engine": "serper",
-                "latency_ms": int((time.time() - start_time) * 1000),
-                "error": "Missing required parameter: query",
-            }
+            return error_response(
+                "serper", int((time.time() - start_time) * 1000),
+                "Missing required parameter: query")
 
         # Clamp num_results to contract limits
         num_results = max(1, min(num_results, 20))
@@ -73,33 +70,14 @@ def lambda_handler(event, context):
             response.raise_for_status()
             data = response.json()
 
-        # Parse results
-        raw_results = data.get("organic", [])
-        results = []
-        for item in raw_results:
-            results.append({
-                "title": item.get("title", ""),
-                "url": item.get("link", ""),
-                "snippet": item.get("snippet", ""),
-                "published_at": item.get("date") or None,
-            })
-
+        # Return Serper's native payload (organic/answerBox/knowledgeGraph/…)
+        # as-is; the model reads the richest form.
         latency_ms = int((time.time() - start_time) * 1000)
-        return normalize_response(results, "serper", latency_ms)
+        return stamp(data, "serper", latency_ms)
 
     except requests.exceptions.RequestException as e:
         latency_ms = int((time.time() - start_time) * 1000)
-        return {
-            "results": [],
-            "engine": "serper",
-            "latency_ms": latency_ms,
-            "error": f"Serper API error: {str(e)}",
-        }
+        return error_response("serper", latency_ms, f"Serper API error: {str(e)}")
     except Exception as e:
         latency_ms = int((time.time() - start_time) * 1000)
-        return {
-            "results": [],
-            "engine": "serper",
-            "latency_ms": latency_ms,
-            "error": f"Handler error: {str(e)}",
-        }
+        return error_response("serper", latency_ms, f"Handler error: {str(e)}")

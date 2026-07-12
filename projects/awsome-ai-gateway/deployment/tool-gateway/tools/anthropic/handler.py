@@ -7,8 +7,9 @@ key comes from the ANTHROPIC_API_KEY env var (AgentCore Identity fallback).
 
 Note: Claude's web_search returns result url/title/page_age but the page body is
 encrypted_content (only decryptable inside Claude's context), so there is no
-plaintext snippet — it is left empty and page_age is surfaced as published_at
-instead. The model's synthesized text is returned as the ``answer`` field.
+plaintext snippet. We return Claude's native Messages response as-is — its
+content blocks carry both the synthesized text and the web_search_tool_result
+citations — so the model downstream sees the full, unflattened payload.
 """
 
 import os
@@ -18,9 +19,10 @@ from typing import Any, Dict
 import requests
 
 from _shared.identity import get_api_key
-from _shared.response import normalize_response
+from _shared.response import error_response, stamp
 from _shared.otel import create_span
 from _shared.caller_identity import extract_caller_identity
+from _shared.search_params import normalize_country, normalize_domains
 
 ANTHROPIC_VERSION = "2023-06-01"
 # Cheapest model that supports the web_search tool; override via env.
@@ -36,6 +38,23 @@ def extract_gateway_input(event: Dict[str, Any]) -> Dict[str, str]:
     return event
 
 
+def _build_web_search_tool(country, include_domains, exclude_domains):
+    """Build the Anthropic web_search tool config with optional localization/domains.
+
+    Anthropic's web_search tool has no freshness/recency parameter, so it is not
+    accepted here. allowed_domains and blocked_domains are mutually exclusive;
+    include (allowed) wins when both are provided.
+    """
+    tool = {"type": WEB_SEARCH_TOOL_TYPE, "name": "web_search", "max_uses": 1}
+    if country:
+        tool["user_location"] = {"type": "approximate", "country": country}
+    if include_domains:
+        tool["allowed_domains"] = include_domains
+    elif exclude_domains:
+        tool["blocked_domains"] = exclude_domains
+    return tool
+
+
 def lambda_handler(event, context):
     """Lambda handler for Anthropic Claude built-in web search."""
     start_time = time.time()
@@ -47,18 +66,14 @@ def lambda_handler(event, context):
         # Extract input from event
         input_params = extract_gateway_input(event)
         query = input_params.get("query") or input_params.get("q")
-        num_results = int(input_params.get("num_results", 10))
+        country = normalize_country(input_params.get("country", ""))
+        include_domains = normalize_domains(input_params.get("include_domains"))
+        exclude_domains = normalize_domains(input_params.get("exclude_domains"))
 
         if not query:
-            return {
-                "results": [],
-                "engine": "anthropic",
-                "latency_ms": int((time.time() - start_time) * 1000),
-                "error": "Missing required parameter: query",
-            }
-
-        # Clamp num_results to contract limits
-        num_results = max(1, min(num_results, 20))
+            return error_response(
+                "anthropic", int((time.time() - start_time) * 1000),
+                "Missing required parameter: query")
 
         # Get API key from AgentCore Identity
         with create_span("get_anthropic_api_key"):
@@ -76,9 +91,7 @@ def lambda_handler(event, context):
             payload = {
                 "model": MODEL,
                 "max_tokens": MAX_TOKENS,
-                "tools": [
-                    {"type": WEB_SEARCH_TOOL_TYPE, "name": "web_search", "max_uses": 1}
-                ],
+                "tools": [_build_web_search_tool(country, include_domains, exclude_domains)],
                 "messages": [
                     {
                         "role": "user",
@@ -99,53 +112,14 @@ def lambda_handler(event, context):
             response.raise_for_status()
             data = response.json()
 
-        # Parse content blocks: text -> answer, web_search_tool_result -> results
-        content = data.get("content") or []
-        results = []
-        answer_parts = []
-        for block in content:
-            btype = block.get("type")
-            if btype == "text":
-                text = block.get("text", "")
-                if text:
-                    answer_parts.append(text)
-            elif btype == "web_search_tool_result":
-                hits = block.get("content")
-                # An error during search comes back as a dict, not a list.
-                if not isinstance(hits, list):
-                    continue
-                for hit in hits:
-                    if hit.get("type") != "web_search_result":
-                        continue
-                    # Claude's web_search has no plaintext snippet (page body is
-                    # encrypted_content), but it does expose page_age as the
-                    # publish date. Surface it as published_at, not snippet.
-                    results.append({
-                        "title": hit.get("title", ""),
-                        "url": hit.get("url", ""),
-                        "snippet": "",
-                        "published_at": hit.get("page_age") or None,
-                    })
-
-        results = results[:num_results]
-        answer = "\n".join(answer_parts).strip() or None
-
+        # Return Claude's native Messages response (content[] with text and
+        # web_search_tool_result blocks) as-is.
         latency_ms = int((time.time() - start_time) * 1000)
-        return normalize_response(results, "anthropic", latency_ms, answer=answer)
+        return stamp(data, "anthropic", latency_ms)
 
     except requests.exceptions.RequestException as e:
         latency_ms = int((time.time() - start_time) * 1000)
-        return {
-            "results": [],
-            "engine": "anthropic",
-            "latency_ms": latency_ms,
-            "error": f"Anthropic API error: {str(e)}",
-        }
+        return error_response("anthropic", latency_ms, f"Anthropic API error: {str(e)}")
     except Exception as e:
         latency_ms = int((time.time() - start_time) * 1000)
-        return {
-            "results": [],
-            "engine": "anthropic",
-            "latency_ms": latency_ms,
-            "error": f"Handler error: {str(e)}",
-        }
+        return error_response("anthropic", latency_ms, f"Handler error: {str(e)}")

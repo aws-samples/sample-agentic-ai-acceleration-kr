@@ -7,7 +7,7 @@ from typing import Any, Dict
 import requests
 
 from _shared.identity import get_api_key
-from _shared.response import normalize_response
+from _shared.response import error_response, stamp
 from _shared.search_params import apply_exa
 from _shared.otel import create_span
 from _shared.caller_identity import extract_caller_identity
@@ -34,14 +34,13 @@ def lambda_handler(event, context):
         num_results = int(input_params.get("num_results", 10))
         country = input_params.get("country", "")
         freshness = input_params.get("freshness", "")
+        include_domains = input_params.get("include_domains")
+        exclude_domains = input_params.get("exclude_domains")
 
         if not query:
-            return {
-                "results": [],
-                "engine": "exa",
-                "latency_ms": int((time.time() - start_time) * 1000),
-                "error": "Missing required parameter: query",
-            }
+            return error_response(
+                "exa", int((time.time() - start_time) * 1000),
+                "Missing required parameter: query")
 
         # Clamp num_results to contract limits
         num_results = max(1, min(num_results, 20))
@@ -60,7 +59,8 @@ def lambda_handler(event, context):
                 "numResults": num_results,
                 "useAutoprompt": False,  # Deterministic results
             }
-            apply_exa(payload, freshness, country)
+            apply_exa(payload, freshness, country,
+                      include_domains=include_domains, exclude_domains=exclude_domains)
 
             response = requests.post(
                 "https://api.exa.ai/search",
@@ -71,36 +71,13 @@ def lambda_handler(event, context):
             response.raise_for_status()
             data = response.json()
 
-        # Parse results
-        raw_results = data.get("results", [])
-        results = []
-        for item in raw_results:
-            # Exa's /search response carries no relevance score, so we omit it
-            # (it would always be null). publishedDate/favicon are always present.
-            results.append({
-                "title": item.get("title", ""),
-                "url": item.get("url", ""),
-                "snippet": item.get("text", ""),
-                "published_at": item.get("publishedDate") or None,
-                "favicon": item.get("favicon") or None,
-            })
-
+        # Return Exa's native payload (results with text/highlights/…) as-is.
         latency_ms = int((time.time() - start_time) * 1000)
-        return normalize_response(results, "exa", latency_ms)
+        return stamp(data, "exa", latency_ms)
 
     except requests.exceptions.RequestException as e:
         latency_ms = int((time.time() - start_time) * 1000)
-        return {
-            "results": [],
-            "engine": "exa",
-            "latency_ms": latency_ms,
-            "error": f"Exa API error: {str(e)}",
-        }
+        return error_response("exa", latency_ms, f"Exa API error: {str(e)}")
     except Exception as e:
         latency_ms = int((time.time() - start_time) * 1000)
-        return {
-            "results": [],
-            "engine": "exa",
-            "latency_ms": latency_ms,
-            "error": f"Handler error: {str(e)}",
-        }
+        return error_response("exa", latency_ms, f"Handler error: {str(e)}")

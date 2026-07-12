@@ -6,7 +6,7 @@ from typing import Any, Dict
 import requests
 
 from _shared.identity import get_api_key
-from _shared.response import normalize_response
+from _shared.response import error_response, stamp
 from _shared.search_params import apply_firecrawl
 from _shared.otel import create_span
 from _shared.caller_identity import extract_caller_identity
@@ -33,14 +33,13 @@ def lambda_handler(event, context):
         num_results = int(input_params.get("num_results", 10))
         country = input_params.get("country", "")
         freshness = input_params.get("freshness", "")
+        include_domains = input_params.get("include_domains")
+        exclude_domains = input_params.get("exclude_domains")
 
         if not query:
-            return {
-                "results": [],
-                "engine": "firecrawl",
-                "latency_ms": int((time.time() - start_time) * 1000),
-                "error": "Missing required parameter: query",
-            }
+            return error_response(
+                "firecrawl", int((time.time() - start_time) * 1000),
+                "Missing required parameter: query")
 
         # Clamp num_results to contract limits
         num_results = max(1, min(num_results, 20))
@@ -58,7 +57,8 @@ def lambda_handler(event, context):
                 "Content-Type": "application/json",
             }
             payload = {"query": query, "limit": num_results}
-            apply_firecrawl(payload, freshness, country)
+            apply_firecrawl(payload, freshness, country,
+                            include_domains=include_domains, exclude_domains=exclude_domains)
 
             response = requests.post(
                 "https://api.firecrawl.dev/v1/search",
@@ -69,36 +69,13 @@ def lambda_handler(event, context):
             response.raise_for_status()
             data = response.json()
 
-        # Parse results
-        raw_results = data.get("data", [])
-        results = []
-        for item in raw_results:
-            snippet = item.get("description", "")
-            if not snippet:
-                markdown = item.get("markdown", "") or ""
-                snippet = markdown[:500]
-            results.append({
-                "title": item.get("title", ""),
-                "url": item.get("url", ""),
-                "snippet": snippet,
-            })
-
+        # Return Firecrawl's native payload (data[] with markdown/metadata/…) as-is.
         latency_ms = int((time.time() - start_time) * 1000)
-        return normalize_response(results, "firecrawl", latency_ms)
+        return stamp(data, "firecrawl", latency_ms)
 
     except requests.exceptions.RequestException as e:
         latency_ms = int((time.time() - start_time) * 1000)
-        return {
-            "results": [],
-            "engine": "firecrawl",
-            "latency_ms": latency_ms,
-            "error": f"Firecrawl API error: {str(e)}",
-        }
+        return error_response("firecrawl", latency_ms, f"Firecrawl API error: {str(e)}")
     except Exception as e:
         latency_ms = int((time.time() - start_time) * 1000)
-        return {
-            "results": [],
-            "engine": "firecrawl",
-            "latency_ms": latency_ms,
-            "error": f"Handler error: {str(e)}",
-        }
+        return error_response("firecrawl", latency_ms, f"Handler error: {str(e)}")

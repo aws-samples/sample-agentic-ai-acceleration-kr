@@ -1,71 +1,33 @@
-"""Response normalization and utilities for search handlers."""
+"""Response stamping for search handlers.
 
-import time
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+Each engine returns its provider's native payload as-is; we only stamp two
+metadata fields the rest of the stack reads:
+
+  - ``engine``     — which target produced this (audit / trace summary).
+  - ``latency_ms`` — end-to-end handler time.
+
+The gateway feeds this JSON to the model VERBATIM (raw_text), so preserving the
+provider's own shape keeps every provider's richest fields intact — Perplexity's
+synthesized answer, Tavily's ``answer``, Exa highlights — instead of flattening
+them into one lowest-common-denominator schema.
+"""
+
+from typing import Any, Dict
 
 
-def normalize_response(
-    results: List[Dict[str, Any]],
-    engine: str,
-    latency_ms: int,
-    answer: Optional[str] = None,
-) -> Dict[str, Any]:
+def stamp(payload: Dict[str, Any], engine: str, latency_ms: int) -> Dict[str, Any]:
+    """Return the provider payload with ``engine``/``latency_ms`` added.
+
+    A shallow copy is made so the caller's dict is not mutated. The provider's
+    own keys win only if they collide with our metadata — they never do in
+    practice, but we stamp last to guarantee the metadata is present.
     """
-    Normalize search results to the contract schema.
-
-    Args:
-        results: List of result dicts with title, url, snippet, and optional score/published_at/favicon
-        engine: Engine name (serper, exa, duckduckgo, perplexity, tavily, brave)
-        latency_ms: Query execution time in milliseconds
-        answer: Optional provider-generated answer/summary (e.g. anthropic, tavily)
-
-    Returns:
-        Response dict matching the SearchResponse schema
-    """
-    normalized_results = []
-    for result in results:
-        normalized_results.append({
-            "title": result.get("title", ""),
-            "url": result.get("url", ""),
-            "snippet": result.get("snippet", ""),
-            "score": result.get("score"),
-            "published_at": result.get("published_at"),
-            "favicon": result.get("favicon"),
-        })
-
-    response = {
-        "results": normalized_results,
-        "engine": engine,
-        "latency_ms": latency_ms,
-    }
-
-    if answer:
-        response["answer"] = answer
-
-    return response
+    out = dict(payload)
+    out["engine"] = engine
+    out["latency_ms"] = latency_ms
+    return out
 
 
-def measure_latency(func):
-    """Decorator to measure function execution time and return latency_ms."""
-    def wrapper(*args, **kwargs):
-        start = time.time()
-        result = func(*args, **kwargs)
-        latency_ms = int((time.time() - start) * 1000)
-        return result, latency_ms
-    return wrapper
-
-
-def rfc3339_timestamp(dt: Optional[datetime] = None) -> Optional[str]:
-    """
-    Convert datetime to RFC3339 string (ISO 8601 format).
-
-    Args:
-        dt: datetime object (defaults to None for optional fields)
-
-    Returns:
-        RFC3339-formatted string or None
-    """
-    if dt is None:
-        return None
-    return dt.isoformat() + "Z" if not dt.isoformat().endswith("Z") else dt.isoformat()
+def error_response(engine: str, latency_ms: int, error: str) -> Dict[str, Any]:
+    """Uniform error envelope (the one shape we DO keep consistent)."""
+    return {"engine": engine, "latency_ms": latency_ms, "error": error}

@@ -121,8 +121,8 @@ class TestSerperHandler:
         result = lambda_handler(event, None)
 
         assert result["engine"] == "serper"
-        assert len(result["results"]) == 2
-        assert result["results"][0]["title"] == "Result 1"
+        assert len(result["organic"]) == 2
+        assert result["organic"][0]["title"] == "Result 1"
         assert "latency_ms" in result
 
     @patch("_shared.identity.get_api_key")
@@ -136,7 +136,6 @@ class TestSerperHandler:
         result = lambda_handler(event, None)
 
         assert result["engine"] == "serper"
-        assert len(result["results"]) == 0
         assert "error" in result
 
     @responses.activate
@@ -157,7 +156,6 @@ class TestSerperHandler:
         result = lambda_handler(event, None)
 
         assert result["engine"] == "serper"
-        assert len(result["results"]) == 0
         assert "error" in result
 
 
@@ -204,7 +202,6 @@ class TestExaHandler:
         result = lambda_handler(event, None)
 
         assert result["engine"] == "exa"
-        assert len(result["results"]) == 0
         assert "error" in result
 
 
@@ -240,7 +237,6 @@ class TestDuckDuckGoHandler:
         result = lambda_handler(event, None)
 
         assert result["engine"] == "duckduckgo"
-        assert len(result["results"]) == 0
         assert "error" in result
 
 
@@ -271,7 +267,7 @@ class TestPerplexityHandler:
         result = lambda_handler(event, None)
 
         assert result["engine"] == "perplexity"
-        assert len(result["results"]) >= 1
+        assert result["citations"] == ["https://example.com/1", "https://example.com/2"]
 
     @responses.activate
     @patch("_shared.identity.get_api_key")
@@ -291,7 +287,6 @@ class TestPerplexityHandler:
         result = lambda_handler(event, None)
 
         assert result["engine"] == "perplexity"
-        assert len(result["results"]) == 0
         assert "error" in result
 
 
@@ -332,9 +327,9 @@ class TestBraveHandler:
         result = lambda_handler(event, None)
 
         assert result["engine"] == "brave"
-        assert len(result["results"]) == 2
-        assert result["results"][0]["title"] == "Result 1"
-        assert result["results"][0]["snippet"] == "Snippet 1"
+        assert len(result["web"]["results"]) == 2
+        assert result["web"]["results"][0]["title"] == "Result 1"
+        assert result["web"]["results"][0]["description"] == "Snippet 1"
 
     @patch("_shared.identity.get_api_key")
     def test_missing_query(self, mock_get_api_key):
@@ -347,7 +342,6 @@ class TestBraveHandler:
         result = lambda_handler(event, None)
 
         assert result["engine"] == "brave"
-        assert len(result["results"]) == 0
         assert "error" in result
 
     @responses.activate
@@ -368,7 +362,6 @@ class TestBraveHandler:
         result = lambda_handler(event, None)
 
         assert result["engine"] == "brave"
-        assert len(result["results"]) == 0
         assert "error" in result
 
 
@@ -378,7 +371,7 @@ class TestAnthropicHandler:
     @responses.activate
     @patch("_shared.identity.get_api_key")
     def test_success(self, mock_get_api_key):
-        """Test successful Anthropic query (results + answer)."""
+        """Test successful Anthropic query (native Messages content blocks)."""
         mock_get_api_key.return_value = "test-api-key"
 
         responses.add(
@@ -409,9 +402,9 @@ class TestAnthropicHandler:
         result = lambda_handler(event, None)
 
         assert result["engine"] == "anthropic"
-        assert len(result["results"]) == 1
-        assert result["results"][0]["title"] == "Result 1"
-        assert result["answer"] == "Here is a summary."
+        assert result["content"][0]["type"] == "web_search_tool_result"
+        assert result["content"][0]["content"][0]["title"] == "Result 1"
+        assert result["content"][1]["text"] == "Here is a summary."
 
     @patch("_shared.identity.get_api_key")
     def test_missing_query(self, mock_get_api_key):
@@ -423,7 +416,6 @@ class TestAnthropicHandler:
         result = lambda_handler({}, None)
 
         assert result["engine"] == "anthropic"
-        assert len(result["results"]) == 0
         assert "error" in result
 
     @responses.activate
@@ -443,7 +435,6 @@ class TestAnthropicHandler:
         result = lambda_handler({"query": "test search"}, None)
 
         assert result["engine"] == "anthropic"
-        assert len(result["results"]) == 0
         assert "error" in result
 
 
@@ -476,8 +467,8 @@ class TestFirecrawlHandler:
         result = lambda_handler({"query": "test search"}, None)
 
         assert result["engine"] == "firecrawl"
-        assert len(result["results"]) == 1
-        assert result["results"][0]["snippet"] == "Snippet 1"
+        assert len(result["data"]) == 1
+        assert result["data"][0]["description"] == "Snippet 1"
 
     @patch("_shared.identity.get_api_key")
     def test_missing_api_key(self, mock_get_api_key):
@@ -489,7 +480,6 @@ class TestFirecrawlHandler:
         result = lambda_handler({"query": "test search"}, None)
 
         assert result["engine"] == "firecrawl"
-        assert len(result["results"]) == 0
         assert "error" in result
 
 
@@ -524,8 +514,8 @@ class TestYouHandler:
         result = lambda_handler({"query": "test search"}, None)
 
         assert result["engine"] == "you"
-        assert len(result["results"]) == 1
-        assert result["results"][0]["snippet"] == "Snippet 1"
+        assert len(result["results"]["web"]) == 1
+        assert result["results"]["web"][0]["snippets"] == ["Snippet 1", "Snippet 1b"]
 
     @responses.activate
     @patch("_shared.identity.get_api_key")
@@ -544,90 +534,40 @@ class TestYouHandler:
         result = lambda_handler({"query": "test search"}, None)
 
         assert result["engine"] == "you"
-        assert len(result["results"]) == 0
         assert "error" in result
 
 
-class TestTavilyLambdaHandler:
-    """Test Lambda-backed Tavily handler."""
+class TestResponseStamping:
+    """stamp() preserves the provider's native shape; error_response() envelopes."""
 
-    @responses.activate
-    @patch("_shared.identity.get_api_key")
-    def test_success(self, mock_get_api_key):
-        """Test successful Tavily query (results + answer)."""
-        mock_get_api_key.return_value = "test-api-key"
+    def test_stamp_preserves_native_payload(self):
+        """stamp() adds engine/latency_ms without touching provider keys."""
+        from _shared.response import stamp
 
-        responses.add(
-            responses.POST,
-            "https://api.tavily.com/search",
-            json={
-                "answer": "A short answer.",
-                "results": [
-                    {
-                        "title": "Result 1",
-                        "url": "https://example.com/1",
-                        "content": "Snippet 1",
-                        "score": 0.9,
-                    },
-                ],
-            },
-            status=200,
-        )
-
-        from tavily_lambda.handler import lambda_handler
-
-        result = lambda_handler({"query": "test search"}, None)
-
-        assert result["engine"] == "tavily_lambda"
-        assert len(result["results"]) == 1
-        assert result["results"][0]["score"] == 0.9
-        assert result["answer"] == "A short answer."
-
-    @patch("_shared.identity.get_api_key")
-    def test_missing_query(self, mock_get_api_key):
-        """Test handler with missing query parameter."""
-        mock_get_api_key.return_value = "test-api-key"
-
-        from tavily_lambda.handler import lambda_handler
-
-        result = lambda_handler({}, None)
-
-        assert result["engine"] == "tavily_lambda"
-        assert len(result["results"]) == 0
-        assert "error" in result
-
-
-class TestResponseNormalization:
-    """Test response normalization utilities."""
-
-    def test_normalize_response(self):
-        """Test response normalization."""
-        from _shared.response import normalize_response
-
-        results = [
-            {
-                "title": "Test",
-                "url": "https://example.com",
-                "snippet": "Test snippet",
-                "score": 0.95,
-            }
-        ]
-
-        response = normalize_response(results, "serper", 100)
+        payload = {"organic": [{"title": "Test"}], "knowledgeGraph": {"x": 1}}
+        response = stamp(payload, "serper", 100)
 
         assert response["engine"] == "serper"
         assert response["latency_ms"] == 100
-        assert len(response["results"]) == 1
-        assert response["results"][0]["score"] == 0.95
-        assert "answer" not in response
+        assert response["organic"] == [{"title": "Test"}]
+        assert response["knowledgeGraph"] == {"x": 1}
 
-    def test_normalize_response_with_answer(self):
-        """Answer field is included only when provided."""
-        from _shared.response import normalize_response
+    def test_stamp_does_not_mutate_input(self):
+        """stamp() returns a copy, leaving the caller's dict untouched."""
+        from _shared.response import stamp
 
-        response = normalize_response([], "tavily_lambda", 50, answer="hello")
+        payload = {"results": []}
+        stamp(payload, "exa", 10)
 
-        assert response["answer"] == "hello"
+        assert "engine" not in payload
+
+    def test_error_response_shape(self):
+        """error_response() returns only engine/latency_ms/error."""
+        from _shared.response import error_response
+
+        response = error_response("perplexity", 50, "boom")
+
+        assert response == {"engine": "perplexity", "latency_ms": 50, "error": "boom"}
 
 
 class TestCallerIdentityLogging:
@@ -656,3 +596,76 @@ class TestCallerIdentityLogging:
         assert '"event": "caller_identity"' in logged
         assert '"sub": "user-9"' in logged
         os.environ.pop("SERPER_API_KEY", None)
+
+
+class TestExaDomainForwarding:
+    @responses.activate
+    @patch("_shared.identity.get_api_key")
+    def test_domains_land_in_payload(self, mock_get_api_key):
+        mock_get_api_key.return_value = "test-api-key"
+        responses.add(responses.POST, "https://api.exa.ai/search",
+                      json={"results": []}, status=200)
+        from exa.handler import lambda_handler
+        event = {"query": "q", "include_domains": ["a.com"], "exclude_domains": ["b.com"]}
+        lambda_handler(event, None)
+        body = json.loads(responses.calls[0].request.body)
+        assert body["includeDomains"] == ["a.com"]
+        assert body["excludeDomains"] == ["b.com"]
+
+
+class TestPerplexityDomainForwarding:
+    @responses.activate
+    @patch("_shared.identity.get_api_key")
+    def test_domain_filter_in_payload(self, mock_get_api_key):
+        mock_get_api_key.return_value = "test-api-key"
+        responses.add(responses.POST, "https://api.perplexity.ai/chat/completions",
+                      json={"choices": []}, status=200)
+        from perplexity.handler import lambda_handler
+        event = {"query": "q", "include_domains": ["a.com"], "exclude_domains": ["b.com"]}
+        lambda_handler(event, None)
+        body = json.loads(responses.calls[0].request.body)
+        assert body["search_domain_filter"] == ["a.com", "-b.com"]
+
+
+class TestFirecrawlDomainForwarding:
+    @responses.activate
+    @patch("_shared.identity.get_api_key")
+    def test_include_wins_over_exclude(self, mock_get_api_key):
+        mock_get_api_key.return_value = "test-api-key"
+        responses.add(responses.POST, "https://api.firecrawl.dev/v1/search",
+                      json={"data": []}, status=200)
+        from firecrawl.handler import lambda_handler
+        event = {"query": "q", "include_domains": ["a.com"], "exclude_domains": ["b.com"]}
+        lambda_handler(event, None)
+        body = json.loads(responses.calls[0].request.body)
+        assert body["includeDomains"] == ["a.com"]
+        assert "excludeDomains" not in body
+
+
+class TestAnthropicCountryAndDomains:
+    @responses.activate
+    @patch("_shared.identity.get_api_key")
+    def test_country_sets_user_location(self, mock_get_api_key):
+        mock_get_api_key.return_value = "test-api-key"
+        responses.add(responses.POST, "https://api.anthropic.com/v1/messages",
+                      json={"content": []}, status=200)
+        from anthropic.handler import lambda_handler
+        event = {"query": "q", "country": "KR"}
+        lambda_handler(event, None)
+        body = json.loads(responses.calls[0].request.body)
+        tool = body["tools"][0]
+        assert tool["user_location"] == {"type": "approximate", "country": "KR"}
+
+    @responses.activate
+    @patch("_shared.identity.get_api_key")
+    def test_include_domains_sets_allowed(self, mock_get_api_key):
+        mock_get_api_key.return_value = "test-api-key"
+        responses.add(responses.POST, "https://api.anthropic.com/v1/messages",
+                      json={"content": []}, status=200)
+        from anthropic.handler import lambda_handler
+        event = {"query": "q", "include_domains": ["a.com"], "exclude_domains": ["b.com"]}
+        lambda_handler(event, None)
+        body = json.loads(responses.calls[0].request.body)
+        tool = body["tools"][0]
+        assert tool["allowed_domains"] == ["a.com"]
+        assert "blocked_domains" not in tool
