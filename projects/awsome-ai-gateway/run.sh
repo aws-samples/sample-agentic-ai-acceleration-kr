@@ -82,6 +82,21 @@ enable_tools() {
   if [[ -z "${NEXT_PUBLIC_TOOL_GATEWAY_URL:-}" ]]; then
     warn "NEXT_PUBLIC_TOOL_GATEWAY_URL 이 비어 있음 — 대시보드가 Unavailable 로 보일 수 있습니다."
   fi
+  # 메트릭/트레이스 탭은 admin-ui 서버가 CloudWatch/X-Ray 를 직접 조회한다.
+  # 컨테이너는 non-root(uid 1001) 라 host ~/.aws (0600) 를 못 읽으므로,
+  # 자격증명을 정적 env 로 추출해 주입한다(profile/SSO 도 여기서 해석됨).
+  if command -v aws >/dev/null 2>&1; then
+    local creds
+    if creds="$(aws configure export-credentials --format env 2>/dev/null)"; then
+      eval "$creds"
+      export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+      ok "AWS 자격증명 주입 — 메트릭/트레이스 탭 활성화"
+    else
+      warn "AWS 자격증명을 추출하지 못했습니다 — 메트릭/트레이스는 '연결할 수 없음' 으로 표시됩니다."
+    fi
+  else
+    warn "aws CLI 없음 — 메트릭/트레이스는 '연결할 수 없음' 으로 표시됩니다."
+  fi
   export COMPOSE_FILE="docker-compose.yml:docker-compose.tools.yml"
   ok "Tool Gateway override 활성화 (admin-ui 재빌드 필요 시 자동 수행)"
 }

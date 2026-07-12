@@ -26,3 +26,10 @@ services:
       COGNITO_TOOL_M2M_CLIENT_ID: ${COGNITO_TOOL_M2M_CLIENT_ID:-}
       COGNITO_TOOL_M2M_CLIENT_SECRET: ${COGNITO_TOOL_M2M_CLIENT_SECRET:-}
       COGNITO_TOOL_M2M_SCOPE: ${COGNITO_TOOL_M2M_SCOPE:-agentcore/invoke}
+      # 메트릭/트레이스 탭: admin-ui 서버가 CloudWatch/X-Ray 직접 조회.
+      # run.sh 가 `aws configure export-credentials` 로 정적 자격증명을 주입한다.
+      # (컨테이너는 non-root 라 host ~/.aws 볼륨 마운트가 uid 문제로 안 읽힘)
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      AWS_REGION: ${NEXT_PUBLIC_TOOL_GATEWAY_REGION:-us-east-1}
