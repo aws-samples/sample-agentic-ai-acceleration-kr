@@ -72,3 +72,7 @@ values.local.yaml
 # OMC orchestration work artifacts (inventories, workflow scripts, session state) — not deliverable
 .omc/
 SECURITY-FINDINGS.md
+
+# Tool Gateway provisioning 산출물 (Cognito client secret 평문 포함 — 커밋 금지)
+deployment/tool-gateway/dashboard.generated.env
+deployment/tool-gateway/.env.key
