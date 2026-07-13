@@ -35,11 +35,11 @@
    claude-code               codex                          cowork
    Bedrock NATIVE            Bedrock Mantle                 Bedrock Mantle
    (boto3 invoke_model)      (OpenAI Responses API)         (Anthropic Messages)
-   계정 374445650473          계정 859 in-account             계정 905418156477
+   계정 <CLAUDE-CODE-ACCOUNT-ID>          계정 <MAIN-ACCOUNT-ID> in-account             계정 <COWORK-ACCOUNT-ID>
    (ap-northeast-2)          (us-east-2, 오하이오)           (ap-northeast-1, 도쿄)
    STS AssumeRole(374 role)  assume 없음 — pod IRSA 직접      STS AssumeRole(905 role)
    ExternalId=claude-code-…  Mantle GPT-5.5                 ExternalId=cowork-…
-   실패 시 859 in-account     bearer(BedrockTokenGenerator)   Opus 4.8 (cowork-opus)
+   실패 시 메인 계정 in-account     bearer(BedrockTokenGenerator)   Opus 4.8 (cowork-opus)
    투명 폴백(절대 안 죽음)     httpx AsyncClient               httpx AsyncClient
           │
           ▼
@@ -67,10 +67,10 @@ WebSearch(MCP over httpx, SigV4/IRSA, us-east-1 전용) 호출 → 결과 재투
 
 | 항목 | 계정 | region | 백엔드 | API 규격 | cross-account |
 |------|------|--------|--------|------|---------------|
-| 메인 배포 (게이트웨이 전 서비스 + Aurora + AgentCore Runtime/웹서치 GW + ECR) | `859741818597` | ap-northeast-2 | — | — | gateway-proxy IRSA 가 이 계정 |
-| claude-code | `374445650473` | ap-northeast-2 | Bedrock NATIVE (invoke_model) | Anthropic Messages | STS AssumeRole(ExternalId=`claude-code-bedrock`), 실패 시 859 in-account 투명 폴백 |
-| codex | `859741818597` (in-account) | us-east-2 | Bedrock Mantle GPT-5.5 | OpenAI Responses (`/v1/responses`) | 없음 — pod IRSA creds 직접 사용 |
-| cowork | `905418156477` | ap-northeast-1 | Bedrock Mantle Opus 4.8 | Anthropic Messages | STS AssumeRole(ExternalId=`cowork-bedrock`) |
+| 메인 배포 (게이트웨이 전 서비스 + Aurora + AgentCore Runtime/웹서치 GW + ECR) | `<MAIN-ACCOUNT-ID>` | ap-northeast-2 | — | — | gateway-proxy IRSA 가 이 계정 |
+| claude-code | `<CLAUDE-CODE-ACCOUNT-ID>` | ap-northeast-2 | Bedrock NATIVE (invoke_model) | Anthropic Messages | STS AssumeRole(ExternalId=`claude-code-bedrock`), 실패 시 메인 계정 in-account 투명 폴백 |
+| codex | `<MAIN-ACCOUNT-ID>` (in-account) | us-east-2 | Bedrock Mantle GPT-5.5 | OpenAI Responses (`/v1/responses`) | 없음 — pod IRSA creds 직접 사용 |
+| cowork | `<COWORK-ACCOUNT-ID>` | ap-northeast-1 | Bedrock Mantle Opus 4.8 | Anthropic Messages | STS AssumeRole(ExternalId=`cowork-bedrock`) |
 
 - cross-account는 `STS AssumeRole(DurationSeconds=3600)` + 선택적 `ExternalId`. claude-code(374 native)의 클라이언트는 `BedrockAccountClientProvider`가 `(role_arn, region, external_id)` 키로 vend/캐시합니다. assume 실패 시 게이트웨이는 859 in-account 클라이언트로 투명 폴백하므로 claude-code 요청은 죽지 않습니다.
 - codex/cowork Mantle bearer는 `MantleCredentialBroker`가 assumed creds에서 `BedrockTokenGenerator`로 발급해 `(role, region)`으로 캐시합니다.
@@ -128,7 +128,7 @@ WebSearch(MCP over httpx, SigV4/IRSA, us-east-1 전용) 호출 → 결과 재투
 
 배포 단계별 상세 절차: [`deployment/docs/eks-fargate/`](deployment/docs/eks-fargate/) — 01 사전조건 ~ 07 Cognito 온보딩 + `troubleshooting.md`. 시크릿 계약: [`deployment/docs/secrets-contract.md`](deployment/docs/secrets-contract.md).
 
-> **현재 deliverable 의 배포 환경**: AWS 계정 `859741818597` (ap-northeast-2)
+> **현재 deliverable 의 배포 환경**: AWS 계정 `<MAIN-ACCOUNT-ID>` (ap-northeast-2)
 > 에 dev / prod 두 EKS Fargate 환경(둘 다 EKS 1.30) 운영. 구체 endpoint/Cognito
 > pool/ALB DNS 는 각 가이드의 **부록** 참조 — user-guide §B, admin-guide §D,
 > deployer-guide §E. claude-code(374)·cowork(905)는 cross-account, codex(859)는
@@ -185,7 +185,7 @@ Helm이 배포하는 워크로드는 6 Deployment + 1 Job이고, admin-chat-agen
 | `deployment/docs/` | 단계별 배포 절차(`eks-fargate/`) + 시크릿 계약(`secrets-contract.md`) |
 | `docs/` | 스펙(`admin-chat-agent-spec.md`)·아키텍처 drawio·클라이언트 연동 가이드(`guides/connect.md`, `guides/COWORK-GATEWAY-SETUP.md`) |
 | `guides/` | 최종 가이드 (배포자/어드민/사용자/QUICKSTART) — 부록에 현재 운영 환경 값 |
-| `_archive/` | 옛 자산(옛 계정 `374445650473` charts·terraform 포함) + 마이그레이션 로그. 빌드/배포 미참조 — history 보존용 |
+| `_archive/` | 옛 자산(옛 계정 `<CLAUDE-CODE-ACCOUNT-ID>` charts·terraform 포함) + 마이그레이션 로그. 빌드/배포 미참조 — history 보존용 |
 
 ---
 
