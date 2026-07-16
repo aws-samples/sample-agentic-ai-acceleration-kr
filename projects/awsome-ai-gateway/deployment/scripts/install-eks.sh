@@ -19,6 +19,18 @@
 
 set -euo pipefail
 
+# ---- 리전 확정 ----
+# 이 스크립트의 aws 호출(secretsmanager describe-secret 등)은 --region 을 명시하지 않아
+# 셸 기본 리전을 따른다. 리전이 안 잡힌 셸에서 실행하면 Secrets Manager preflight 가
+# 엉뚱한 리전을 뒤져 "Secret 없음" 으로 오판하므로, 추측하지 말고 즉시 중단한다.
+# 우선순위: AWS_REGION > AWS_DEFAULT_REGION. 그 뒤 둘을 통일.
+: "${AWS_REGION:=${AWS_DEFAULT_REGION:-}}"
+if [ -z "$AWS_REGION" ]; then
+    echo "ERROR: region is not set. export AWS_DEFAULT_REGION=<region> (e.g. ap-northeast-2) and retry." >&2
+    exit 1
+fi
+export AWS_REGION AWS_DEFAULT_REGION="$AWS_REGION"
+
 # ---- 인자 ----
 ENV="${1:-}"
 if [ -z "$ENV" ] || { [ "$ENV" != "dev" ] && [ "$ENV" != "prod" ]; }; then
@@ -406,7 +418,15 @@ helm_install() {
     # helm upgrade --install 로 통합: release 없으면 install, 있으면 upgrade.
     # `--cleanup-on-fail` 은 upgrade 경로에서만 유효한 플래그라서, install 모드에서
     # 별도 helm install 명령을 쓰면 에러. upgrade --install 로 통일하면 항상 OK.
-    # `--atomic` 은 helm v4 에서 deprecated → `--rollback-on-failure` 사용.
+    # rollback 플래그는 Helm 메이저 버전에 따라 다름:
+    #   v3 = --atomic (--rollback-on-failure 는 unknown flag), v4 = --rollback-on-failure.
+    # 사전 요구사항이 Helm >=3.14 이므로 런타임에 감지해 맞는 플래그를 쓴다.
+    HELM_MAJOR=$(helm version --template '{{.Version}}' 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/')
+    if [ "${HELM_MAJOR:-3}" -ge 4 ]; then
+        ROLLBACK_FLAG="--rollback-on-failure"
+    else
+        ROLLBACK_FLAG="--atomic"
+    fi
     #
     # DEBUG_MODE=true 로 실행하면 실패 시 rollback/cleanup 을 하지 않아 실패한 Pod 와
     # Deployment 가 그대로 남음 → `kubectl logs <pod> --previous` 로 crash 원인 조사 가능.
@@ -426,7 +446,7 @@ helm_install() {
                 --values "$VALUES_FILE" \
                 "${SET_ARGS[@]}" \
                 --force-conflicts \
-                --rollback-on-failure \
+                "$ROLLBACK_FLAG" \
                 --cleanup-on-fail \
                 --timeout 15m \
                 --wait
@@ -435,7 +455,7 @@ helm_install() {
                 --namespace "$NAMESPACE" \
                 --values "$VALUES_FILE" \
                 "${SET_ARGS[@]}" \
-                --rollback-on-failure \
+                "$ROLLBACK_FLAG" \
                 --cleanup-on-fail \
                 --timeout 15m \
                 --wait
