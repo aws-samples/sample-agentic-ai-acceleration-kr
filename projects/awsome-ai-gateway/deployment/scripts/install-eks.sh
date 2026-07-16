@@ -383,6 +383,10 @@ helm_install() {
     SET_ARGS=(
         --set "global.imageRegistry=${ecr_registry}"
         --set "aws.region=${AWS_REGION}"
+        # SSRF 방어용 STS 허용 리전(admin-api VK 발급). 클라이언트가 GetCallerIdentity 를
+        # presign 하는 곳 = 배포 리전이므로 aws.region 과 같은 값으로 자동 주입한다.
+        # (values 기본값이 ap-northeast-2 라, 안 주입하면 다른 리전 배포에서 VK 발급 거부.)
+        --set "aws.allowedStsRegions={${AWS_REGION}}"
         --set "database.external.host=${AURORA_HOST}"
         --set "database.external.name=${AURORA_DB_NAME}"
         --set "redis.external.host=${REDIS_HOST}"
