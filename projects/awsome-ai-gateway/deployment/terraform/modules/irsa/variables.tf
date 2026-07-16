@@ -29,6 +29,12 @@ variable "bedrock_allowed_model_arns" {
   # ]
 }
 
+variable "mantle_regions" {
+  description = "gateway-proxy IRSA 가 in-account Bedrock Mantle(bedrock-mantle:CreateInference/GetInference) 를 호출할 수 있는 리전 목록. 배포 리전에 맞춰 tfvars 에서 지정 (예: US 단일계정 = [\"us-east-1\"])."
+  type        = list(string)
+  default     = ["ap-northeast-1", "us-east-2"]
+}
+
 variable "secrets_manager_kms_key_arns" {
   description = "Secrets Manager가 쓰는 KMS 키 ARN (기본 AWS 관리 키 + 사용자 키)"
   type        = list(string)

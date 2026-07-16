@@ -61,6 +61,7 @@ module "irsa" {
   oidc_provider_arn          = module.eks.oidc_provider_arn
   k8s_namespace              = var.application_namespace
   bedrock_allowed_model_arns = var.bedrock_allowed_model_arns
+  mantle_regions             = var.mantle_regions
   cognito_user_pool_arn      = module.cognito.user_pool_arn
   cowork_role_arn            = var.cowork_role_arn
   claude_code_374_role_arn   = var.claude_code_374_role_arn

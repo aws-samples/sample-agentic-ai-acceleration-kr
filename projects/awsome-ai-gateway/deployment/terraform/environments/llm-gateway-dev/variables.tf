@@ -137,6 +137,13 @@ variable "bedrock_allowed_model_arns" {
   ]
 }
 
+variable "mantle_regions" {
+  # gateway-proxy IRSA 가 in-account Bedrock Mantle 을 호출할 수 있는 리전.
+  # 기본 = Tokyo(Claude Code/Cowork) + Ohio(Codex). US 단일계정 배포는 ["us-east-1"].
+  type    = list(string)
+  default = ["ap-northeast-1", "us-east-2"]
+}
+
 variable "eks_access_entries" {
   type    = any
   default = {}
