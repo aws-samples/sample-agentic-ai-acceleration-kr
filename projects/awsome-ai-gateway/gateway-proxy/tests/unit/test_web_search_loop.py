@@ -197,6 +197,108 @@ async def test_anthropic_zero_search_single_envelope():
     assert usage.web_search_count == 0
 
 
+def _anthropic_turn_with_thinking(text: str, *, tool_use=None) -> list[bytes]:
+    """One Anthropic turn that emits a thinking block (with signature) before text,
+    and optionally a web_search tool_use — mirrors opus-4-8 extended-thinking output."""
+    events = [{"type": "message_start", "message": {"id": "m", "type": "message", "role": "assistant",
+               "content": [], "usage": {"input_tokens": 10, "output_tokens": 0}}}]
+    idx = 0
+    # thinking block first (as Anthropic emits with extended thinking on)
+    events += [
+        {"type": "content_block_start", "index": idx, "content_block": {"type": "thinking", "thinking": ""}},
+        {"type": "content_block_delta", "index": idx, "delta": {"type": "thinking_delta", "thinking": "pondering"}},
+        {"type": "content_block_delta", "index": idx, "delta": {"type": "signature_delta", "signature": "SIGXYZ"}},
+        {"type": "content_block_stop", "index": idx},
+    ]
+    idx += 1
+    if text:
+        events += [
+            {"type": "content_block_start", "index": idx, "content_block": {"type": "text", "text": ""}},
+            {"type": "content_block_delta", "index": idx, "delta": {"type": "text_delta", "text": text}},
+            {"type": "content_block_stop", "index": idx},
+        ]
+        idx += 1
+    stop = "end_turn"
+    if tool_use:
+        stop = "tool_use"
+        events += [
+            {"type": "content_block_start", "index": idx,
+             "content_block": {"type": "tool_use", "id": tool_use["id"], "name": tool_use["name"], "input": {}}},
+            {"type": "content_block_delta", "index": idx,
+             "delta": {"type": "input_json_delta", "partial_json": json.dumps(tool_use["input"])}},
+            {"type": "content_block_stop", "index": idx},
+        ]
+    events += [
+        {"type": "message_delta", "delta": {"stop_reason": stop}, "usage": {"output_tokens": 5}},
+        {"type": "message_stop"},
+    ]
+    return [_raw(e) for e in events]
+
+
+def _client_facing_has_thinking(out: bytes) -> bool:
+    """True if the client-facing SSE contains any thinking/redacted_thinking block."""
+    for _e, d in _parse_sse(out):
+        blk = d.get("content_block") or {}
+        if blk.get("type") in ("thinking", "redacted_thinking"):
+            return True
+        if d.get("delta", {}).get("type") in ("thinking_delta", "signature_delta"):
+            return True
+    return False
+
+
+@pytest.mark.asyncio
+async def test_thinking_suppressed_from_client_zero_search():
+    """Zero-search turn with thinking on: client-facing SSE must carry NO thinking block
+    (client replays the stitched assistant message; Bedrock rejects modified thinking)."""
+    turns = [_anthropic_turn_with_thinking("Hello world")]
+    out, _usage = await _run_anthropic_stream(turns, FakeMcp())
+    assert not _client_facing_has_thinking(out), "thinking leaked to client SSE"
+    # text still forwarded
+    assert any(d.get("delta", {}).get("text") == "Hello world" for _e, d in _parse_sse(out))
+
+
+@pytest.mark.asyncio
+async def test_thinking_suppressed_but_kept_internally_on_search():
+    """Search turn (turn A has thinking + web_search tool_use, turn B answers with thinking):
+    client sees NO thinking, but the internal turn-B request body carries turn-A's thinking
+    block (needed so the same-model replay inside the loop stays valid)."""
+    bodies = []
+
+    async def on_usage(u):
+        pass
+
+    seq = iter([
+        _anthropic_turn_with_thinking("", tool_use={"id": "toolu_a", "name": "web_search", "input": {"query": "q"}}),
+        _anthropic_turn_with_thinking("final answer"),
+    ])
+
+    async def invoke_stream(body):
+        bodies.append(body)
+        return 200, _aiter(next(seq)), {}, None
+
+    import time
+    out = b""
+    gen = wsl._anthropic_stream(
+        invoke_stream=invoke_stream, base_body={"messages": [{"role": "user", "content": "hi"}]},
+        mcp_client=FakeMcp(), request=FakeRequest(), on_usage=on_usage,
+        max_iterations=5, deadline=time.monotonic() + 60, default_max_results=10,
+    )
+    async for frame in gen:
+        out += frame
+
+    # client-facing: no thinking anywhere
+    assert not _client_facing_has_thinking(out), "thinking leaked to client SSE"
+    # internal: turn-B request (bodies[1]) conversation carries turn-A's thinking block
+    assert len(bodies) == 2, bodies
+    turn_b_msgs = bodies[1]["messages"]
+    assistant_msgs = [m for m in turn_b_msgs if m["role"] == "assistant"]
+    has_thinking = any(
+        blk.get("type") == "thinking"
+        for m in assistant_msgs for blk in (m["content"] if isinstance(m["content"], list) else [])
+    )
+    assert has_thinking, "internal turn-B conversation lost turn-A thinking block"
+
+
 @pytest.mark.asyncio
 async def test_anthropic_one_search_single_envelope_suppresses_plumbing():
     turns = [
@@ -440,6 +542,90 @@ async def test_client_owns_web_search_tool_skips_loop():
     assert mcp.calls == []
     # client's web_search tool preserved (not hijacked)
     assert any(t.get("name") == "web_search" for t in captured["body"]["tools"])
+
+
+# ── native web_search stripping (Option A: Claude Code CLI native tool) ─────────────
+def test_strip_native_web_search_removes_typed_keeps_custom():
+    """Native web_search (has type web_search_20250305) is stripped; custom tools kept."""
+    body = {"messages": [], "tools": [
+        {"type": "web_search_20250305", "name": "web_search"},
+        {"name": "read_file"},
+    ]}
+    out = wsl._strip_native_web_search(body)
+    assert [t.get("name") for t in out["tools"]] == ["read_file"]
+    assert body["tools"][0]["type"] == "web_search_20250305"  # original untouched
+    # type-less custom web_search is NOT native → body returned unchanged (same object)
+    custom = {"messages": [], "tools": [{"name": "web_search", "description": "client's own"}]}
+    assert wsl._strip_native_web_search(custom) is custom
+    # native-only → tools key removed entirely
+    native_only = {"messages": [], "tools": [{"type": "web_search_20250305", "name": "web_search"}]}
+    assert "tools" not in wsl._strip_native_web_search(native_only)
+
+
+@pytest.mark.asyncio
+async def test_native_web_search_does_not_skip_loop():
+    """Claude Code native web_search must be FULFILLED (loop runs), not skipped (F-7).
+    The invoke body seen by the backend must carry OUR injected tool (no native type)."""
+    mcp = FakeMcp()
+    captured = {}
+
+    async def on_usage(u):
+        captured["usage"] = u
+
+    async def invoke(body):
+        captured["body"] = body
+        return 200, json.dumps({"content": [{"type": "text", "text": "ok"}],
+                                "stop_reason": "end_turn",
+                                "usage": {"input_tokens": 5, "output_tokens": 2}}).encode(), {}, TokenUsage(input_tokens=5, output_tokens=2)
+
+    async def invoke_stream(body):
+        raise AssertionError("non-stream path expected")
+
+    await wsl.run_web_search_loop(
+        dialect="anthropic", invoke=invoke, invoke_stream=invoke_stream,
+        initial_req_data={"messages": [{"role": "user", "content": "hi"}],
+                          "tools": [{"type": "web_search_20250305", "name": "web_search"}]},
+        is_stream=False, mcp_client=mcp, request=FakeRequest(), on_usage=on_usage,
+    )
+    assert mcp.init_calls == 1  # loop ran (F-7 NOT taken)
+    tools = captured["body"].get("tools", [])
+    # native tool stripped; our injected web_search (input_schema, no native type) present
+    assert not any(isinstance(t.get("type"), str) and t["type"].startswith("web_search") for t in tools)
+    assert any(t.get("name") == "web_search" and "input_schema" in t for t in tools)
+
+
+@pytest.mark.asyncio
+async def test_native_web_search_stripped_on_mcp_init_failure():
+    """Leak #2: if MCP discovery fails, the no-search fallback must also drop the native tool."""
+    mcp = FakeMcp()
+
+    async def ensure_initialized():
+        mcp.init_calls += 1
+        raise AgentCoreMcpError("discovery down")
+    mcp.ensure_initialized = ensure_initialized
+
+    captured = {}
+
+    async def on_usage(u):
+        captured["usage"] = u
+
+    async def invoke(body):
+        captured["body"] = body
+        return 200, json.dumps({"content": [{"type": "text", "text": "ok"}],
+                                "stop_reason": "end_turn",
+                                "usage": {"input_tokens": 5, "output_tokens": 2}}).encode(), {}, TokenUsage(input_tokens=5, output_tokens=2)
+
+    async def invoke_stream(body):
+        raise AssertionError("non-stream path expected")
+
+    await wsl.run_web_search_loop(
+        dialect="anthropic", invoke=invoke, invoke_stream=invoke_stream,
+        initial_req_data={"messages": [{"role": "user", "content": "hi"}],
+                          "tools": [{"type": "web_search_20250305", "name": "web_search"}]},
+        is_stream=False, mcp_client=mcp, request=FakeRequest(), on_usage=on_usage,
+    )
+    tools = captured["body"].get("tools", []) or []
+    assert not any(isinstance(t.get("type"), str) and t["type"].startswith("web_search") for t in tools)
 
 
 @pytest.mark.asyncio
