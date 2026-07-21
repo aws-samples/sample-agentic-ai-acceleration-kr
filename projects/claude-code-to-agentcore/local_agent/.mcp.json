@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "ecommerce": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["mcp_server/ecommerce_mcp.py"]
+    },
+    "agentcore-web-search": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": [
+        "mcp-proxy-for-aws@1.6.1",
+        "https://<YOUR-WEB-SEARCH-GATEWAY-ID>.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp",
+        "--service",
+        "bedrock-agentcore",
+        "--region",
+        "us-east-1"
+      ],
+      "env": {}
+    }
+  }
+}

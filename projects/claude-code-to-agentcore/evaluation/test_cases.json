@@ -1,0 +1,32 @@
+[
+  {
+    "id": "tc01_total_sales",
+    "category": "fact-retrieval",
+    "prompt": "ecommerce 도구로 2026년 상반기(1~6월) 전체 매출 총계를 조회해서 한 줄로 알려줘.",
+    "expected_keywords": ["622,961,950", "4,512"]
+  },
+  {
+    "id": "tc02_top_product",
+    "category": "fact-retrieval",
+    "prompt": "2026년 상반기 베스트셀러 1위 상품과 그 매출을 알려줘.",
+    "expected_keywords": ["4K 모니터", "151,784,150"]
+  },
+  {
+    "id": "tc03_category_breakdown",
+    "category": "analysis",
+    "prompt": "2026년 상반기 카테고리별 매출 비중을 알려줘. Electronics 비중이 몇 퍼센트인지 포함해줘.",
+    "expected_keywords": ["Electronics", "Home", "Fashion", "Beauty", "%"]
+  },
+  {
+    "id": "tc04_full_report",
+    "category": "report",
+    "prompt": "sales-report 형식으로 2026년 상반기 매출 리포트를 작성해줘. 핵심 지표, 카테고리별 실적, 베스트셀러, 인사이트를 포함해줘.",
+    "expected_keywords": ["핵심 지표", "카테고리", "베스트셀러", "인사이트", "원"]
+  },
+  {
+    "id": "tc05_web_trend",
+    "category": "web-search",
+    "prompt": "web-search로 2026년 이커머스 트렌드 1가지를 찾아 요약하고, 우리 매출 데이터와 연결한 인사이트를 한 가지 제시해줘.",
+    "expected_keywords": ["트렌드", "2026"]
+  }
+]

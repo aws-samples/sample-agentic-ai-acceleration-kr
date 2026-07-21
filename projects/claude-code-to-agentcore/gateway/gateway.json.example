@@ -1,0 +1,14 @@
+{
+  "_comment": "deploy_gateway.py 실행 시 gateway.json 으로 자동 생성됩니다. 실제 파일은 계정 ID·Cognito client_secret 등 민감정보를 포함하므로 커밋하지 마세요(.gitignore 처리됨).",
+  "gateway_id": "anycompany-ecommerce-gw-XXXXXXXXXX",
+  "gateway_url": "https://anycompany-ecommerce-gw-XXXXXXXXXX.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp",
+  "lambda_arn": "arn:aws:lambda:us-east-1:111122223333:function:anycompany-ecommerce-tools",
+  "client_info": {
+    "client_id": "XXXXXXXXXXXXXXXXXXXXXXXXXX",
+    "client_secret": "REDACTED",
+    "user_pool_id": "us-east-1_XXXXXXXXX",
+    "token_endpoint": "https://agentcore-XXXXXXXX.auth.us-east-1.amazoncognito.com/oauth2/token",
+    "scope": "anycompany-ecommerce-gw/invoke",
+    "domain_prefix": "agentcore-XXXXXXXX"
+  }
+}
