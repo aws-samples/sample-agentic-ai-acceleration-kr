@@ -158,6 +158,97 @@ AWSome AI Gateway는 **re-origination(요청 재구성 발신)** 방식입니다
 
 ---
 
+## Tool Gateway (optional)
+
+다중 엔진 검색(DuckDuckGo, Serper, Exa 등) 지원 AgentCore Tool Gateway 의 선택적 배포. 기본값은 **OFF**(기존 동작 유지).
+
+### 배포 흐름
+
+**1단계: 독립 스크립트**
+```bash
+# a) terraform.tfvars 설정 (copy from example, set engine flags + API keys)
+cd deployment/terraform/environments/tool-gateway-dev
+cp terraform.tfvars.example terraform.tfvars
+# 편집: enable_duckduckgo=true 등, enable_serper=true + serper_api_key 값 등
+
+# b) 배포 (terraform init+apply → Cognito user pool + AgentCore Gateway + Lambda tools 생성)
+AWS_REGION=us-east-1 deployment/scripts/provision_tool_gateway.sh deploy
+# 기본값: us-east-1 (이 환경은 us-east-1 **고정** — awsome 기본 ap-northeast-2 와 다름)
+# 선택: TOOL_KEY_FILE 설정하면 seed-tool-secrets.sh 자동 호출 (선택적 API key seeding)
+export TOOL_KEY_FILE=/path/to/engine-keys.txt
+# 파일 형식: KEY=VALUE 행 (예: serper=sk-xxxxx, you=ydc-sk-xxxxx)
+# DuckDuckGo 는 키 불필요
+
+# c) 상태 확인
+deployment/scripts/provision_tool_gateway.sh status
+
+# d) 정지 (비용 절감, 노출 제거)
+deployment/scripts/provision_tool_gateway.sh teardown
+```
+
+**2단계: install-eks.sh 훅 (선택사항)**
+```bash
+# 기존 게이트웨이 배포 후 Tool Gateway 를 함께 프로비저닝하려면:
+ENABLE_TOOL_GATEWAY=true ./deployment/scripts/install-eks.sh dev
+# 결과: 표준 배포 + provision_tool_gateway.sh deploy 자동 호출
+# 실패 시: non-fatal (경고만 표시, 기존 배포는 유지)
+```
+
+### Terraform 설정
+
+**필수:** `terraform.tfvars` 생성 (gitignored, 로컬용)
+```hcl
+project_name = "awsome"
+environment  = "dev"
+aws_region   = "us-east-1"
+
+enable_duckduckgo = true   # DuckDuckGo(무료, 키 불필요)
+enable_serper     = false  # Serper 활성화 시 true
+serper_api_key    = ""     # Serper API 키
+
+enable_exa        = false  # Exa 활성화 시 true
+exa_api_key       = ""     # Exa API 키
+# ... 기타 엔진 ...
+```
+
+**중요:**
+- **Terraform 버전:** `aws ~> 6.47` (Bedrock AgentCore 리소스 필요)
+- **Build 환경:** terraform apply 실행 호스트에 **Python 3.12 + pip3** 필요 (Lambda tool zips 빌드용)
+- **tfstate 격리:** tool-gateway-dev 의 tfstate 는 llm-gateway-dev 와 별도 (다른 S3 백엔드)
+
+### 환경 및 비용
+
+- **Region:** **us-east-1 만 지원** (AgentCore 관리형 커넥터 제약)
+- **Billing:** 게이트웨이 + Lambda + Cognito 가 provisioned 상태에서 비용 발생. `teardown` 으로 정지하면 비용 없음.
+- **관리형 커넥터:** 엔진별 쿼리당 가격 (예: Serper, Exa)
+
+### Admin UI 대시보드 활성화
+
+`provision_tool_gateway.sh deploy` 는 `deployment/tool-gateway/dashboard.generated.env` 를 생성합니다. 이 파일의 환경변수를 admin-ui 환경에 복사하면 "Tool Gateway" 네비게이션 항목이 나타나고, `/tools` (tool catalog), `/tools/observability` (CloudWatch 차트), `/tools/traces` (X-Ray trace list) 페이지를 사용할 수 있습니다.
+
+**필수 공개 변수(브라우저):**
+- `NEXT_PUBLIC_TOOL_GATEWAY_ENABLED` = `true`
+- `NEXT_PUBLIC_TOOL_GATEWAY_URL` (gateway HTTPS 엔드포인트)
+- `NEXT_PUBLIC_TOOL_GATEWAY_ID` (gateway ID)
+- `NEXT_PUBLIC_TOOL_GATEWAY_REGION` = `us-east-1`
+
+**필수 서버 전용 변수(admin-ui server):**
+- `TOOL_GATEWAY_ARN`
+- `COGNITO_TOOL_TOKEN_ENDPOINT`
+- `COGNITO_TOOL_M2M_CLIENT_ID`
+- `COGNITO_TOOL_M2M_CLIENT_SECRET`
+- `COGNITO_TOOL_M2M_SCOPE`
+
+이 변수들이 unset 이면 대시보드는 완전히 dormant 이고 (기존 동작 완전 유지) Tool Gateway nav 항목이 나타나지 않습니다.
+
+### 독립성
+
+- 이 Tool Gateway(JWT+Cognito) 는 기존 **WebSearch(AWS_IAM/SigV4) 경로와 완전히 독립**입니다.
+- 같은 git commit 에 포함되어도 배포는 선택적입니다.
+- `provision_agentcore_websearch.py` (WebSearch) 와 동시 작동 가능.
+
+---
+
 ## 가이드
 
 | 대상 | 문서 | 설명 |

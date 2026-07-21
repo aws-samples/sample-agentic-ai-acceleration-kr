@@ -1,0 +1,6 @@
+boto3==1.28.85
+requests==2.31.0
+ddgs==9.14.4
+opentelemetry-api==1.20.0
+opentelemetry-sdk==1.20.0
+opentelemetry-exporter-otlp==1.20.0

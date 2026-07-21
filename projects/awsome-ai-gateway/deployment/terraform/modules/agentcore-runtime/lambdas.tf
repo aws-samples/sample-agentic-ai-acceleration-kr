@@ -180,15 +180,15 @@ resource "aws_lambda_function" "query_db" {
 
   environment {
     variables = {
-      DB_HOST              = var.aurora_endpoint
-      DB_NAME              = var.db_name
-      DB_USER              = "gateway_chat_reader"
-      DB_SECRET_ARN        = aws_secretsmanager_secret.chat_reader[0].arn
-      S3_STAGING_BUCKET    = aws_s3_bucket.staging.bucket
+      DB_HOST               = var.aurora_endpoint
+      DB_NAME               = var.db_name
+      DB_USER               = "gateway_chat_reader"
+      DB_SECRET_ARN         = aws_secretsmanager_secret.chat_reader[0].arn
+      S3_STAGING_BUCKET     = aws_s3_bucket.staging.bucket
       SCHEMA_WHITELIST_PATH = "/var/task/schema_whitelist.yaml"
-      EXPLAIN_COST_LIMIT   = "50000"
-      QUERY_LIMIT          = "1000"
-      STATEMENT_TIMEOUT_MS = "10000"
+      EXPLAIN_COST_LIMIT    = "50000"
+      QUERY_LIMIT           = "1000"
+      STATEMENT_TIMEOUT_MS  = "10000"
     }
   }
 
@@ -220,11 +220,11 @@ resource "aws_lambda_function" "get_schema" {
 # Grant the AgentCore execution role permission to invoke the tool Lambdas.
 # ------------------------------------------------------------------------------
 data "aws_iam_policy_document" "agent_invoke_lambdas" {
-  count  = local.db_tools_enabled
+  count = local.db_tools_enabled
   statement {
-    sid       = "InvokeToolLambdas"
-    effect    = "Allow"
-    actions   = ["lambda:InvokeFunction"]
+    sid     = "InvokeToolLambdas"
+    effect  = "Allow"
+    actions = ["lambda:InvokeFunction"]
     resources = [
       aws_lambda_function.query_db[0].arn,
       aws_lambda_function.get_schema[0].arn,

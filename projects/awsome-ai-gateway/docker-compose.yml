@@ -17,7 +17,7 @@ services:
   # Database
   # ============================================================
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-gateway}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gateway_dev_password}
@@ -27,7 +27,7 @@ services:
       - ./db/init:/docker-entrypoint-initdb.d:ro
     networks: [shared]
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER:-gateway}"]
       interval: 10s
@@ -44,7 +44,7 @@ services:
       - ./config/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
     networks: [shared]
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -97,7 +97,7 @@ services:
       - ~/.aws:/home/appuser/.aws:ro
     networks: [data-plane, shared]
     ports:
-      - "8000:8000"
+      - "${GATEWAY_PROXY_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -128,7 +128,7 @@ services:
       - ./gateway-cli/dist:/app/cli-dist:ro
     networks: [control-plane, shared]
     ports:
-      - "8080:8080"
+      - "${ADMIN_API_PORT:-8080}:8080"
     depends_on:
       postgres:
         condition: service_healthy
@@ -163,7 +163,7 @@ services:
       - control-plane
       - shared
     ports:
-      - "3000:3000"
+      - "${ADMIN_UI_PORT:-3000}:3000"
     depends_on:
       admin-api:
         condition: service_healthy

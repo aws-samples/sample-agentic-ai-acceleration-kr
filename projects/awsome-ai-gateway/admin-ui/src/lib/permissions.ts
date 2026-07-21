@@ -48,4 +48,9 @@ export const PAGE_PERMISSIONS: PagePermissionMap = {
 
   // BI assistant chat — admin + team leader (운영 데이터 질의 도구, /analytics 와 동일 범위)
   '/chat': [UserRole.ADMIN, UserRole.TEAM_LEADER],
+
+  // Tool Gateway 대시보드 — admin only (사이드바 항목과 동일 권한).
+  // 이 prefix 하나가 /tools, /tools/observability, /tools/traces 를 모두 커버.
+  // 기능 자체는 NEXT_PUBLIC_TOOL_GATEWAY_ENABLED 플래그로 별도 게이팅됨.
+  '/tools': [UserRole.ADMIN],
 };
