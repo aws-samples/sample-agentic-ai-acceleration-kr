@@ -20,6 +20,7 @@ Each project lives in its own folder under `projects/` with a dedicated README a
 | Project | Description |
 | --- | --- |
 | [agentops-kit](./projects/agentops-kit) | An e-commerce data-analytics agent that demonstrates a full AgentOps pipeline: Gateway → Observability → Evaluation → Improvement. AWS Seoul Summit 2026 demo. |
+| [claude-code-to-agentcore](./projects/claude-code-to-agentcore) | A step-by-step guide to promoting a Claude Code data-analytics agent (Skill, MCP, web search) to production on Amazon Bedrock AgentCore Runtime, Gateway, and Web Search with minimal code changes. |
 
 > This table is updated whenever a new project is added.
 

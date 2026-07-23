@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# 배포 산출물
+runtime/.build/
+
+# 민감 정보 (Cognito client_secret 포함)
+gateway/gateway.json
+
+# 생성 데이터
+local_agent/data/ecommerce.db
+local_agent/data/*.csv
+
+# 로컬 설정
+.claude/settings.local.json
+evaluation/results.json
+
+# 리포지토리 루트에서 .claude/ 를 전역 무시하지만,
+# local_agent/.claude/ 는 샘플 구성의 일부이므로 재포함한다.
+!local_agent/.claude/
+!local_agent/.claude/**
