@@ -2,6 +2,7 @@
 import { App, Environment } from 'aws-cdk-lib';
 import { loadConfig } from '../lib/config';
 import { AgenticT2SqlBaseStack } from '../lib/base-stack';
+import { AgenticT2SqlSemanticStack } from '../lib/semantic-stack';
 import { AgenticT2SqlRuntimeStack } from '../lib/runtime-stack';
 import { AgenticT2SqlUiStack } from '../lib/ui-stack';
 
@@ -22,7 +23,18 @@ const base = new AgenticT2SqlBaseStack(app, 'AgenticT2SqlBaseStack', {
   description: 'Agentic Text-to-SQL — base infra (VPC, Aurora, OpenSearch, ECR, Cognito, Memory, IAM)',
 });
 
-// 2) 런타임 스택: AgentCore Runtime 3개 (이미지 push 후 배포)
+// 2) semantic 스택: DynamoDB / Neptune / OSIS 동기화 / graph-sync Lambda (base 만 의존)
+const semantic = new AgenticT2SqlSemanticStack(app, 'AgenticT2SqlSemanticStack', {
+  env,
+  config,
+  vpc: base.vpc,
+  openSearchDomain: base.openSearchDomain,
+  semanticMcpRole: base.semanticMcpRole,
+  description: 'Agentic Text-to-SQL — semantic layer (DynamoDB, Neptune, OSIS sync, graph-sync Lambda)',
+});
+semantic.addStackDependency(base);
+
+// 3) 런타임 스택: AgentCore Runtime 3개 (이미지 push 후 배포). semantic 의 Neptune 참조.
 const runtime = new AgenticT2SqlRuntimeStack(app, 'AgenticT2SqlRuntimeStack', {
   env,
   config,
@@ -36,11 +48,14 @@ const runtime = new AgenticT2SqlRuntimeStack(app, 'AgenticT2SqlRuntimeStack', {
   orchestratorRole: base.orchestratorRole,
   sqlMcpRole: base.sqlMcpRole,
   semanticMcpRole: base.semanticMcpRole,
+  vpc: base.vpc,
+  graphSecurityGroup: semantic.graphSecurityGroup,
+  graphEndpoint: semantic.graphEndpoint,
   description: 'Agentic Text-to-SQL — AgentCore Runtimes (orchestrator + 2 MCP servers)',
 });
-runtime.addStackDependency(base);
+runtime.addStackDependency(semantic);
 
-// 3) UI 스택: ECS Fargate + ALB (orchestrator runtime 호출)
+// 4) UI 스택: ECS Fargate + ALB (orchestrator runtime 호출)
 const ui = new AgenticT2SqlUiStack(app, 'AgenticT2SqlUiStack', {
   env,
   config,

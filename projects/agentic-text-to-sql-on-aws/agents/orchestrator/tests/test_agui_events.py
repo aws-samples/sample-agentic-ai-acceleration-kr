@@ -62,3 +62,12 @@ def test_tool_call_events():
         "content": "{...}",
         "role": "tool",
     }
+
+
+def test_custom_event():
+    ev = agui_events.custom("clarification_request", {"interruptId": "i-1", "question": "q"})
+    assert ev == {
+        "type": "CUSTOM",
+        "name": "clarification_request",
+        "value": {"interruptId": "i-1", "question": "q"},
+    }

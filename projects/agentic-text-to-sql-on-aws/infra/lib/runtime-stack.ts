@@ -2,6 +2,7 @@ import {
   Stack,
   StackProps,
   CfnOutput,
+  aws_ec2 as ec2,
   aws_rds as rds,
   aws_ecr as ecr,
   aws_iam as iam,
@@ -25,6 +26,12 @@ export interface RuntimeStackProps extends StackProps {
   readonly orchestratorRole: iam.Role;
   readonly sqlMcpRole: iam.Role;
   readonly semanticMcpRole: iam.Role;
+  // M2: semantic 스택에서 전달받는 참조들 (Neptune VPC 접근)
+  readonly vpc: ec2.IVpc;
+  /** Neptune 전용 SG — semantic MCP runtime 로부터 8182 인바운드를 여기서 허용 */
+  readonly graphSecurityGroup: ec2.SecurityGroup;
+  /** Neptune HTTPS 엔드포인트 (semantic MCP env 주입) */
+  readonly graphEndpoint: string;
 }
 
 /**
@@ -67,16 +74,42 @@ export class AgenticT2SqlRuntimeStack extends Stack {
     });
 
     // ───────────────── Semantic retrieval MCP runtime (MCP protocol) ─────────────────
+    // M2: VPC 모드 전환. Neptune 은 VPC 내부(PRIVATE_ISOLATED)라 runtime 이 VPC 안에서 접근하고,
+    // OpenSearch 퍼블릭 엔드포인트는 PRIVATE_WITH_EGRESS 서브넷의 NAT 로 나간다.
+    //
+    // semantic runtime 전용 SG 를 이 스택에서 만들어 runtime 에 붙이고, Neptune SG 인바운드
+    // 규칙도 이 스택에 배치한다(runtime→semantic 단방향 의존이므로 규칙 리소스는 runtime 에 둬야
+    // 사이클이 안 생긴다). Neptune SG 를 mutable 로 import 하여 ingress 규칙만 이쪽에 렌더한다.
+    const semanticRuntimeSg = new ec2.SecurityGroup(this, 'SemanticRuntimeSg', {
+      vpc: props.vpc,
+      securityGroupName: `${config.appPrefix}-semantic-runtime-sg`,
+      description: 'Semantic MCP runtime to Neptune/OpenSearch outbound',
+      allowAllOutbound: true,
+    });
+    ec2.SecurityGroup.fromSecurityGroupId(
+      this,
+      'GraphSgRef',
+      props.graphSecurityGroup.securityGroupId,
+      { mutable: true },
+    ).addIngressRule(
+      ec2.Peer.securityGroupId(semanticRuntimeSg.securityGroupId),
+      ec2.Port.tcp(8182),
+      'semantic MCP runtime to Neptune 8182',
+    );
     this.semanticMcpRuntime = new agentcore.Runtime(this, 'SemanticMcpRuntime', {
       runtimeName: `${nameBase}_semantic_retrieval_mcp`,
-      description: 'Schema/term/synonym/few-shot retrieval via OpenSearch hybrid search',
+      description: 'Schema/term/synonym/few-shot retrieval via OpenSearch hybrid + Neptune graph 순회',
       agentRuntimeArtifact: agentcore.AgentRuntimeArtifact.fromEcrRepository(
         props.ecrSemanticMcp,
         'latest',
       ),
       protocolConfiguration: agentcore.ProtocolType.MCP,
       executionRole: props.semanticMcpRole,
-      networkConfiguration: agentcore.RuntimeNetworkConfiguration.usingPublicNetwork(),
+      networkConfiguration: agentcore.RuntimeNetworkConfiguration.usingVpc(this, {
+        vpc: props.vpc,
+        vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+        securityGroups: [semanticRuntimeSg],
+      }),
       tracingEnabled: true,
       environmentVariables: {
         OPENSEARCH_ENDPOINT: `https://${props.openSearchDomain.domainEndpoint}`,
@@ -85,6 +118,11 @@ export class AgenticT2SqlRuntimeStack extends Stack {
         // 관리형 OpenSearch 도메인이므로 SigV4 서명 서비스명은 "es"
         // (seed 인덱서와 정합; Serverless 로 전환 시 "aoss").
         OPENSEARCH_SERVICE: 'es',
+        // M2: Neptune 그래프 순회 + semantic 인덱스. SEMANTIC_GRAPH_ENABLED=true 로
+        // GraphAugmentedRetriever 활성(미배포 환경에선 false 로 OpenSearch 단독 graceful degrade).
+        GRAPH_ENDPOINT: props.graphEndpoint,
+        SEMANTIC_GRAPH_ENABLED: 'true',
+        SEMANTIC_INDEX: config.semanticIndex,
       },
     });
 

@@ -32,11 +32,22 @@ class OrchestratorBuilder:
         sql_tools: list[Any],
         semantic_tools: list[Any],
         session_manager: Any | None = None,
+        clarification_tool: Any | None = None,
     ) -> None:
         self._settings = settings
         self._sql_tools = sql_tools
         self._semantic_tools = semantic_tools
         self._session_manager = session_manager
+        # clarification(재요청) 도구. 테스트에서 주입 가능. None 이면 실제 도구를 지연 생성.
+        self._clarification_tool = clarification_tool
+
+    def _get_clarification_tool(self) -> Any:
+        """clarification 도구를 반환(주입값 우선, 없으면 지연 생성)."""
+        if self._clarification_tool is None:
+            from .clarification import create_clarification_tool
+
+            self._clarification_tool = create_clarification_tool()
+        return self._clarification_tool
 
     def _model(self) -> Any:
         from strands.models import BedrockModel
@@ -49,13 +60,13 @@ class OrchestratorBuilder:
         )
 
     def build_single_agent(self) -> Any:
-        """단일 Agent + 도구 2종 (폴백/기본 신뢰 경로)."""
+        """단일 Agent + 도구 3종 (clarification + 폴백/기본 신뢰 경로)."""
         from strands import Agent
 
         return Agent(
             model=self._model(),
             system_prompt=SYSTEM_PROMPT,
-            tools=[*self._semantic_tools, *self._sql_tools],
+            tools=[self._get_clarification_tool(), *self._semantic_tools, *self._sql_tools],
             session_manager=self._session_manager,
         )
 
@@ -84,8 +95,17 @@ class OrchestratorBuilder:
                 SYSTEM_PROMPT
                 + "\n\n## 현재 단계: intent 분석\n"
                 "사용자 질문의 의도(집계/조회 대상, 필터, 기간 등)를 한국어로 간결히 정리하세요. "
-                "모호해도 되묻지 말고 합리적 해석·가정을 명시하세요. SQL 은 아직 작성 안 함."
+                "다음 중 하나라도 해당하면 **반드시** `request_clarification` 도구를 한 번 호출해 "
+                "사용자에게 되물어야 합니다(임의 가정 금지):\n"
+                "- 기간이 필요한 질의인데 기간이 없거나 '최근'/'요즘'처럼 범위가 불명확함 "
+                "(예: '최근 매출 알려줘' → 기간 선택지를 제시하며 되묻기)\n"
+                "- 지표 정의가 여러 해석 가능(예: '실적'이 매출인지 주문 수인지)\n"
+                "- 조회 대상 엔티티가 특정되지 않음\n"
+                "되물을 때 fields 는 가능하면 select(선택지 제시) 또는 date_range 로 구성하세요. "
+                "응답을 받으면 그 해석으로 진행합니다. 위에 해당하지 않는 명확한 질의만 도구 없이 "
+                "합리적 해석을 명시하고 진행하세요. SQL 은 아직 작성 안 함."
             ),
+            tools=[self._get_clarification_tool()],
         )
         schema_linking = Agent(
             name="schema_linking",

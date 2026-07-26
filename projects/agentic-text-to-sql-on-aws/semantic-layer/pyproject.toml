@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "semantic-layer"
+version = "0.1.0"
+description = "agentic Text-to-SQL semantic layer: DynamoDB system-of-record CRUD/버전 관리 + 초기 seed + Neptune 동기화 Lambda"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "boto3>=1.34.0",
+]
+
+[project.optional-dependencies]
+# seed-semantic 스크립트와 테스트는 sample-data 패키지의 schema 정의를 재사용한다.
+# 런타임(Lambda) 의존성은 boto3 만 유지하기 위해 sample-data 는 seed 그룹으로 분리한다.
+seed = [
+    "sample-data",
+    "opensearch-py>=2.6.0",
+]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.5.0",
+    "sample-data",
+    "opensearch-py>=2.6.0",
+]
+
+[project.scripts]
+seed-semantic = "semantic_layer.seed_semantic:main"
+
+[tool.uv.sources]
+sample-data = { path = "../sample-data" }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/semantic_layer"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

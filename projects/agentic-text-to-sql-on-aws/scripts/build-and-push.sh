@@ -19,18 +19,25 @@ REGISTRY="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # 컴포넌트 → (빌드 컨텍스트 경로, ECR 리포명) 매핑.
-declare -A CTX=(
-  [orchestrator]="$ROOT/agents/orchestrator"
-  [sql-execution-mcp]="$ROOT/agents/sql-execution-mcp"
-  [semantic-retrieval-mcp]="$ROOT/agents/semantic-retrieval-mcp"
-  [ui]="$ROOT/ui"
-)
-declare -A REPO=(
-  [orchestrator]="agentic-t2sql/orchestrator"
-  [sql-execution-mcp]="agentic-t2sql/sql-execution-mcp"
-  [semantic-retrieval-mcp]="agentic-t2sql/semantic-retrieval-mcp"
-  [ui]="agentic-t2sql/ui"
-)
+# macOS 기본 bash 3.2 는 연관 배열(declare -A)을 지원하지 않으므로 case 함수로 매핑한다.
+ctx_of() {
+  case "$1" in
+    orchestrator)           echo "$ROOT/agents/orchestrator" ;;
+    sql-execution-mcp)      echo "$ROOT/agents/sql-execution-mcp" ;;
+    semantic-retrieval-mcp) echo "$ROOT/agents/semantic-retrieval-mcp" ;;
+    ui)                     echo "$ROOT/ui" ;;
+    *)                      echo "" ;;
+  esac
+}
+repo_of() {
+  case "$1" in
+    orchestrator)           echo "agentic-t2sql/orchestrator" ;;
+    sql-execution-mcp)      echo "agentic-t2sql/sql-execution-mcp" ;;
+    semantic-retrieval-mcp) echo "agentic-t2sql/semantic-retrieval-mcp" ;;
+    ui)                     echo "agentic-t2sql/ui" ;;
+    *)                      echo "" ;;
+  esac
+}
 
 # --- 컨테이너 CLI 선택: docker 데몬이 살아있으면 docker, 아니면 finch ---
 pick_engine() {
@@ -52,8 +59,8 @@ aws ecr get-login-password --region "$REGION" \
 
 build_one() {
   local comp="$1"
-  local ctx="${CTX[$comp]:-}"
-  local repo="${REPO[$comp]:-}"
+  local ctx="$(ctx_of "$comp")"
+  local repo="$(repo_of "$comp")"
   if [[ -z "$ctx" || -z "$repo" ]]; then
     echo "ERROR: 알 수 없는 컴포넌트 '$comp'" >&2
     exit 2

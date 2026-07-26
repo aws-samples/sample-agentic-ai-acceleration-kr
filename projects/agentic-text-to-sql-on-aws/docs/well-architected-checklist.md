@@ -44,7 +44,7 @@
 - [ ] **AGENTSEC07** — rogue-agent 격리: 이상 SQL 볼륨/미승인 테이블 접근 시 EventBridge → deny-all policy 부착 + forensic state S3 캡처
 - [ ] **AGENTSEC05** — non-repudiation: 생성 SQL·resolved entity·실행 identity 구조화 로깅 → S3 Object Lock(immutable audit)
 - [ ] VPC: Bedrock·AgentCore·Data API·Secrets Manager·KMS에 VPC endpoint(데이터 계층 인터넷 경로 제거), CMK 암호화(Memory·token vault·audit S3)
-- [ ] **AGENTSEC01** — Memory 격리: actor별 namespace, 입력 sanitize, poisoning 방지
+- [~] **AGENTSEC01** — Memory 격리: actor별 namespace, 입력 sanitize, poisoning 방지 — 🔶 M2 부분: semantic layer candidate/published 분리 구현(candidate 는 OpenSearch·Neptune 에 미노출 — 간접 prompt injection 방어선). Memory actor 격리·sanitize 는 M3+
 
 ## 3. 안정성 (AGENTREL)
 
@@ -52,16 +52,16 @@
 - [ ] **AGENTREL06-BP04** — query 실행 idempotency: key = hash(최종 SQL + params + data-source + user scope), DynamoDB conditional write + TTL result cache
 - [ ] **AGENTREL07-BP02** — Data API retry 분류: Throttling/transient/Redshift resume = retryable(exp backoff + full jitter) / syntax·AccessDenied·relation-not-found = non-retryable(즉시 fallback). Redshift Data API는 async polling. 2단계 retry budget(호출당 cap + 세션 간 circuit breaker)
 - [ ] **AGENTREL04-BP03** — fallback chain: SQL-gen 주 모델 → 저가 모델 → 캐시/템플릿 쿼리 → graceful 응답("스키마/유사 템플릿 제시"). DB 에러를 SQL-gen에 되먹여 bounded self-repair(1회)
-- [ ] **AGENTREL05-BP03** — grounding: SQL 생성기는 semantic layer/`information_schema`에서 검색한 실제 스키마에 grounding. 실행 전 컬럼/테이블 존재 검증 stage. semantic store 다운 시 introspection으로 degrade + 사용자 고지
+- [x] **AGENTREL05-BP03** — grounding: SQL 생성기는 semantic layer/`information_schema`에서 검색한 실제 스키마에 grounding. semantic store 다운 시 degrade + 사용자 고지 ✅ M2: schema hybrid + 용어/fewshot 검색(Composite) grounding, term 검색·Neptune 순회 실패 시 graceful degrade 구현. (실행 전 컬럼 존재 검증 stage 는 M3+)
 - [ ] **AGENTREL08** — query timeout·LIMIT·max-scanned-bytes를 AppConfig로 외부화(핫스왑), 초과 시 truncated 결과 + 범위 축소 안내
-- [ ] **AGENTREL03** — Memory 분류: 단기(session, TTL) / 장기(semantic) namespace 분리, checkpoint 복구
+- [x] **AGENTREL03** — Memory 분류: 단기(session, TTL) / 장기(semantic) namespace 분리, checkpoint 복구 ✅ M2: STM(AgentCore Memory) ≠ semantic layer(DynamoDB system-of-record) 분리 유지. clarification interrupt 상태는 세션 캐시(LRU)로 복구, 캐시 미스 시 CLARIFICATION_EXPIRED graceful 처리. (AgentCoreMemorySessionManager 는 Graph 세션 미지원 — 알려진 한계)
 
 ## 4. 성능 효율성 (AGENTPERF)
 
 - [ ] **AGENTPERF02-BP01** — iteration cap + confidence 조기종료: 단순 lookup 1~2 loop, self-correction 루프 상한
 - [ ] **AGENTPERF02-BP02** — 모델 tiering: intent 분류·disambiguation은 소형 모델, SQL 생성·복잡 join만 premium. 실패 시 상위 모델 cascade
 - [ ] **AGENTPERF03** — 다층 캐싱: ① Bedrock prompt caching(안정적 schema/system prefix) ② semantic cache(동등 질문→기존 SQL 재사용) ③ tool-output cache. DDL 이벤트 기반 invalidation
-- [ ] **AGENTPERF03-BP02** — context budgeting: 전체 스키마 dump 금지, relevance 필터링 검색 + hybrid + re-rank top-k
+- [x] **AGENTPERF03-BP02** — context budgeting: 전체 스키마 dump 금지, relevance 필터링 검색 + hybrid + re-rank top-k ✅ M2: 스키마·용어·fewshot 모두 hybrid(BM25+kNN) top-k 검색으로만 주입, Composite 병합 상한 top_k*2
 - [ ] **AGENTPERF02-BP04** — streaming: sub-second TTFT, Data API 실행 중 progress 이벤트
 - [ ] **AGENTPERF06** — tool > sub-agent: 결정론적 작업(schema lookup·SQL validation·실행)은 MCP 툴로, 추론 sub-agent 금지. 반복 시퀀스는 meta-tool로 축약
 - [ ] 대용량 result set은 참조(S3/result token)로 전달, supervisor context에 inline 금지
@@ -76,7 +76,7 @@
 
 ## 6. 지속 가능성 (AGENTSUS)
 
-- [ ] **AGENTSUS01-BP02** — 반복 패턴(schema retrieval, SQL validation, result format)을 재사용 가능한 파라미터화 MCP 툴로 (1회 구축, 전체 재사용)
+- [x] **AGENTSUS01-BP02** — 반복 패턴(schema retrieval, SQL validation, result format)을 재사용 가능한 파라미터화 MCP 툴로 (1회 구축, 전체 재사용) ✅ M2: search_schema 단일 도구가 스키마+용어+fewshot+join-path 를 파라미터(query, top_k)로 통합 제공
 - [ ] 공유 서비스: 단일 캐시, 단일 auth 경로(AgentCore Identity), 공유 FM 접근
 - [ ] ECS Fargate right-size + target-tracking autoscaling (피크 고정 provisioning 금지)
 - [ ] **AGENTSUS03-BP04** — decommission lifecycle: agent catalog(owner/purpose/usage), inactive 플래그, 중복 에이전트 방지

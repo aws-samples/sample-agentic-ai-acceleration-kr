@@ -20,13 +20,18 @@ DEFAULT_ACTOR_ID = "anonymous"
 
 @dataclass(frozen=True)
 class ParsedRequest:
-    """정규화된 요청."""
+    """정규화된 요청.
+
+    clarification_response 가 있으면 이번 요청은 앞선 clarification interrupt 에 대한 재개다.
+    형태: {"interruptId": str, "values": {<field name>: <값>, ...}}.
+    """
 
     question: str
     thread_id: str
     run_id: str
     session_id: str
     actor_id: str
+    clarification_response: dict[str, Any] | None = None
 
 
 def parse_run_input(payload: dict[str, Any]) -> ParsedRequest:
@@ -52,13 +57,35 @@ def parse_run_input(payload: dict[str, Any]) -> ParsedRequest:
         )
         or thread_id
     )
+    clarification_response = _parse_clarification_response(forwarded, state)
     return ParsedRequest(
         question=question,
         thread_id=thread_id,
         run_id=run_id,
         session_id=session_id,
         actor_id=actor_id,
+        clarification_response=clarification_response,
     )
+
+
+def _parse_clarification_response(forwarded: Any, state: Any) -> dict[str, Any] | None:
+    """clarification interrupt 재개 payload 를 추출·정규화.
+
+    forwardedProps.clarificationResponse 를 우선하고 state.clarificationResponse 도 수용한다.
+    유효 조건: interruptId(문자열)와 values(dict)가 모두 있어야 한다.
+    """
+    raw = None
+    if isinstance(forwarded, dict):
+        raw = forwarded.get("clarificationResponse")
+    if raw is None and isinstance(state, dict):
+        raw = state.get("clarificationResponse")
+    if not isinstance(raw, dict):
+        return None
+    interrupt_id = _first_str(raw.get("interruptId"), raw.get("interrupt_id"))
+    values = raw.get("values")
+    if not interrupt_id or not isinstance(values, dict):
+        return None
+    return {"interruptId": interrupt_id, "values": values}
 
 
 def _latest_user_message(messages: Any) -> str:

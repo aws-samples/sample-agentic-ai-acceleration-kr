@@ -8,7 +8,8 @@
 # 삭제 순서(생성의 역순 — 의존성):
 #   1) AgenticT2SqlUiStack
 #   2) AgenticT2SqlRuntimeStack
-#   3) AgenticT2SqlBaseStack   (Aurora/OpenSearch/VPC/NAT/ECR/Cognito/Memory)
+#   3) AgenticT2SqlSemanticStack (DynamoDB/Neptune Serverless/OSIS/graph-sync Lambda)
+#   4) AgenticT2SqlBaseStack   (Aurora/OpenSearch/VPC/NAT/ECR/Cognito/Memory)
 #
 # ECR 리포는 emptyOnDelete=true 라 스택 삭제 시 이미지째 제거된다.
 # seed 가 만든 별도 시크릿(agentic-t2sql/aurora/agent-ro; 레거시 경로)이 있으면 함께 정리한다.
@@ -26,7 +27,7 @@ AUTO="${1:-}"
 
 echo "리전: $REGION"
 echo "계정: $(aws sts get-caller-identity --query Account --output text 2>/dev/null || echo '?')"
-echo "삭제 대상 스택: AgenticT2SqlUiStack, AgenticT2SqlRuntimeStack, AgenticT2SqlBaseStack"
+echo "삭제 대상 스택: AgenticT2SqlUiStack, AgenticT2SqlRuntimeStack, AgenticT2SqlSemanticStack, AgenticT2SqlBaseStack"
 echo
 
 if [[ "$AUTO" != "--yes" ]]; then
@@ -38,7 +39,7 @@ cd "$INFRA"
 [[ -d node_modules ]] || npm install
 
 # 역순 삭제. 각 스택이 없으면 CDK 가 no-op.
-for stack in AgenticT2SqlUiStack AgenticT2SqlRuntimeStack AgenticT2SqlBaseStack; do
+for stack in AgenticT2SqlUiStack AgenticT2SqlRuntimeStack AgenticT2SqlSemanticStack AgenticT2SqlBaseStack; do
   echo "[cdk] destroy $stack"
   npx cdk destroy "$stack" --force || echo "  (경고) $stack 삭제 중 문제 — 콘솔에서 확인 필요"
 done
@@ -52,7 +53,7 @@ if aws secretsmanager describe-secret --secret-id "$LEGACY_SECRET" --region "$RE
 fi
 
 # outputs 파일 정리.
-rm -f "$INFRA"/base-outputs.json "$INFRA"/runtime-outputs.json "$INFRA"/ui-outputs.json
+rm -f "$INFRA"/base-outputs.json "$INFRA"/semantic-outputs.json "$INFRA"/runtime-outputs.json "$INFRA"/ui-outputs.json
 
 echo "[cleanup] 완료. CloudWatch 로그 그룹(/aws/bedrock-agentcore/runtimes/*, /ecs/*)은"
 echo "          보존 정책에 따라 남을 수 있으니 필요 시 수동 삭제하세요."

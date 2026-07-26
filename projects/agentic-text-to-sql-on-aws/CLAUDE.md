@@ -30,7 +30,9 @@ Amazon Bedrock AgentCore 기반 agentic Text-to-SQL 솔루션. **설계는 합�
 - [x] 설계 합의 (ARCHITECTURE.md + 다이어그램)
 - [x] M1: CDK 인프라 + 코어 파이프라인 E2E — **배포·E2E 3레벨 검증 완료** (2026-07-26).
       3스택(Base/Runtime/Ui) us-west-2 배포됨, E2E 검증은 `scripts/e2e-smoke.sh`
-- [ ] M2: Semantic layer 완성(Neptune·DynamoDB·동기화) + clarification E2E
+- [x] M2: Semantic layer 완성(Neptune·DynamoDB·동기화) + clarification E2E — **배포·E2E 17체크 검증 완료** (2026-07-26).
+      Semantic 스택(DynamoDB·Neptune Serverless·OSIS·graph-sync Lambda) 추가 배포,
+      semantic MCP 는 VPC 모드 전환. 인터페이스 기록: `docs/m2-m3-interface-contract.md`
 - [ ] M3: Gateway·Identity·Cedar·Redshift·가드레일 전체
 - [ ] M4: Admin panel
 - [ ] M5: 개선 파이프라인 (Track A + Track B)
@@ -61,6 +63,25 @@ Amazon Bedrock AgentCore 기반 agentic Text-to-SQL 솔루션. **설계는 합�
   넘기고 undici가 병합해 서명 불일치 403 유발).
 - orchestrator는 TOOL_CALL_RESULT를 방출하지 않음 — UI 결과 표는 synthesis TEXT_MESSAGE의 GFM markdown 표로 렌더.
 - pyproject에 `readme = "README.md"`가 있으면 Dockerfile에서 `COPY README.md` 필수 (uv sync 실패 방지).
+
+## M2 실전 학습 사항 (M3+ 작업 시 참고)
+
+- **`from __future__ import annotations` + strands `@tool` 데코레이터 조합 함정**: 데코레이터가
+  `get_type_hints`로 어노테이션을 모듈 전역에서 평가하므로, 함수 내부 지연 임포트한 타입
+  (예: ToolContext)은 `globals()`에 주입해야 NameError 가 안 난다. 실 SDK 로 도구 생성을
+  검증하는 단위 테스트를 반드시 둘 것 (로컬 pytest 는 통과했는데 배포에서 크래시났던 사례).
+- **OSIS sink 는 인덱스가 없으면 동적 매핑으로 자동 생성** → embedding 이 float 로 매핑돼
+  kNN 질의가 400. seed 가 DynamoDB 쓰기 전에 knn_vector 매핑으로 인덱스를 선생성해야 한다
+  (`seed-semantic` 이 수행, 잘못된 매핑 감지 시 재생성 — 문서는 Streams 재전파로 복원).
+- **OpenSearch `hybrid` 쿼리는 compound(bool) 안에 중첩 불가** — 필터는 `post_filter` 로.
+- **E2E 는 실행마다 고유 runtimeSessionId 사용** — 고정 ID 는 구버전 이미지의 warm microVM
+  으로 계속 라우팅돼 배포 검증이 착시를 일으킨다.
+- Runtime 이미지만 갱신 시 CFN 변경 없음 → `update-agent-runtime`(동일 설정 재전송)으로
+  :latest digest 재해석 + 새 버전 생성. READY 후에도 warm VM 순환에 수 분 필요.
+- clarification 재개는 같은 microVM 내 모듈 레벨 세션 캐시(runner+MCP클라이언트 유지)로 동작.
+  `AgentCoreMemorySessionManager` 는 Graph(multiagent) 세션 영속화를 지원하지 않음 —
+  microVM 교체 시 CLARIFICATION_EXPIRED 로 재질의 안내 (알려진 한계).
+- macOS 기본 bash 3.2 는 `declare -A` 미지원 — 스크립트는 case 함수 매핑으로.
 
 ## 에이전트 팀 운영 규칙
 

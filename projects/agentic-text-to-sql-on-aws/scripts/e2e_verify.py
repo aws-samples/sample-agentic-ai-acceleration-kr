@@ -7,10 +7,14 @@
   - semantic-retrieval-mcp: search_schema("지역별 매출") → results 비어있지 않음
 레벨 2 (에이전트): orchestrator Runtime 에 RunAgentInput POST(InvokeAgentRuntime) →
   SSE 이벤트에 RUN_STARTED → STEP/TOOL_CALL → TEXT_MESSAGE → RUN_FINISHED 확인.
+레벨 4 (M2 clarification): 모호한 질의 → CUSTOM(clarification_request) 수신 →
+  같은 runtimeSessionId 로 clarificationResponse 재호출 → 정상 완료 확인.
+  semantic 검색 확장(용어/fewshot 히트)도 이 레벨에서 확인.
 
 실행:
   python scripts/e2e_verify.py --level 1        # MCP 레벨만
   python scripts/e2e_verify.py --level 2        # 에이전트 레벨만
+  python scripts/e2e_verify.py --level 4        # M2 clarification/semantic 만
   python scripts/e2e_verify.py --level all      # 전부(기본)
 
 ARN 은 runtime-outputs.json(AgenticT2SqlRuntimeStack) 에서 읽거나 인자로 준다.
@@ -199,6 +203,50 @@ async def verify_semantic_mcp(arn: str, checks: Checks) -> None:
     await _with_mcp_session(arn, work)
 
 
+# ─────────────────────────────── SSE 파싱 공통 ───────────────────────────────
+def _invoke_and_parse(client, arn: str, session_id: str, run_input: dict) -> tuple[set[str], list[str], list[dict]]:
+    """InvokeAgentRuntime 을 호출해 (이벤트 타입 집합, 텍스트 델타, CUSTOM 이벤트 목록)을 반환."""
+    resp = client.invoke_agent_runtime(
+        agentRuntimeArn=arn,
+        runtimeSessionId=session_id,
+        payload=json.dumps(run_input).encode("utf-8"),
+        contentType="application/json",
+        accept="text/event-stream",
+    )
+    seen: set[str] = set()
+    text_chunks: list[str] = []
+    customs: list[dict] = []
+    stream = resp.get("response")
+    raw = b""
+    if hasattr(stream, "read"):
+        raw = stream.read()
+    elif stream is not None:
+        for chunk in stream:
+            raw += chunk if isinstance(chunk, bytes) else bytes(chunk)
+
+    for line in raw.decode("utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        body = line[len("data:"):].strip()
+        if not body or body == "[DONE]":
+            continue
+        try:
+            ev = json.loads(body)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        etype = ev.get("type") or ev.get("event")
+        if etype:
+            seen.add(str(etype))
+        if str(etype).upper().startswith("TEXT_MESSAGE"):
+            delta = ev.get("delta") or ev.get("content") or ""
+            if delta:
+                text_chunks.append(str(delta))
+        if str(etype).upper() == "CUSTOM":
+            customs.append(ev)
+    return seen, text_chunks, customs
+
+
 # ─────────────────────────────── 레벨 2: 에이전트 ───────────────────────────────
 def verify_orchestrator(arn: str, checks: Checks, question: str) -> None:
     print("\n[레벨2] orchestrator (InvokeAgentRuntime, AG-UI SSE)")
@@ -213,8 +261,12 @@ def verify_orchestrator(arn: str, checks: Checks, question: str) -> None:
         "forwardedProps": {"actorId": "e2e-user"},
         "context": [],
     }
-    # AgentCore 세션 헤더(동일 microVM 라우팅). 33자 이상 권장.
-    session_id = "e2e-session-000000000000000000000001"
+    # AgentCore 세션 헤더(동일 microVM 라우팅). 33자 이상 필수.
+    # 고정 ID 를 쓰면 이전 실행(구버전 이미지)의 warm microVM 으로 계속 라우팅될 수 있어
+    # 실행마다 고유 ID 를 생성한다(CLAUDE.md: warm microVM 이 옛 config 로 응답하는 함정).
+    import uuid
+
+    session_id = f"e2e-session-{uuid.uuid4()}"
     resp = client.invoke_agent_runtime(
         agentRuntimeArn=arn,
         runtimeSessionId=session_id,
@@ -271,10 +323,115 @@ def verify_orchestrator(arn: str, checks: Checks, question: str) -> None:
         print(f"    내러티브 미리보기: {preview}")
 
 
+# ─────────────────────────────── 레벨 4: M2 clarification / semantic ───────────────────────────────
+def verify_clarification(arn: str, checks: Checks) -> None:
+    """모호 질의 → clarification_request 수신 → 응답 재호출 → 정상 완료."""
+    print("\n[레벨4] clarification interrupt E2E")
+    import uuid
+
+    import boto3
+
+    client = boto3.client("bedrock-agentcore", region_name=REGION)
+    # microVM 라우팅 affinity 를 위해 매 실행 고유 세션 ID(≥33자).
+    session_id = f"e2e-clarify-{uuid.uuid4()}"
+    thread_id = session_id
+
+    # 의도적으로 모호한 질의(기간·기준 미지정) — intent 가 request_clarification 을 호출하도록.
+    ambiguous = "최근 매출 알려줘"
+    run_input = {
+        "threadId": thread_id,
+        "runId": "e2e-clarify-run-1",
+        "messages": [{"id": "m1", "role": "user", "content": ambiguous}],
+        "state": {},
+        "forwardedProps": {"actorId": "e2e-user"},
+        "context": [],
+    }
+    seen, _, customs = _invoke_and_parse(client, arn, session_id, run_input)
+
+    clar = None
+    for ev in customs:
+        if ev.get("name") == "clarification_request":
+            clar = ev.get("value") or {}
+            break
+    checks.check(
+        "CUSTOM(clarification_request) 수신",
+        clar is not None,
+        f"events={sorted(seen)}",
+    )
+    if clar is None:
+        # 모델이 되묻지 않고 진행했을 수 있음(비결정성). 이후 체크는 스킵.
+        print("    (모델이 clarification 없이 진행 — 프롬프트 튜닝 필요 여부 확인)")
+        return
+
+    interrupt_id = clar.get("interruptId", "")
+    fields = clar.get("fields", [])
+    checks.check("clarification value 에 interruptId/fields 존재", bool(interrupt_id) and bool(fields), f"question={clar.get('question','')!r}")
+
+    # 첫 필드에 기계적 응답을 구성해 재호출.
+    values: dict[str, Any] = {}
+    for f in fields:
+        ftype = f.get("type")
+        name = f.get("name")
+        if not name:
+            continue
+        if ftype == "select" and f.get("options"):
+            values[name] = f["options"][0]
+        elif ftype == "date_range":
+            values[name] = {"from": "2026-01-01", "to": "2026-06-30"}
+        else:
+            values[name] = "최근 3개월"
+
+    resume_input = {
+        "threadId": thread_id,
+        "runId": "e2e-clarify-run-2",
+        "messages": [{"id": "m2", "role": "user", "content": "(재요청 응답)"}],
+        "state": {},
+        "forwardedProps": {
+            "actorId": "e2e-user",
+            "clarificationResponse": {"interruptId": interrupt_id, "values": values},
+        },
+        "context": [],
+    }
+    seen2, text2, _ = _invoke_and_parse(client, arn, session_id, resume_input)
+    seen2_up = {s.upper() for s in seen2}
+    checks.check("재개 후 RUN_FINISHED 수신", any("RUN_FINISHED" in s for s in seen2_up), f"events={sorted(seen2)}")
+    checks.check("재개 후 RUN_ERROR 없음", not any("RUN_ERROR" in s for s in seen2_up), "")
+    expired = "만료" in "".join(text2)
+    checks.check("재개가 만료(CLARIFICATION_EXPIRED)로 빠지지 않음", not expired, "")
+    if text2:
+        preview = "".join(text2)[:200].replace("\n", " ")
+        print(f"    재개 내러티브 미리보기: {preview}")
+
+
+async def verify_semantic_extension(arn: str, checks: Checks) -> None:
+    """semantic-retrieval-mcp 의 M2 확장(용어/fewshot 히트) 확인."""
+    print("\n[레벨4] semantic 검색 확장 (용어/fewshot)")
+
+    async def work(session):
+        r = await session.call_tool("search_schema", {"query": "요즘 들어온 유저 수", "top_k": 5})
+        obj = _tool_payload_to_obj(r)
+        results = obj.get("results") if isinstance(obj, dict) else []
+        doc_types = {item.get("doc_type") for item in results if isinstance(item, dict)}
+        checks.check(
+            "search_schema 에 term/fewshot 히트 포함",
+            bool(doc_types & {"term", "fewshot"}),
+            f"doc_types={sorted(t for t in doc_types if t)}",
+        )
+        term_hits = [i for i in results if isinstance(i, dict) and i.get("doc_type") == "term"]
+        has_fragment = any(i.get("sql_fragment") for i in term_hits)
+        checks.check(
+            "term 히트에 sql_fragment 존재",
+            has_fragment or not term_hits,
+            f"n_term={len(term_hits)}",
+        )
+
+    await _with_mcp_session(arn, work)
+
+
 # ─────────────────────────────── main ───────────────────────────────
 def main() -> int:
     parser = argparse.ArgumentParser(description="agentic Text-to-SQL E2E 검증기")
-    parser.add_argument("--level", choices=["1", "2", "all"], default="all")
+    parser.add_argument("--level", choices=["1", "2", "4", "all"], default="all")
     parser.add_argument("--orchestrator-arn")
     parser.add_argument("--sql-arn")
     parser.add_argument("--semantic-arn")
@@ -298,6 +455,13 @@ def main() -> int:
             print(_red("Orchestrator ARN 을 찾을 수 없습니다."))
             return 2
         verify_orchestrator(arns["orchestrator"], checks, args.question)
+
+    if args.level in ("4", "all"):
+        if not arns["orchestrator"] or not arns["semantic"]:
+            print(_red("Orchestrator/Semantic ARN 을 찾을 수 없습니다."))
+            return 2
+        asyncio.run(verify_semantic_extension(arns["semantic"], checks))
+        verify_clarification(arns["orchestrator"], checks)
 
     return checks.summary()
 

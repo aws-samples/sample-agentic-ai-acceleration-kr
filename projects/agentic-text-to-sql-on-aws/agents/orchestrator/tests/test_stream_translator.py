@@ -1,3 +1,6 @@
+from dataclasses import dataclass
+from typing import Any
+
 from orchestrator.ids import SequentialIdFactory
 from orchestrator.stream_translator import StreamTranslator
 
@@ -9,6 +12,19 @@ def _translate_all(events):
         out.extend(tr.translate(e))
     out.extend(tr.finalize())
     return out
+
+
+@dataclass
+class FakeInterrupt:
+    id: str
+    name: str
+    reason: Any = None
+
+
+@dataclass
+class FakeAgentResult:
+    stop_reason: str
+    interrupts: Any = None
 
 
 def _types(events):
@@ -94,3 +110,100 @@ def test_multiagent_result_flushes_text():
 def test_empty_and_unknown_events_ignored():
     out = _translate_all([{}, {"data": ""}, {"foo": "bar"}])
     assert out == []
+
+
+# --- clarification interrupt 표면화 -----------------------------------------
+
+
+def _clarification_reason():
+    return {
+        "question": "어느 기간의 매출인가요?",
+        "fields": [{"name": "period", "label": "기간", "type": "select", "options": ["이번달"]}],
+    }
+
+
+def test_graph_node_interrupt_emits_custom():
+    tr = StreamTranslator(SequentialIdFactory("r"))
+    event = {
+        "type": "multiagent_node_interrupt",
+        "node_id": "intent",
+        "interrupts": [
+            FakeInterrupt(id="i-1", name="clarification", reason=_clarification_reason())
+        ],
+    }
+    out = list(tr.translate(event))
+    assert len(out) == 1
+    assert out[0]["type"] == "CUSTOM"
+    assert out[0]["name"] == "clarification_request"
+    assert out[0]["value"]["interruptId"] == "i-1"
+    assert out[0]["value"]["question"] == "어느 기간의 매출인가요?"
+    assert out[0]["value"]["fields"][0]["name"] == "period"
+    assert tr.clarification_pending is True
+
+
+def test_interrupt_flushes_open_text_first():
+    tr = StreamTranslator(SequentialIdFactory("r"))
+    out = list(tr.translate({"type": "multiagent_node_stream", "event": {"data": "부분"}}))
+    out += list(
+        tr.translate(
+            {
+                "type": "multiagent_node_interrupt",
+                "node_id": "intent",
+                "interrupts": [FakeInterrupt("i-1", "clarification", _clarification_reason())],
+            }
+        )
+    )
+    types = [e["type"] for e in out]
+    # 열린 텍스트가 CUSTOM 앞에서 닫힘
+    assert types.index("TEXT_MESSAGE_END") < types.index("CUSTOM")
+
+
+def test_interrupt_dict_shape_supported():
+    tr = StreamTranslator(SequentialIdFactory("r"))
+    event = {
+        "type": "multiagent_node_interrupt",
+        "node_id": "intent",
+        "interrupts": [{"id": "i-9", "name": "clarification", "reason": _clarification_reason()}],
+    }
+    out = list(tr.translate(event))
+    assert out[0]["value"]["interruptId"] == "i-9"
+
+
+def test_non_clarification_interrupt_ignored():
+    tr = StreamTranslator(SequentialIdFactory("r"))
+    event = {
+        "type": "multiagent_node_interrupt",
+        "node_id": "x",
+        "interrupts": [FakeInterrupt("i-1", "some_other", {"question": "q"})],
+    }
+    out = list(tr.translate(event))
+    assert out == []
+    assert tr.clarification_pending is False
+
+
+def test_interrupt_malformed_interrupts_defensive():
+    tr = StreamTranslator(SequentialIdFactory("r"))
+    # interrupts 가 리스트가 아님 → 방어적으로 무시(예외 없이)
+    out = list(tr.translate({"type": "multiagent_node_interrupt", "interrupts": None}))
+    assert out == []
+    assert tr.clarification_pending is False
+
+
+def test_single_agent_result_interrupt_emits_custom():
+    tr = StreamTranslator(SequentialIdFactory("r"))
+    result = FakeAgentResult(
+        stop_reason="interrupt",
+        interrupts=[FakeInterrupt("i-5", "clarification", _clarification_reason())],
+    )
+    out = list(tr.translate({"result": result}))
+    assert out[0]["type"] == "CUSTOM"
+    assert out[0]["value"]["interruptId"] == "i-5"
+    assert tr.clarification_pending is True
+
+
+def test_single_agent_result_non_interrupt_ignored():
+    tr = StreamTranslator(SequentialIdFactory("r"))
+    result = FakeAgentResult(stop_reason="end_turn", interrupts=None)
+    out = list(tr.translate({"result": result}))
+    assert out == []
+    assert tr.clarification_pending is False

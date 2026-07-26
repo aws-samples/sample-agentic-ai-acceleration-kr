@@ -7,13 +7,17 @@ ID 생성기를 주입받으므로 부수효과가 없어 단위 테스트로 �
 - 단일 Agent (agent.stream_async):
     {"data": "<텍스트 델타>"}                         → TEXT_MESSAGE_CONTENT
     {"current_tool_use": {"toolUseId","name","input"}} → TOOL_CALL_START/ARGS
+    {"result": AgentResult}                            → interrupt 시 CUSTOM(clarification_request)
 - Graph (graph.stream_async):
     {"type": "multiagent_node_start", "node_id": ...}  → STEP_STARTED
     {"type": "multiagent_node_stream", "event": {...}} → 내부 Agent 이벤트로 재귀 처리
     {"type": "multiagent_node_stop", "node_id": ...}   → STEP_FINISHED
+    {"type": "multiagent_node_interrupt", "node_id", "interrupts":[Interrupt]}
+                                                       → CUSTOM(clarification_request)
     {"type": "multiagent_result", ...}                 → (무시, 상위에서 RUN_FINISHED)
 
 TEXT_MESSAGE_START/END 는 텍스트 델타 시퀀스의 시작/종료를 감지해 자동 삽입한다.
+clarification interrupt 는 CUSTOM 이벤트로 표면화하고, 상위(app.py)가 RUN_FINISHED 로 닫는다.
 """
 
 from __future__ import annotations
@@ -22,6 +26,7 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 from . import agui_events
+from .clarification import CLARIFICATION_INTERRUPT_NAME, clarification_value
 
 
 class StreamTranslator:
@@ -35,6 +40,9 @@ class StreamTranslator:
         self._active_message_id: str | None = None
         self._active_tool_ids: dict[str, str] = {}  # strands toolUseId -> agui toolCallId
         self._emitted_tool_args: set[str] = set()
+        # clarification interrupt 가 표면화되면 True. 상위(app.py)가 이를 보고
+        # 정상 RUN_FINISHED 로 스트림을 닫고 재개는 새 요청으로 처리한다.
+        self.clarification_pending: bool = False
 
     def translate(self, event: dict[str, Any]) -> Iterator[dict[str, Any]]:
         """단일 Strands 이벤트를 0개 이상의 AG-UI 이벤트로 변환."""
@@ -46,6 +54,9 @@ class StreamTranslator:
         if etype == "multiagent_node_stop":
             yield from self._flush_text()
             yield agui_events.step_finished(str(event.get("node_id", "")))
+            return
+        if etype == "multiagent_node_interrupt":
+            yield from self._handle_interrupts(event.get("interrupts"))
             return
         if etype == "multiagent_node_stream":
             inner = event.get("event")
@@ -67,11 +78,47 @@ class StreamTranslator:
             yield from self._handle_text_delta(data)
             return
 
+        # 단일 Agent 최종 결과 이벤트: stop_reason=="interrupt" 이면 interrupts 표면화.
+        result = event.get("result")
+        if result is not None and self._result_interrupted(result):
+            yield from self._handle_interrupts(getattr(result, "interrupts", None))
+            return
+
     def finalize(self) -> Iterator[dict[str, Any]]:
         """스트림 종료 시 열린 텍스트 메시지를 닫는다."""
         yield from self._flush_text()
 
     # --- 내부 헬퍼 ---------------------------------------------------------
+
+    def _handle_interrupts(self, interrupts: Any) -> Iterator[dict[str, Any]]:
+        """interrupt(들)를 CUSTOM(clarification_request) 이벤트로 방출.
+
+        clarification 이름이 아닌 interrupt 는 방어적으로 무시한다(현재 clarification 만 사용).
+        """
+        # 열린 텍스트/도구 스트림을 먼저 닫아 이벤트 순서를 보존.
+        yield from self._flush_text()
+        if not isinstance(interrupts, (list, tuple)):
+            return
+        for interrupt in interrupts:
+            name = self._interrupt_name(interrupt)
+            if name != CLARIFICATION_INTERRUPT_NAME:
+                continue
+            self.clarification_pending = True
+            yield agui_events.custom("clarification_request", clarification_value(interrupt))
+
+    @staticmethod
+    def _interrupt_name(interrupt: Any) -> str | None:
+        if isinstance(interrupt, dict):
+            return interrupt.get("name")
+        return getattr(interrupt, "name", None)
+
+    @staticmethod
+    def _result_interrupted(result: Any) -> bool:
+        """단일 Agent 최종 결과가 interrupt 로 정지했는지 판단(방어적)."""
+        if getattr(result, "stop_reason", None) == "interrupt":
+            return True
+        # stop_reason 이 없어도 interrupts 가 채워져 있으면 interrupt 로 간주.
+        return bool(getattr(result, "interrupts", None))
 
     def _handle_text_delta(self, delta: str) -> Iterator[dict[str, Any]]:
         if self._active_message_id is None:

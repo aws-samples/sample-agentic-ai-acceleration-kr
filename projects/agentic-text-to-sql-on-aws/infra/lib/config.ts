@@ -29,6 +29,16 @@ export interface AppConfig {
   readonly modelId: string;
   /** ECR 리포 이름 4종 */
   readonly ecrRepos: EcrRepoNames;
+
+  // ───────────── M2: Semantic layer ─────────────
+  /** DynamoDB semantic system-of-record 테이블명 (agentic-t2sql-semantic) */
+  readonly semanticTableName: string;
+  /** semantic 문서용 OpenSearch 인덱스명 (t2sql-semantic — OSIS 싱크 대상) */
+  readonly semanticIndex: string;
+  /** Neptune Serverless 최소 용량 (NCU, 최소 1.0) */
+  readonly graphMinNcu: number;
+  /** Neptune Serverless 최대 용량 (NCU) */
+  readonly graphMaxNcu: number;
 }
 
 const DEFAULTS = {
@@ -45,6 +55,11 @@ const DEFAULTS = {
     semanticRetrievalMcp: 'agentic-t2sql/semantic-retrieval-mcp',
     ui: 'agentic-t2sql/ui',
   },
+  // M2 semantic layer
+  semanticTableName: 'agentic-t2sql-semantic',
+  semanticIndex: 't2sql-semantic',
+  graphMinNcu: 1,
+  graphMaxNcu: 2.5,
 } as const;
 
 /**
@@ -69,5 +84,9 @@ export function loadConfig(scope: Construct): AppConfig {
         ecr.semanticRetrievalMcp ?? DEFAULTS.ecrRepos.semanticRetrievalMcp,
       ui: ecr.ui ?? DEFAULTS.ecrRepos.ui,
     },
+    semanticTableName: ctx('semanticTableName') ?? DEFAULTS.semanticTableName,
+    semanticIndex: ctx('semanticIndex') ?? DEFAULTS.semanticIndex,
+    graphMinNcu: (ctx('graphMinNcu') as number | undefined) ?? DEFAULTS.graphMinNcu,
+    graphMaxNcu: (ctx('graphMaxNcu') as number | undefined) ?? DEFAULTS.graphMaxNcu,
   };
 }

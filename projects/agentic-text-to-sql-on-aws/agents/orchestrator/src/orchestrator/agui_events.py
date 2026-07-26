@@ -86,3 +86,12 @@ def tool_call_result(
         "content": content,
         "role": role,
     }
+
+
+def custom(name: str, value: Any) -> dict[str, Any]:
+    """AG-UI CUSTOM 이벤트(표준 외 커스텀 신호).
+
+    clarification(재요청) interrupt 를 UI 로 표면화할 때 사용한다:
+      custom("clarification_request", {"interruptId","interruptName","question","fields"}).
+    """
+    return {"type": "CUSTOM", "name": name, "value": value}

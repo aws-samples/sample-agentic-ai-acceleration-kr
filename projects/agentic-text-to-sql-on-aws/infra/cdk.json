@@ -27,6 +27,10 @@
       "semanticRetrievalMcp": "agentic-t2sql/semantic-retrieval-mcp",
       "ui": "agentic-t2sql/ui"
     },
+    "semanticTableName": "agentic-t2sql-semantic",
+    "semanticIndex": "t2sql-semantic",
+    "graphMinNcu": 1,
+    "graphMaxNcu": 2.5,
     "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
     "@aws-cdk/core:checkSecretUsage": true,
     "@aws-cdk/core:target-partitions": ["aws", "aws-cn"],

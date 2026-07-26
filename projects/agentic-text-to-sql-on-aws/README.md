@@ -6,17 +6,23 @@ Amazon Bedrock AgentCore 기반의 agentic Text-to-SQL 솔루션입니다. 사�
 
 > ⚠️ **데모/샘플 목적 전용입니다.** 이 코드는 학습과 참조를 위한 것으로, 프로덕션 사용 전에는 인증 강제(현재 미강제), HTTPS/TLS, 최소 권한 재점검, 비용·용량 재산정이 필요합니다. 실제 데이터·자격증명으로 실행할 때 유의하세요.
 
-## 구현 범위 (M1)
+## 구현 범위 (M2)
 
-이 저장소의 현재 상태는 **M1 — 코어 파이프라인 E2E**입니다. 자연어 질의 → 스키마 링킹 → SQL 생성 → AST 검증 → 실행 → 결과 스트리밍이 실제 데이터로 동작합니다. M2~M5는 로드맵입니다.
+이 저장소의 현재 상태는 **M2 — Semantic layer 완성 + clarification**입니다. 자연어 질의 → 스키마 링킹(비즈니스 용어·few-shot·join-path 포함) → SQL 생성 → AST 검증 → 실행 → 결과 스트리밍이 동작하며, 질의가 모호하면 에이전트가 인터랙티브 폼으로 되묻고 같은 세션에서 재개합니다. M3~M5는 로드맵입니다.
 
 | 마일스톤 | 범위 | 상태 |
 |---|---|---|
 | **M1** | 코어 파이프라인 E2E (CDK 인프라 · Aurora 샘플 데이터 · OpenSearch 최소형 · AG-UI 통합) | ✅ 구현 |
-| M2 | Semantic layer 완성(Neptune·DynamoDB·동기화) + clarification(interrupt 재요청) | 🗺️ 로드맵 |
+| **M2** | Semantic layer 완성(Neptune·DynamoDB·Streams 동기화) + clarification(interrupt 재요청) | ✅ 구현 |
 | M3 | Tool/보안 완성 (Gateway · Identity · Cedar policy · Redshift 소스 · 가드레일) | 🗺️ 로드맵 |
 | M4 | Admin panel (데이터소스 등록 · semantic 큐레이션 · 권한 · 디버깅) | 🗺️ 로드맵 |
 | M5 | 개선 파이프라인 (Track A: 평가→insight→bundle→A/B, Track B: semantic 지식 채굴) | 🗺️ 로드맵 |
+
+**M2에서 추가된 것**
+- **DynamoDB system-of-record** (`semantic-layer/`): 비즈니스 용어·few-shot·스키마 메타의 CRUD와 항목 단위 버전 관리(`v0` 최신본 + 이력), `candidate`/`published` 분리(미승인 지식은 에이전트에 노출되지 않음 — 지식 오염 방어선).
+- **파생 저장소 동기화** (dual-write 금지): DynamoDB Streams → ① OSIS zero-ETL 파이프라인 → OpenSearch `t2sql-semantic` 인덱스(published만), ② Streams consumer Lambda → Neptune openCypher upsert(+DLQ).
+- **Neptune Serverless 그래프**: `(Table)-[:JOINS]->(Table)`, `(Term)-[:MAPS_TO]->(Column)` — schema linking 시 join-path 순회(GraphRAG). semantic MCP 는 VPC 모드로 전환해 Neptune에 접근합니다.
+- **clarification(재요청) E2E**: 모호한 질의 → Strands interrupt → AG-UI `CUSTOM(clarification_request)` 이벤트 → CopilotKit 폼(select/date-range/text) → 같은 세션 재호출로 중단 지점부터 재개.
 
 설계 전체는 [`ARCHITECTURE.md`](./ARCHITECTURE.md), 구현 체크리스트는 [`docs/well-architected-checklist.md`](./docs/well-architected-checklist.md)를 참고하세요.
 
@@ -38,11 +44,12 @@ Amazon Bedrock AgentCore 기반의 agentic Text-to-SQL 솔루션입니다. 사�
 └───────────────┬───────────────────────────┬──────────────────┘
                 │ MCP (SigV4 streamable-http)│
 ┌───────────────▼───────────┐   ┌───────────▼──────────────────┐
-│ [3] Tool — MCP servers     │   │ [4] Semantic — OpenSearch     │
-│  (AgentCore Runtime 호스팅)│   │     hybrid(vector+BM25) 검색  │
-│  · sql-execution-mcp       │   │  (M2에서 Neptune·DynamoDB 추가)│
-│  · semantic-retrieval-mcp  │   └───────────────────────────────┘
-└───────────────┬───────────┘
+│ [3] Tool — MCP servers     │   │ [4] Semantic layer            │
+│  (AgentCore Runtime 호스팅)│   │  DynamoDB(원본, 버전·상태)     │
+│  · sql-execution-mcp       │   │   └Streams→ OpenSearch(hybrid)│
+│  · semantic-retrieval-mcp  │   │   └Streams→ Neptune(join path)│
+│    (VPC 모드 — Neptune 접근)│   │  candidate/published 분리     │
+└───────────────┬───────────┘   └───────────────────────────────┘
                 │ RDS Data API (read-only 자격증명)
 ┌───────────────▼──────────────────────────────────────────────┐
 │ [5] Data — Aurora PostgreSQL Serverless v2 (Data API)         │
@@ -58,21 +65,23 @@ Amazon Bedrock AgentCore 기반의 agentic Text-to-SQL 솔루션입니다. 사�
 
 ```
 agentic-text-to-sql-on-aws/
-├── infra/                         # CDK (TypeScript) — 3개 스택
-│   ├── bin/agentic-t2sql.ts       # 앱 진입점 (스택 간 의존성 연결)
+├── infra/                         # CDK (TypeScript) — 4개 스택
+│   ├── bin/agentic-t2sql.ts       # 앱 진입점 (base → semantic → runtime → ui)
 │   └── lib/
 │       ├── base-stack.ts          # VPC/Aurora/OpenSearch/ECR/Cognito/Memory/IAM
+│       ├── semantic-stack.ts      # DynamoDB/Neptune Serverless/OSIS/graph-sync Lambda (M2)
 │       ├── runtime-stack.ts       # AgentCore Runtime × 3 (orchestrator + MCP 2)
 │       ├── ui-stack.ts            # ECS Fargate + 퍼블릭 ALB
 │       └── config.ts              # cdk.json context 기반 공통 설정
 ├── agents/
-│   ├── orchestrator/              # Strands Graph 오케스트레이터 (AG-UI, 포트 8080)
+│   ├── orchestrator/              # Strands Graph 오케스트레이터 (AG-UI, 포트 8080, clarification 포함)
 │   ├── sql-execution-mcp/         # SQL 검증(SQLGlot AST)·실행(Data API) MCP (포트 8000)
-│   └── semantic-retrieval-mcp/    # OpenSearch hybrid 검색 MCP (포트 8000)
-├── ui/                            # Next.js + CopilotKit (AG-UI 프록시)
+│   └── semantic-retrieval-mcp/    # 스키마+용어+few-shot hybrid 검색 · Neptune join-path MCP (포트 8000)
+├── semantic-layer/                # DynamoDB CRUD·버전 관리 · seed · Streams→Neptune Lambda (M2, uv)
+├── ui/                            # Next.js + CopilotKit (AG-UI 프록시 · clarification 폼)
 ├── sample-data/                   # 결정적 샘플 데이터 생성기 + seed/인덱싱 스크립트 (uv)
 ├── scripts/                       # 배포·seed·E2E·cleanup 스크립트
-├── docs/                          # 아키텍처 리뷰 다이어그램 · WA 체크리스트
+├── docs/                          # 아키텍처 리뷰 다이어그램 · WA 체크리스트 · 인터페이스 기록
 ├── ARCHITECTURE.md                # 설계 확정본 (단일 진실 원천)
 └── README.md
 ```
@@ -90,7 +99,7 @@ agentic-text-to-sql-on-aws/
 
 ## 실행 순서
 
-스택은 base → (이미지 push · seed) → runtime → ui 순으로 의존합니다. 아래 스크립트가 순서를 캡슐화합니다.
+스택은 base → semantic → (이미지 push · seed) → runtime → ui 순으로 의존합니다. 아래 스크립트가 순서를 캡슐화합니다.
 
 ```bash
 # 0) 인프라 의존성 설치
@@ -101,23 +110,28 @@ cd infra && npm install && cd ..
 scripts/deploy.sh base
 #    → infra/base-outputs.json 생성
 
-# 2) 컨테이너 이미지 3개 빌드·푸시 (ARM64, docker→finch 자동 폴백)
+# 2) Semantic 스택 배포 (DynamoDB/Neptune Serverless/OSIS/graph-sync Lambda) — 15~20분
+scripts/deploy.sh semantic
+#    → infra/semantic-outputs.json 생성
+
+# 3) 컨테이너 이미지 3개 빌드·푸시 (ARM64, docker→finch 자동 폴백)
 scripts/build-and-push.sh orchestrator sql-execution-mcp semantic-retrieval-mcp
 
-# 3) 샘플 데이터 적재 + OpenSearch 인덱싱 (멱등, base-outputs.json 기반)
+# 4) 샘플 데이터 + semantic layer seed (멱등, outputs 기반)
 scripts/seed.sh
-#    Aurora Serverless v2 resume 지연으로 첫 호출이 실패할 수 있어 자동 재시도합니다.
+#    Aurora 데이터 적재 → OpenSearch 스키마 인덱싱 → DynamoDB semantic seed
+#    (semantic 인덱스를 kNN 매핑으로 선생성 후 Streams 로 OpenSearch·Neptune 전파)
 
-# 4) Runtime 스택 배포 (AgentCore Runtime × 3)
+# 5) Runtime 스택 배포 (AgentCore Runtime × 3 — semantic MCP 는 VPC 모드)
 scripts/deploy.sh runtime
 #    → infra/runtime-outputs.json 생성
 
-# 5) UI 이미지 빌드·푸시 후 UI 스택 배포
+# 6) UI 이미지 빌드·푸시 후 UI 스택 배포
 scripts/build-and-push.sh ui
 scripts/deploy.sh ui
 #    → infra/ui-outputs.json 생성 (AlbUrl 출력)
 
-# 6) E2E 스모크 테스트 (MCP 직접호출 · orchestrator SSE · UI ALB)
+# 7) E2E 스모크 테스트 (MCP · orchestrator SSE · UI ALB · clarification/semantic 확장)
 scripts/e2e-smoke.sh
 ```
 

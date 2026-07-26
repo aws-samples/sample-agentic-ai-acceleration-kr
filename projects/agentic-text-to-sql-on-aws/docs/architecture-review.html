@@ -256,15 +256,15 @@
     <!-- ══════════ L4: Semantic ══════════ -->
     <div class="node aws" id="n-ddb" style="left:270px; top:595px; width:200px">
       <b>DynamoDB</b>
-      <span>system-of-record<br>용어·동의어·메트릭·few-shot CRUD</span>
+      <span>system-of-record (M2 ✅)<br>용어·few-shot·스키마 CRUD·버전<br>candidate/published 분리</span>
     </div>
     <div class="node aws" id="n-os" style="left:530px; top:595px; width:200px">
       <b>OpenSearch</b>
-      <span>hybrid 검색 (vector+BM25)<br>스키마·동의어·예시 인덱스</span>
+      <span>hybrid 검색 (vector+BM25)<br>스키마 + semantic 인덱스 (M2 ✅)<br>← OSIS zero-ETL (published만)</span>
     </div>
     <div class="node aws" id="n-neptune" style="left:780px; top:595px; width:190px">
-      <b>Neptune</b>
-      <span>용어 관계·join path 그래프<br>multi-hop 순회 (GraphRAG)</span>
+      <b>Neptune Serverless</b>
+      <span>용어 관계·join path 그래프 (M2 ✅)<br>openCypher 순회 (GraphRAG)<br>← Streams consumer Lambda</span>
     </div>
 
     <!-- ══════════ L5: Data ══════════ -->

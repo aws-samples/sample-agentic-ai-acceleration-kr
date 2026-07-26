@@ -5,7 +5,7 @@
 
 > M1 범위: 자연어 질의 → SSE 스트리밍(STEP 진행 바 + 텍스트 + 도구 칩 + SQL) → 결과.
 > 결과 표는 synthesis 단계의 markdown 표를 CopilotChat 이 렌더합니다(아래 "결과 표시" 참고).
-> clarification(interrupt) 폼은 M2 범위로 이번엔 미구현입니다.
+> M2 범위: clarification(재요청) 인터랙티브 폼 추가(아래 "clarification 재요청 폼" 참고).
 
 ## 아키텍처 요약
 
@@ -37,6 +37,7 @@ AgentCore Runtime /invocations  (SSE, text/event-stream)
 | `STEP_STARTED`/`STEP_FINISHED {stepName}` | 상단 파이프라인 진행 바 (`PipelineProgress`). stepName ∈ intent·schema_linking·sql_generation·execution·synthesis → 의도 분석·스키마 연결·SQL 생성·실행·결과 정리 |
 | `TEXT_MESSAGE_START/CONTENT/END` | CopilotChat 자동 렌더 (markdown, GFM 표 포함) |
 | `TOOL_CALL_START/ARGS/END` (`search_schema`, `run_sql`) | 상태 칩(스키마 검색 중…/SQL 실행 중…) + `run_sql` args.sql → SQL 코드블록 |
+| `CUSTOM {name:"clarification_request"}` | clarification 재요청 폼(`ClarificationHost` + `ClarificationForm`). 아래 참고 |
 | `RUN_STARTED`/`RUN_FINISHED`/`RUN_ERROR` | 실행 수명주기 |
 
 - ⚠️ **`TOOL_CALL_RESULT` 는 방출되지 않습니다.** 쿼리 결과 표는 도구 결과가 아니라
@@ -45,6 +46,49 @@ AgentCore Runtime /invocations  (SSE, text/event-stream)
 - 요청 규약: `threadId` = 브라우저 세션 UUID(고정, AgentCore Memory 세션 격리),
   `forwardedProps.actorId` = 사용자 식별자(M1 고정 `demo-user`, `AGENT_ACTOR_ID` 로 override,
   M3 에서 Cognito sub 로 교체). actorId 는 프록시의 SigV4 fetch 단계에서 body 에 주입됩니다.
+
+## clarification 재요청 폼 (M2)
+
+orchestrator 는 질의에 필요한 정보가 부족하면 **AG-UI CUSTOM 이벤트**를 방출하고
+`RUN_FINISHED` 로 스트림을 닫습니다. UI 는 이를 인라인 폼으로 렌더하고, 사용자 응답을
+**동일 threadId 로 재실행**하며 전달합니다.
+
+이벤트 value 스키마(확정 계약):
+
+```json
+{ "type": "CUSTOM", "name": "clarification_request",
+  "value": {
+    "interruptId": "…", "interruptName": "clarification",
+    "question": "조회 기간을 알려주세요",
+    "fields": [
+      { "name": "period", "label": "기간", "type": "select",
+        "options": ["최근 1개월", "최근 3개월", "전체"] },
+      { "name": "from_to", "label": "직접 지정", "type": "date_range" },
+      { "name": "note", "label": "비고", "type": "text" }
+    ]
+  } }
+```
+
+- field `type`: `select`(드롭다운) · `date_range`(시작·종료 두 date 인풋) · `text`.
+- **재실행 응답**: `forwardedProps.clarificationResponse = { interruptId, values }` 로 전달합니다.
+  - `values` 는 필드명→값 맵. `date_range` 값은 `{ "from": "YYYY-MM-DD", "to": "YYYY-MM-DD" }`,
+    그 외는 문자열. 입력하지 않은 필드는 생략합니다.
+  - **건너뛰기**는 빈 `values`(`{}`)로 재실행 → orchestrator 가 최선 추정으로 진행합니다.
+
+### forwardedProps 전달 방식 (근거)
+
+헤더/route.ts 우회 없이 **CopilotKit v2 의 네이티브 재실행 경로**를 사용합니다:
+
+- `useCopilotKit().copilotkit.runAgent({ agent, forwardedProps })` 가 per-run `forwardedProps` 를
+  provider properties 와 병합해 `agent.runAgent` 입력에 싣습니다(`@copilotkit/core` `runAgent`).
+- `AbstractAgent.prepareRunAgentInput` 이 `forwardedProps` 를 `RunAgentInput` 에 포함하고,
+  `HttpAgent` 가 전체 입력을 프록시 요청 본문(JSON)으로 직렬화합니다(`@ag-ui/client` 0.0.57).
+- v2 런타임(`handle-run` → in-memory runner)이 파싱한 `input` 을 백엔드 에이전트로 **그대로**
+  넘기므로 `forwardedProps` 가 AgentCore `/invocations` 까지 도달합니다.
+
+CUSTOM 이벤트 수신은 `@ag-ui/client` 0.0.57 `AgentSubscriber` 의 **네이티브 `onCustomEvent`**
+훅으로 처리합니다(`agent.subscribe({ onCustomEvent })`, PipelineProgress 의 STEP 구독과 동일 패턴).
+같은 run 에서 동일 `interruptId` 중복 수신은 방어하며, 다음 `RUN_STARTED` 시 폼을 정리합니다.
 
 ## 환경 변수
 
@@ -106,6 +150,8 @@ npm run dev                              # http://localhost:3000
 | `src/components/PipelineProgress.tsx` | STEP_* 구독 → 파이프라인 진행 바 |
 | `src/components/toolRenderers.tsx` | 와일드카드 도구 렌더러 (진행 칩 + run_sql SQL 코드블록) |
 | `src/components/ToolProgressChip.tsx` | search_schema/run_sql → 한국어 상태 칩 |
+| `src/components/ClarificationHost.tsx` | CUSTOM(clarification) 수신 + forwardedProps 재실행 트리거 |
+| `src/components/ClarificationForm.tsx` | clarification value 스키마 → select/date_range/text 폼 렌더 |
 
 ## 인증 (M3)
 

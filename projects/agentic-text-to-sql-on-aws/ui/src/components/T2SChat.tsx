@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import { CopilotChat } from '@copilotkit/react-core/v2';
 import { getBrowserSessionId } from '@/lib/session';
 import { PipelineProgress } from './PipelineProgress';
+import { ClarificationHost } from './ClarificationHost';
 
 /**
  * 채팅 본체(v2). CopilotKitProvider 하위에서 동작한다.
@@ -34,6 +35,8 @@ export function T2SChat() {
             '안녕하세요! 자연어로 데이터를 질의해 보세요. 예) "지난달 지역별 매출 상위 5개를 보여줘"',
         }}
       />
+      {/* clarification(재요청) 폼: CUSTOM 이벤트 수신 시 채팅 하단에 인라인 표시. */}
+      <ClarificationHost agentId="text_to_sql" />
     </div>
   );
 }

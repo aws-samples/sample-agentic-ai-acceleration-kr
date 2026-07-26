@@ -69,3 +69,57 @@ def test_snake_case_keys_accepted():
     )
     assert req.thread_id == "T"
     assert req.run_id == "R"
+
+
+def test_clarification_response_default_none():
+    req = parse_run_input({"messages": [{"role": "user", "content": "q"}]})
+    assert req.clarification_response is None
+
+
+def test_clarification_response_from_forwarded_props():
+    payload = {
+        "threadId": "t1",
+        "messages": [{"role": "user", "content": "재개"}],
+        "forwardedProps": {
+            "clarificationResponse": {"interruptId": "i-1", "values": {"period": "이번달"}}
+        },
+    }
+    req = parse_run_input(payload)
+    assert req.clarification_response == {"interruptId": "i-1", "values": {"period": "이번달"}}
+
+
+def test_clarification_response_from_state():
+    payload = {
+        "threadId": "t1",
+        "messages": [{"role": "user", "content": "재개"}],
+        "state": {"clarificationResponse": {"interruptId": "i-2", "values": {}}},
+    }
+    req = parse_run_input(payload)
+    assert req.clarification_response == {"interruptId": "i-2", "values": {}}
+
+
+def test_clarification_response_snake_case_interrupt_id():
+    payload = {
+        "forwardedProps": {"clarificationResponse": {"interrupt_id": "i-3", "values": {"x": 1}}},
+        "messages": [{"role": "user", "content": "재개"}],
+    }
+    req = parse_run_input(payload)
+    assert req.clarification_response == {"interruptId": "i-3", "values": {"x": 1}}
+
+
+def test_clarification_response_invalid_missing_values():
+    payload = {
+        "forwardedProps": {"clarificationResponse": {"interruptId": "i-4"}},
+        "messages": [{"role": "user", "content": "q"}],
+    }
+    req = parse_run_input(payload)
+    assert req.clarification_response is None
+
+
+def test_clarification_response_invalid_missing_id():
+    payload = {
+        "forwardedProps": {"clarificationResponse": {"values": {"x": 1}}},
+        "messages": [{"role": "user", "content": "q"}],
+    }
+    req = parse_run_input(payload)
+    assert req.clarification_response is None

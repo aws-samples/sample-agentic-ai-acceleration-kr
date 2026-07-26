@@ -60,4 +60,19 @@ done
 # --- OpenSearch 인덱싱 ---
 uv run index-schema-docs
 
+# --- M2: semantic layer seed (DynamoDB → Streams → OpenSearch/Neptune 동기화) ---
+# semantic-outputs.json 이 있으면(Semantic 스택 배포됨) DynamoDB 에 용어/fewshot/스키마
+# 엔티티를 적재한다. OSIS·graph-sync Lambda 가 파생 저장소로 전파한다(최종 일관성).
+SEMANTIC_OUT="$INFRA/semantic-outputs.json"
+if [[ -f "$SEMANTIC_OUT" ]]; then
+  export SEMANTIC_TABLE_NAME="$(jq -r '.AgenticT2SqlSemanticStack.SemanticTableName' "$SEMANTIC_OUT")"
+  echo "[seed] semantic table=$SEMANTIC_TABLE_NAME"
+  cd "$ROOT/semantic-layer"
+  [[ -d .venv ]] || uv sync --extra seed
+  uv run seed-semantic
+  echo "[seed] semantic layer 적재 완료 (동기화는 수 초 내 전파)."
+else
+  echo "[seed] semantic-outputs.json 없음 — semantic seed skip (M1 호환)."
+fi
+
 echo "[seed] 완료: Aurora 데이터 + OpenSearch 인덱스."
