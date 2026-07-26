@@ -2,8 +2,15 @@
 
 이 문서는 `runtime/ecommerce_runtime.py`(Claude Agent SDK + AgentCore Runtime)의
 관측성 구성을 정리합니다. **AgentCore Observability(CloudWatch GenAI Observability)를
-기본 축**으로 하고, Claude Agent SDK 구조에서 자동 계측이 잡지 못하는 LLM 수치
-(토큰·비용)를 커스텀 메트릭으로 보완합니다.
+기본 축**으로 하고, Claude Agent SDK 구조에서 자동 계측이 잡지 못하는 LLM 데이터
+(토큰·비용·프롬프트)를 gen_ai 스팬·커스텀 메트릭·구조화 로그로 보완합니다.
+
+> **AgentCore Observability는 어디서 보나?** AgentCore Observability는 기능 이름이고,
+> 공식 확인 화면은 CloudWatch 콘솔의 GenAI Observability → Agent Core 탭입니다
+> (AgentCore 서비스 콘솔의 Observability 메뉴도 같은 화면으로 연결).
+> Transaction Search가 저장하는 스팬(`aws/spans` 로그 그룹) 기반으로 에이전트 →
+> 세션 → 트레이스 타임라인 → 스팬 상세로 내려가며 탐색합니다.
+> `agentcore deploy` 출력의 "GenAI Observability Dashboard" 링크가 이 화면입니다.
 
 ---
 
@@ -17,9 +24,12 @@
 │       │     └─ 모델 호출·도구 실행은 이 안에서 일어남          │
 │       └─ ResultMessage (토큰·비용·레이턴시·세션ID) 수신       │
 │            └─ observability.py  observe_invocation()        │
-│                 └─▶ CloudWatch 커스텀 메트릭 genai.*         │
+│                 ├─▶ gen_ai 스팬 (claude_agent_sdk.invoke_agent│
+│                 │    — 프롬프트·응답·토큰, 기존 트레이스에 연결)│
+│                 ├─▶ CloudWatch 커스텀 메트릭 genai.*         │
+│                 └─▶ GENAI_INVOCATION 구조화 로그 (입출력 전문)│
 └─────────────────────────────────────────────────────────────┘
-     │ (ADOT: 트레이스·스팬·로그 — 자동)      │ (보완 메트릭)
+     │ (스팬: ADOT 자동 + gen_ai 수동)        │ (보완 메트릭)
      ▼                                       ▼
  CloudWatch GenAI Observability          CloudWatch 이상탐지 알람 4종
  (세션·트레이스·스팬 탐색기)              (setup_anomaly_alarms.py)
@@ -30,22 +40,41 @@
 | 축 | 무엇을 보여주나 | 어떻게 활성화되나 |
 |----|----------------|------------------|
 | **AgentCore Observability** (기본) | 세션 목록, 트레이스/스팬 타임라인, 런타임 로그, Transaction Search | `agentcore deploy` 시 자동 구성 (ADOT + X-Ray 전송 + 로그 전달) |
-| **genai.* 보완 메트릭** | 호출별 토큰·비용·레이턴시·도구 호출·에러 | `observability.py`가 ResultMessage 기반으로 기록 |
-| **이상탐지 알람** | 위 메트릭의 급증·급감 감지 | `setup_anomaly_alarms.py` 1회 실행 |
+| **gen_ai 스팬** (보완) | 콘솔 트레이스 상세에서 프롬프트·응답 전문·토큰·비용 | `observability.py`가 호출마다 발행 (content는 옵트인) |
+| **genai.* 보완 메트릭** | 호출별 토큰·비용·레이턴시·도구 호출·에러 추이 | `observability.py`가 ResultMessage 기반으로 기록 |
+| **GENAI_INVOCATION 로그** | 입출력 전문 대량 조회 (Logs Insights) | `observability.py`가 기록 (옵트인) |
+| **이상탐지 알람** | genai.* 메트릭의 급증·급감 감지 | `setup_anomaly_alarms.py` 1회 실행 |
 
-**보완 메트릭이 필요한 이유**: Strands 등 Python 네이티브 프레임워크는 ADOT가
-LLM 호출 span(`gen_ai.*`)을 직접 잡지만, Claude Agent SDK는 모델 호출이 `claude`
-CLI 서브프로세스(Node) 안에서 일어나 Python 자동 계측에 잡히지 않습니다. 그래서
-SDK의 `ResultMessage`(토큰·비용·`duration_ms`·세션ID)를 호출 단위로 기록합니다.
+**보완이 필요한 이유**: Strands 등 Python 네이티브 프레임워크는 ADOT가 LLM 호출
+span(`gen_ai.*`)을 직접 잡지만, Claude Agent SDK는 모델 호출이 `claude` CLI
+서브프로세스(Node) 안에서 일어나 Python 자동 계측에 잡히지 않습니다. 그래서 SDK의
+`ResultMessage`(토큰·비용·`duration_ms`·세션ID)를 호출 단위로 스팬·메트릭·로그에
+기록합니다.
 
 ## 2. 구성 요소
 
 | 파일 | 위치 | 역할 |
 |------|------|------|
-| `observability.py` | `runtime/` (컨테이너에 동봉) | 호출별 CloudWatch `genai.*` 메트릭 기록 |
+| `observability.py` | `runtime/` (컨테이너에 동봉) | gen_ai 스팬 발행 + `genai.*` 메트릭 + `GENAI_INVOCATION` 로그 |
 | `setup_anomaly_alarms.py` | `observability/` (로컬 실행) | 이상탐지 모델 + 알람 4종 생성/삭제 |
 | ADOT (`aws-opentelemetry-distro`) | Dockerfile | 트레이스·로그를 GenAI Observability로 자동 전송 |
 | `guide.md` | `observability/` | 이 문서 |
+
+## 2-1. 입력/출력 프롬프트 확인 (콘솔 + 로그)
+
+호출마다 `claude_agent_sdk.invoke_agent` gen_ai 스팬이 기존 트레이스에 발행됩니다.
+AgentCore Observability에서 **Agent Core → 에이전트 → 세션 선택 → 트레이스 → 스팬 클릭**하면
+`gen_ai.input.messages` / `gen_ai.output.messages`(요청·응답 전문),
+`gen_ai.usage.input_tokens/output_tokens`, `cost_usd`, `gen_ai.tool.names`가 보입니다.
+
+같은 내용이 `GENAI_INVOCATION` 구조화 로그로도 남아 Logs Insights로 대량 조회할 수
+있습니다: `filter log_type = "GENAI_INVOCATION" | fields session_id, request_payload,
+response_payload, cost_usd`
+
+**옵트인**: 프롬프트 원문에는 PII가 포함될 수 있어 기본 비활성입니다. `deploy()`가
+`GENAI_LOG_PAYLOADS=1`(로그·스팬 content 게이트)과
+`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true`(ADOT의 content 속성
+제거 방지)를 명시적으로 주입합니다. 끄려면 두 환경변수를 제거하고 재배포하세요.
 
 ## 3. 기록되는 메트릭
 
