@@ -89,6 +89,29 @@ export interface AppConfig {
    * (phase 2) `-c cedarActionScoping=true` 로 재배포해 정책 statement 만 좁힌다.
    */
   readonly cedarActionScoping: boolean;
+
+  // ───────────── M5: 개선 파이프라인 (Track A 평가 · Track B 채굴) ─────────────
+  /** EX(Execution Accuracy) code-based evaluator Lambda 이름 (§9.3). */
+  readonly exEvaluatorFunctionName: string;
+  /**
+   * AgentCore custom evaluator 이름. ⚠️ 패턴 `^[a-zA-Z][a-zA-Z0-9_]{0,47}$`
+   * — 하이픈 불가, 언더스코어만(policyEngineName 과 동일 제약).
+   */
+  readonly executionEvaluatorName: string;
+  /** OnlineEvaluationConfig 이름. 위와 동일한 언더스코어 제약. */
+  readonly onlineEvalConfigName: string;
+  /** online eval 실행 role 이름 (⚠️ IAM description 은 Latin-1 만). */
+  readonly evalExecutionRoleName: string;
+  /** 활성 Configuration Bundle 포인터 SSM 파라미터명 (승격·롤백의 단일 원천). */
+  readonly activeBundleParamName: string;
+  /** admin panel 이 최초 생성하는 Configuration Bundle 이름 (CDK 는 생성하지 않음 — 계약 값). */
+  readonly configBundleName: string;
+  /** EX evaluator 로직 버전 (평가 결과 귀인용 — Lambda env EVALUATOR_VERSION). */
+  readonly evaluatorVersion: string;
+  /** online eval 트레이스 샘플링 비율(%). 데모는 100(운영은 비용에 맞춰 하향). */
+  readonly onlineEvalSamplingPercentage: number;
+  /** orchestrator 애플리케이션 버전 (t2sql_query_record 의 version.agent 스탬프). */
+  readonly appVersion: string;
 }
 
 const DEFAULTS = {
@@ -129,6 +152,17 @@ const DEFAULTS = {
   // M4 admin panel
   adminMcpTargetName: 'datasource-admin-mcp',
   cedarActionScoping: false,
+  // M5 개선 파이프라인
+  exEvaluatorFunctionName: 'agentic-t2sql-ex-evaluator',
+  // Evaluator/OnlineEvaluationConfig 이름은 언더스코어만 허용 → prefix 하이픈 치환.
+  executionEvaluatorName: 'agentic_t2sql_execution_accuracy',
+  onlineEvalConfigName: 'agentic_t2sql_online_eval',
+  evalExecutionRoleName: 'agentic-t2sql-eval-exec-role',
+  activeBundleParamName: '/agentic-t2sql/active-bundle',
+  configBundleName: 'agentic_t2sql_orchestrator',
+  evaluatorVersion: '1.0.0',
+  onlineEvalSamplingPercentage: 100,
+  appVersion: 'm5',
 } as const;
 
 /**
@@ -177,6 +211,19 @@ export function loadConfig(scope: Construct): AppConfig {
     // CLI `-c cedarActionScoping=true` 는 문자열로 전달되므로 'true' 도 받아들인다
     // (cdk.json context 에 boolean 으로 두는 경우도 지원).
     cedarActionScoping: parseBool(ctx('cedarActionScoping'), DEFAULTS.cedarActionScoping),
+    // M5 개선 파이프라인
+    exEvaluatorFunctionName:
+      ctx('exEvaluatorFunctionName') ?? DEFAULTS.exEvaluatorFunctionName,
+    executionEvaluatorName: ctx('executionEvaluatorName') ?? DEFAULTS.executionEvaluatorName,
+    onlineEvalConfigName: ctx('onlineEvalConfigName') ?? DEFAULTS.onlineEvalConfigName,
+    evalExecutionRoleName: ctx('evalExecutionRoleName') ?? DEFAULTS.evalExecutionRoleName,
+    activeBundleParamName: ctx('activeBundleParamName') ?? DEFAULTS.activeBundleParamName,
+    configBundleName: ctx('configBundleName') ?? DEFAULTS.configBundleName,
+    evaluatorVersion: ctx('evaluatorVersion') ?? DEFAULTS.evaluatorVersion,
+    onlineEvalSamplingPercentage:
+      (ctx('onlineEvalSamplingPercentage') as number | undefined) ??
+      DEFAULTS.onlineEvalSamplingPercentage,
+    appVersion: ctx('appVersion') ?? DEFAULTS.appVersion,
   };
 }
 

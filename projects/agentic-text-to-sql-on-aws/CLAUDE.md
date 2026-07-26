@@ -44,7 +44,14 @@ Amazon Bedrock AgentCore 기반 agentic Text-to-SQL 솔루션. **설계는 합�
       (`deploy.sh gateway` → `gateway-scoped`)로 일반 User 는 run_sql/search_schema 만 허용.
       orchestrator 는 forwardedProps.userAccessToken additive OBO(기본은 서비스 계정 —
       채팅 UI 에 로그인 없음, 알려진 한계). 접점 계약: docs/m2-m3-interface-contract.md §8
-- [ ] M5: 개선 파이프라인 (Track A + Track B)
+- [x] M5: 개선 파이프라인 (Track A + Track B) — **배포·E2E 50체크(레벨1~7) 검증 완료** (2026-07-27).
+      Track A: evaluation/(EX code-based evaluator Lambda + goldset-v1 8문항) + Evaluation
+      스택(Evaluator·OnlineEvalConfig·SSM active-bundle) + admin 평가·개선 화면(배치 평가·
+      추천·bundle 승격). bundle 승격 = SSM 포인터 전환(A/B 미제공 → 수동 전환 폴백,
+      orchestrator 60s TTL 캐시 오버라이드·실패 시 코드 기본값 폴백). Track B: orchestrator
+      `t2sql_query_record` 구조화 로그 → admin-mcp `mine_candidates`(fewshot/term 후보 채굴,
+      중복 방지) + `reject_entity`(rejected 상태·반려 사유 — M4 부채 해소).
+      접점 계약·Preview 판정: docs/m2-m3-interface-contract.md §9
 - 향후: `demo/` Jupyter notebook 실습 구조 (ARCHITECTURE.md §10)
 
 ## M1 실전 학습 사항 (M2+ 작업 시 참고 — 같은 함정 재발 방지)
@@ -129,6 +136,29 @@ Amazon Bedrock AgentCore 기반 agentic Text-to-SQL 솔루션. **설계는 합�
   (statement 만 CFN update)로 깔끔하게 동작 확인. phase 2 는 admin target 도구 동기화 후에만.
 - semantic-layer 를 경로 의존성으로 쓰는 이미지는 빌드 컨텍스트가 레포 루트 —
   Dockerfile 에서 builder/runtime **동일 경로 유지**(venv 절대경로) + 루트 `.dockerignore` 필수.
+
+## M5 실전 학습 사항 (후속 작업 시 참고)
+
+- **AgentCore Evaluations/Bundle API 는 로컬 AWS CLI 에 없을 수 있다** (CLI 2.31 모델 구버전) —
+  실존 확인·스크립트는 boto3(orchestrator venv, 1.43+)로. Evaluations 는 us-west-2 동작 확인,
+  Optimization(Recommendations·Bundle)은 Preview, A/B 분할 API 는 미확인 → SSM 포인터 수동 전환 폴백.
+- **`CreateOnlineEvaluationConfig` 는 생성 시점에 실행 role 의 `lambda:GetFunction`+`InvokeFunction`
+  보유를 검증한다** — `grantInvoke`(InvokeFunction만)로는 ValidationException. 정책 적용 후 config 가
+  생성되도록 `addToPrincipalPolicy(...).policyDependable` 의존 필수 (M4 GatewayTarget 과 동일 함정).
+- **`StartBatchEvaluation` 은 실행 role 파라미터가 없고 호출자(FAS) 자격증명으로 동작** —
+  호출 주체(admin-web task role)에 `logs:StartQuery/GetQueryResults`(runtime 로그 그룹+`aws/spans`)
+  와 `logs:CreateLogGroup/CreateLogStream/PutLogEvents/PutRetentionPolicy`
+  (`/aws/bedrock-agentcore/evaluations/*`)를 부여해야 한다 (전부 배포 실측 — 오류가 한 번에
+  안 나오고 권한 하나씩 순차 노출되니 한꺼번에 부여할 것).
+- **AgentCore Runtime 은 stdout 만 CloudWatch 로 보낸다** — 파이썬 `logging` 은 루트 핸들러가
+  없으면 유실된다. 구조화 로그(`t2sql_query_record`)를 CloudWatch 에 남기려면 앱 모듈에서
+  `logging.basicConfig(level=INFO, stream=sys.stdout)` 명시 필수 (MCP 서버들은 이미 하고 있었음).
+- **admin-mcp 이미지에 도구를 추가하면 gateway target 을 `synchronize-gateway-targets` 로
+  재동기화**해야 tools/list 에 신규 도구가 노출된다 (CFN 변경 없음 → 자동 동기화 안 됨).
+- Configuration Bundle 의 `components` 는 `map<string, {configuration: document}>` — 키를
+  runtime ARN 대신 논리 키("orchestrator")로 쓰는 편이 자기참조·교차 스택 순환을 피한다.
+- E2E 채굴 검증은 "이번 실행 mined>0" 가 아니라 **mined+skipped_existing ≥ 1** 로 판정할 것 —
+  재실행이면 기존 후보가 skip 되는 게 정상(중복 방지가 곧 검증 대상)이다.
 
 ## 에이전트 팀 운영 규칙
 

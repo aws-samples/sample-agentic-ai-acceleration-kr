@@ -12,9 +12,13 @@
 #   7) [Cedar 2-phase] scripts/deploy.sh gateway-scoped
 #                                 ← admin target 도구 동기화 후 action 스코프 정책으로 갱신
 #                                   (M3 학습: action 목록 정책은 target 생성 전 검증 실패)
-#   8) [UI / admin-web 이미지 빌드·푸시]
-#   9) AgenticT2SqlUiStack      → ui-outputs.json     (ECS Fargate + ALB)
-#  10) AgenticT2SqlAdminStack   → admin-outputs.json  (admin panel Fargate + 전용 ALB, Gateway 이후)
+#   8) AgenticT2SqlEvaluationStack → evaluation-outputs.json
+#                                 (M5: EX evaluator Lambda·AgentCore Evaluator·online eval·
+#                                  SSM 활성 bundle 포인터. Base+Runtime 이후, Admin 이전)
+#   9) [UI / admin-web 이미지 빌드·푸시]
+#  10) AgenticT2SqlUiStack      → ui-outputs.json     (ECS Fargate + ALB)
+#  11) AgenticT2SqlAdminStack   → admin-outputs.json  (admin panel Fargate + 전용 ALB,
+#                                 Gateway·Evaluation 이후 — 평가 화면 env 를 소비)
 #
 # 사용:
 #   scripts/deploy.sh base           # Base 스택만
@@ -22,8 +26,9 @@
 #   scripts/deploy.sh runtime        # Runtime 스택만
 #   scripts/deploy.sh gateway        # Gateway 스택만 (Runtime 이후, Cedar phase 1)
 #   scripts/deploy.sh gateway-scoped # Gateway 재배포 (Cedar phase 2 — action 스코프 활성)
+#   scripts/deploy.sh evaluation     # Evaluation 스택만 (Runtime 이후, Admin 이전 — M5)
 #   scripts/deploy.sh ui             # UI 스택만
-#   scripts/deploy.sh admin          # Admin panel 스택만 (Gateway 이후)
+#   scripts/deploy.sh admin          # Admin panel 스택만 (Gateway·Evaluation 이후)
 #
 # 주의: --require-approval never 는 IAM/보안그룹 변경 확인 프롬프트를 생략한다.
 #       사용자가 전체 배포를 명시적으로 승인한 경우에만 사용할 것.
@@ -55,10 +60,13 @@ case "$TARGET" in
   gateway-scoped)
             deploy_stack AgenticT2SqlGatewayStack  gateway-outputs.json \
               -c cedarActionScoping=true ;;
+  # M5: 평가 파이프라인(EX evaluator Lambda + AgentCore Evaluator + online eval + SSM 포인터).
+  evaluation)
+            deploy_stack AgenticT2SqlEvaluationStack evaluation-outputs.json ;;
   ui)       deploy_stack AgenticT2SqlUiStack       ui-outputs.json ;;
   admin)    deploy_stack AgenticT2SqlAdminStack    admin-outputs.json ;;
   *)
-    echo "사용법: $0 {base|semantic|runtime|gateway|gateway-scoped|ui|admin}" >&2
+    echo "사용법: $0 {base|semantic|runtime|gateway|gateway-scoped|evaluation|ui|admin}" >&2
     echo "  전체 흐름은 README/스크립트 헤더의 배포 순서를 따를 것." >&2
     exit 2
     ;;

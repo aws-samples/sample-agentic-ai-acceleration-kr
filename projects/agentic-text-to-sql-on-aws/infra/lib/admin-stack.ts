@@ -27,6 +27,17 @@ export interface AdminStackProps extends StackProps {
   // gateway 스택 참조 (도구 평면 OBO 호출 + Cedar 정책 조회)
   readonly gateway: agentcore.Gateway;
   readonly policyEngine: agentcore.CfnPolicyEngine;
+  // ── M5: evaluation 스택 참조 (평가·bundle 관리 화면) ──
+  // admin 은 evaluation 이후 배포되므로 객체 참조가 안전하다(admin→evaluation 단방향).
+  readonly executionEvaluator: agentcore.Evaluator;
+  readonly onlineEvalConfig: agentcore.OnlineEvaluationConfig;
+  readonly activeBundleParamName: string;
+  /** orchestrator 트레이스 로그 그룹명 (batch evaluation dataSourceConfig) */
+  readonly orchestratorLogGroupName: string;
+  /** orchestrator 관측 서비스명 `<runtime_name>.<endpoint>` */
+  readonly orchestratorServiceName: string;
+  /** online eval 실행 role ARN (batch evaluation 이 role 을 요구할 경우 사용) */
+  readonly evalExecutionRoleArn: string;
 }
 
 /**
@@ -106,6 +117,19 @@ export class AgenticT2SqlAdminStack extends Stack {
         POLICY_ENGINE_ID: props.policyEngine.attrPolicyEngineId,
         // 세션 트레이스 탐색용 로그 그룹 접두어(task role 의 logs 리소스 제한과 일치)
         RUNTIME_LOG_GROUP_PREFIX: '/aws/bedrock-agentcore/runtimes/',
+        // ───────── M5: 평가·bundle 관리 화면 (§9.7) ─────────
+        // EX custom evaluator — 평가 실행 시 기본 선택 evaluator.
+        EXECUTION_EVALUATOR_ID: props.executionEvaluator.evaluatorId,
+        // online eval 상태 화면 + batch evaluation 의 onlineEvaluationConfigSource 소스.
+        ONLINE_EVAL_CONFIG_ID: props.onlineEvalConfig.onlineEvaluationConfigId,
+        // bundle 승격·롤백의 단일 원천(SSM). task role 이 이 파라미터만 Put 할 수 있다.
+        ACTIVE_BUNDLE_PARAM: props.activeBundleParamName,
+        // batch evaluation dataSourceConfig.cloudWatchLogs — 로그 그룹·서비스명은
+        // evaluation 스택이 orchestrator Runtime 객체에서 유도한 값을 그대로 전달받는다.
+        ORCHESTRATOR_LOG_GROUP: props.orchestratorLogGroupName,
+        ORCHESTRATOR_SERVICE_NAME: props.orchestratorServiceName,
+        // 평가 실행 role (StartBatchEvaluation 이 role 전달을 요구하는 경우 사용).
+        EVAL_EXECUTION_ROLE_ARN: props.evalExecutionRoleArn,
       },
       portMappings: [{ containerPort: 3000, protocol: ecs.Protocol.TCP }],
     });

@@ -420,6 +420,41 @@ export class AgenticT2SqlBaseStack extends Stack {
       }),
     );
 
+    // ── M5: bundle 기반 프롬프트/모델 오버라이드(§9.5) ──
+    // orchestrator 는 세션 시작 시 SSM 활성 bundle 포인터를 읽고(TTL 60s), 지정된 bundle
+    // 버전의 components["orchestrator"] 에서 system_prompt/model_id 를 오버라이드한다.
+    // ⚠️ 순환 회피: SSM 파라미터는 evaluation 스택 소유(base→evaluation 역참조는 사이클)이므로
+    //    이름 규칙으로 ARN 을 조립한다. 파라미터명은 config 가 단일 원천.
+    this.orchestratorRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'ActiveBundlePointerRead',
+        actions: ['ssm:GetParameter'],
+        resources: [
+          // `/agentic-t2sql/active-bundle` → ARN 리소스부는 선행 슬래시를 제거한 형태.
+          `arn:${this.partition}:ssm:${this.region}:${this.account}:parameter${
+            config.activeBundleParamName.startsWith('/')
+              ? config.activeBundleParamName
+              : `/${config.activeBundleParamName}`
+          }`,
+        ],
+      }),
+    );
+    this.orchestratorRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'ConfigurationBundleRead',
+        actions: [
+          'bedrock-agentcore:GetConfigurationBundle',
+          'bedrock-agentcore:GetConfigurationBundleVersion',
+        ],
+        // bundle ID 는 서비스가 생성 시 무작위 접미사를 붙이며(`<name>-XXXXXXXXXX`),
+        // bundle 자체를 CDK 가 만들지 않으므로(admin panel 최초 생성) 계정/리전 스코프의
+        // configuration-bundle 와일드카드로 제한한다. 계정 내 bundle 은 이 데모의 것 뿐이다.
+        resources: [
+          `arn:${this.partition}:bedrock-agentcore:${this.region}:${this.account}:configuration-bundle/*`,
+        ],
+      }),
+    );
+
     // ui: ECS task role. orchestrator runtime 호출만.
     // 순환 의존을 피하려 runtime 스택의 출력(ARN 토큰)을 참조하지 않고,
     // 결정적 runtime 이름 규칙으로 ARN 을 직접 구성한다(orchestrator→MCP grant 와 동일 패턴).
@@ -527,6 +562,21 @@ export class AgenticT2SqlBaseStack extends Stack {
       }),
     );
 
+    // ── M5 Track B: 후보 채굴기(mine_candidates) 의 orchestrator 로그 읽기 ──
+    // orchestrator 가 남기는 `t2sql_query_record` JSON 을 CloudWatch 에서 수집한다.
+    // ⚠️ logs:DescribeLogGroups 는 Runtime L2 가 이미 계정 내 log-group:* 로 자동 부여하므로
+    //    (리소스 수준 권한 미지원 액션 — M4 admin-web 실측) 여기서는 중복 부여하지 않고
+    //    실제 내용 읽기(FilterLogEvents)만 runtime 프리픽스로 제한해 추가한다.
+    this.adminMcpRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'OrchestratorLogsRead',
+        actions: ['logs:FilterLogEvents'],
+        resources: [
+          `arn:${this.partition}:logs:${this.region}:${this.account}:log-group:/aws/bedrock-agentcore/runtimes/*`,
+        ],
+      }),
+    );
+
     // ───────────────────────── M4: admin web ECS task role ─────────────────────────
     // admin panel 의 "관리 평면" 직접 호출용(도구 평면과 무관): Cognito 사용자·그룹 관리,
     // Cedar 정책 read-only 조회, CloudWatch·X-Ray 관측 조회. 큐레이션/데이터소스 작업은
@@ -615,6 +665,120 @@ export class AgenticT2SqlBaseStack extends Stack {
         resources: [
           `arn:${this.partition}:logs:${this.region}:${this.account}:log-group:/aws/bedrock-agentcore/runtimes/*`,
         ],
+      }),
+    );
+    // M5: StartBatchEvaluation 은 **호출자 자격증명**으로 트레이스 로그를 Insights 질의한다
+    // (배포 실측: query 권한 없으면 "The evaluation execution role is missing required
+    // CloudWatch Logs query permissions" ValidationException — 별도 role 파라미터 없음).
+    // runtime 로그 그룹 + CloudWatch 스팬 저장소(aws/spans)로 스코프해 부여한다.
+    this.adminWebTaskRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'EvaluationLogsQuery',
+        actions: ['logs:StartQuery', 'logs:GetQueryResults'],
+        resources: [
+          `arn:${this.partition}:logs:${this.region}:${this.account}:log-group:/aws/bedrock-agentcore/runtimes/*`,
+          `arn:${this.partition}:logs:${this.region}:${this.account}:log-group:aws/spans`,
+          `arn:${this.partition}:logs:${this.region}:${this.account}:log-group:aws/spans:*`,
+        ],
+      }),
+    );
+    // M5: 배치 평가 결과는 서비스가 **호출자(FAS) 자격증명**으로 평가 결과 로그 그룹을
+    // 만들어 기록한다(배포 실측: "FAS credentials do not have permission to create
+    // CloudWatch log groups" → 이어서 "... to set log group retention policy").
+    // evaluations 프리픽스로 스코프해 생성·쓰기·보존정책 액션을 부여한다.
+    this.adminWebTaskRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'EvaluationResultsLogWrite',
+        actions: [
+          'logs:CreateLogGroup',
+          'logs:CreateLogStream',
+          'logs:PutLogEvents',
+          'logs:PutRetentionPolicy',
+        ],
+        resources: [
+          `arn:${this.partition}:logs:${this.region}:${this.account}:log-group:/aws/bedrock-agentcore/evaluations/*`,
+        ],
+      }),
+    );
+
+    // ───────────────────────── M5: admin web 평가·bundle 관리 권한 (§9.6) ─────────────────────────
+    // Track A 화면(평가 실행·결과 조회·추천·bundle 승격)이 관리 평면 API 를 직접 호출한다.
+    //
+    // ⚠️ 리소스 스코프 주의: evaluation 스택이 만드는 evaluator/online-eval-config 는
+    //    base→evaluation 역참조가 사이클이라 이름 규칙 와일드카드로 제한한다. batch-evaluation·
+    //    recommendation·configuration-bundle 은 서비스가 무작위 접미사(`<name>-XXXXXXXXXX`)를
+    //    붙여 생성하므로 요청 시점에 ARN 을 알 수 없다 → 계정/리전 스코프 타입별 와일드카드.
+    // (a) 개별 리소스를 지목하는 액션 — 타입별 계정/리전 스코프 와일드카드로 제한.
+    this.adminWebTaskRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'EvaluationResourceScopedActions',
+        actions: [
+          'bedrock-agentcore:GetEvaluator',
+          'bedrock-agentcore:GetOnlineEvaluationConfig',
+          'bedrock-agentcore:GetBatchEvaluation',
+          'bedrock-agentcore:StopBatchEvaluation',
+          'bedrock-agentcore:GetRecommendation',
+          'bedrock-agentcore:GetConfigurationBundle',
+          'bedrock-agentcore:GetConfigurationBundleVersion',
+          'bedrock-agentcore:ListConfigurationBundleVersions',
+          'bedrock-agentcore:UpdateConfigurationBundle',
+        ],
+        // Delete* 는 부여하지 않는다(불변 버전 이력 보존 — 롤백은 SSM 포인터 되돌리기).
+        resources: [
+          `arn:${this.partition}:bedrock-agentcore:${this.region}:${this.account}:evaluator/*`,
+          `arn:${this.partition}:bedrock-agentcore:${this.region}:${this.account}:online-evaluation-config/*`,
+          `arn:${this.partition}:bedrock-agentcore:${this.region}:${this.account}:batch-evaluation/*`,
+          `arn:${this.partition}:bedrock-agentcore:${this.region}:${this.account}:recommendation/*`,
+          `arn:${this.partition}:bedrock-agentcore:${this.region}:${this.account}:configuration-bundle/*`,
+        ],
+      }),
+    );
+    // (b) 계정 단위 목록 액션 + 생성/시작 액션 — 대상 리소스가 요청 시점에 존재하지 않거나
+    //     리소스 수준 권한을 지원하지 않아 '*' 가 유일한 표현이다(read/start 만, delete 없음).
+    this.adminWebTaskRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'EvaluationAccountScopedActions',
+        actions: [
+          'bedrock-agentcore:ListEvaluators',
+          'bedrock-agentcore:ListOnlineEvaluationConfigs',
+          'bedrock-agentcore:ListBatchEvaluations',
+          'bedrock-agentcore:ListRecommendations',
+          'bedrock-agentcore:ListConfigurationBundles',
+          'bedrock-agentcore:StartBatchEvaluation',
+          'bedrock-agentcore:StartRecommendation',
+          'bedrock-agentcore:CreateConfigurationBundle',
+        ],
+        resources: ['*'],
+      }),
+    );
+    // bundle 승격/롤백 = SSM 활성 포인터 전환(§9.1). 이 파라미터 1개로만 제한한다.
+    // ⚠️ 순환 회피: 파라미터는 evaluation 스택 소유 → 이름 규칙으로 ARN 조립.
+    this.adminWebTaskRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'ActiveBundlePointerReadWrite',
+        actions: ['ssm:GetParameter', 'ssm:PutParameter'],
+        resources: [
+          `arn:${this.partition}:ssm:${this.region}:${this.account}:parameter${
+            config.activeBundleParamName.startsWith('/')
+              ? config.activeBundleParamName
+              : `/${config.activeBundleParamName}`
+          }`,
+        ],
+      }),
+    );
+    // StartBatchEvaluation 은 평가 실행 role 을 서비스에 넘길 수 있어야 한다(설치 SDK 의
+    // 입력에는 role 파라미터가 없어 서비스가 online eval config 의 role 을 재사용할 수도
+    // 있으나, 요구될 경우를 대비해 그 role 1개로만 PassRole 을 허용한다 — 최소 권한).
+    this.adminWebTaskRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'PassEvaluationExecutionRole',
+        actions: ['iam:PassRole'],
+        resources: [
+          `arn:${this.partition}:iam::${this.account}:role/${config.evalExecutionRoleName}`,
+        ],
+        conditions: {
+          StringEquals: { 'iam:PassedToService': 'bedrock-agentcore.amazonaws.com' },
+        },
       }),
     );
 

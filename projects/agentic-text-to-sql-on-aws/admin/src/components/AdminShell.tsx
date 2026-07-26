@@ -16,15 +16,18 @@ import { ApprovalsView } from './ApprovalsView';
 import { CurationView } from './CurationView';
 import { DashboardView } from './DashboardView';
 import { DatasourcesView } from './DatasourcesView';
+import { EvaluationView } from './EvaluationView';
 import { IamView } from './IamView';
 import { LoginView } from './LoginView';
 
-type TabKey = 'curation' | 'approvals' | 'datasources' | 'iam' | 'dashboard';
+type TabKey = 'curation' | 'approvals' | 'datasources' | 'evaluation' | 'iam' | 'dashboard';
 
 const TABS: Array<{ key: TabKey; label: string; adminOnly?: boolean }> = [
   { key: 'curation', label: 'Semantic 큐레이션' },
   { key: 'approvals', label: '승인 큐' },
   { key: 'datasources', label: '데이터 소스' },
+  // M5 — 평가(배치·온라인)·개선 추천·config bundle 승격 (Manager 이상).
+  { key: 'evaluation', label: '평가·개선' },
   { key: 'iam', label: '권한 관리', adminOnly: true },
   { key: 'dashboard', label: '대시보드' },
 ];
@@ -61,7 +64,7 @@ export function AdminShell() {
       <header className="adm-header">
         <div>
           <h1>Agentic Text-to-SQL 관리자 패널</h1>
-          <p>semantic 큐레이션 · 승인 · 데이터 소스 · 권한 · 관측</p>
+          <p>semantic 큐레이션 · 승인 · 데이터 소스 · 평가·개선 · 권한 · 관측</p>
         </div>
         <div className="adm-user">
           <span className="adm-mono">{session.username}</span>
@@ -89,6 +92,7 @@ export function AdminShell() {
         {activeTab === 'curation' ? <CurationView session={session} /> : null}
         {activeTab === 'approvals' ? <ApprovalsView session={session} /> : null}
         {activeTab === 'datasources' ? <DatasourcesView session={session} /> : null}
+        {activeTab === 'evaluation' ? <EvaluationView session={session} /> : null}
         {activeTab === 'iam' ? <IamView session={session} /> : null}
         {activeTab === 'dashboard' ? <DashboardView session={session} /> : null}
       </main>

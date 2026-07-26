@@ -30,13 +30,17 @@ semantic-layer/
 | `sk` = `v0` | 최신본 |
 | `sk` = `v{n}` (n≥1) | 버전 이력 |
 
-공통 속성: `entity_type`, `entity_id`, `status`(`candidate`\|`published`),
+공통 속성: `entity_type`, `entity_id`, `status`(`candidate`\|`published`\|`rejected`),
 `version`(N), `updated_at`(ISO8601), `updated_by`.
+
+`rejected` 는 M5 additive(승인 큐 반려)입니다. `reject(entity_type, entity_id, reason)` 은
+사유를 payload 의 `rejection_reason` 으로 남기고, `published` 가 아니므로 파생 저장소에는
+노출되지 않습니다. 반려 후에도 `publish`(재승인)/`unpublish`(재검토 큐 복귀)가 가능합니다.
 
 **쓰기 규칙**: `put_entity` 는 항상 `v0` 을 조건부로 갱신(version 증가)하고 직전 본을
 `v{n}` 이력으로 복사합니다. 최초 생성은 `attribute_not_exists(pk)`, 갱신은
 `version = <직전값>` 낙관적 잠금으로 동시성 충돌을 방어합니다. `status` 전환
-(`publish`/`unpublish`)도 `put_entity` 를 경유해 버전을 올립니다.
+(`publish`/`unpublish`/`reject`)도 `put_entity` 를 경유해 버전을 올립니다.
 
 entity별 페이로드:
 
@@ -64,10 +68,11 @@ entity별 페이로드:
 |---|---|
 | `sk != v0` (이력) | 무시(빈 리스트) |
 | INSERT/MODIFY, `status=published` | MERGE 멱등 upsert |
-| INSERT/MODIFY, `status=candidate` (강등 포함) | DETACH DELETE (에이전트 미노출) |
+| INSERT/MODIFY, `status=candidate`\|`rejected` (강등 포함) | DETACH DELETE (에이전트 미노출) |
 | REMOVE | DETACH DELETE(노드) / DELETE(join 엣지) |
 
-`candidate` 는 그래프에 반영하지 않는 것이 published/candidate 분리 방어선입니다.
+`published` 이외(`candidate`/`rejected`)는 그래프에 반영하지 않는 것이 published/candidate
+분리 방어선입니다.
 
 ## 실행 방법
 

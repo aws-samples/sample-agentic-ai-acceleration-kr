@@ -7,6 +7,7 @@ import { AgenticT2SqlRuntimeStack } from '../lib/runtime-stack';
 import { AgenticT2SqlGatewayStack } from '../lib/gateway-stack';
 import { AgenticT2SqlUiStack } from '../lib/ui-stack';
 import { AgenticT2SqlAdminStack } from '../lib/admin-stack';
+import { AgenticT2SqlEvaluationStack } from '../lib/evaluation-stack';
 
 const app = new App();
 const config = loadConfig(app);
@@ -88,6 +89,20 @@ const ui = new AgenticT2SqlUiStack(app, 'AgenticT2SqlUiStack', {
 });
 ui.addStackDependency(runtime);
 
+// 4.5) Evaluation 스택: M5 Track A(평가 파이프라인). base(Aurora·agent_ro) + runtime
+//      (orchestrator 트레이스 소스) 참조. admin 이 이 스택의 출력을 env 로 소비하므로
+//      admin 보다 먼저 배포된다(evaluation→{base,runtime}, admin→evaluation 단방향).
+const evaluation = new AgenticT2SqlEvaluationStack(app, 'AgenticT2SqlEvaluationStack', {
+  env,
+  config,
+  auroraCluster: base.auroraCluster,
+  agentRoSecret: base.agentRoSecret,
+  orchestratorRuntime: runtime.orchestratorRuntime,
+  description:
+    'Agentic Text-to-SQL — Evaluations (EX evaluator Lambda, online eval, active-bundle pointer, M5)',
+});
+evaluation.addStackDependency(runtime);
+
 // 5) Admin 스택: admin panel(Next.js) ECS Fargate + 전용 ALB (M4).
 //    base(VPC·ECR·Cognito·task role) + gateway(gatewayUrl·policyEngineId) 참조 →
 //    gateway 이후 배포(admin→gateway 단방향, 역참조 없음 → 사이클 없음).
@@ -101,8 +116,16 @@ const admin = new AgenticT2SqlAdminStack(app, 'AgenticT2SqlAdminStack', {
   m2mClient: base.m2mClient,
   gateway: gateway.gateway,
   policyEngine: gateway.policyEngine,
-  description: 'Agentic Text-to-SQL — Admin panel (ECS Fargate + public ALB, M4)',
+  // M5: 평가·bundle 관리 화면용 참조(evaluation 이후 배포).
+  executionEvaluator: evaluation.executionEvaluator,
+  onlineEvalConfig: evaluation.onlineEvalConfig,
+  activeBundleParamName: evaluation.activeBundleParam.parameterName,
+  orchestratorLogGroupName: evaluation.orchestratorLogGroupName,
+  orchestratorServiceName: evaluation.orchestratorServiceName,
+  evalExecutionRoleArn: evaluation.evalExecutionRole.roleArn,
+  description: 'Agentic Text-to-SQL — Admin panel (ECS Fargate + public ALB, M4 + M5 평가 화면)',
 });
 admin.addStackDependency(gateway);
+admin.addStackDependency(evaluation);
 
 app.synth();

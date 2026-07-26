@@ -26,6 +26,14 @@
   - 정리: 생성한 e2e term 을 unpublish (실패 시 경고만)
   전제: admin-outputs.json(AgenticT2SqlAdminStack.AdminAlbUrl) + gateway/base outputs +
   E2E 사용자(scripts/create-e2e-users.sh 로 생성, e2e-manager@example.com 포함).
+레벨 7 (M5 개선 파이프라인 — 접점 계약 §9.9):
+  - Track B: put_entity → reject_entity(반려 사유) → rejected 기록·candidate 미노출,
+    mine_candidates 채굴 → 승인 큐 노출 → publish → search_schema 전파, 중복 채굴 방지
+  - Track A: EX evaluator ACTIVE, admin API 로 배치 평가 시작/조회, online eval 상태,
+    bundle 목록/승격(SSM active-bundle 갱신)/원복
+  - Cedar 회귀: 일반 사용자에게 mine_candidates/reject_entity 미노출·거부
+  전제: 레벨 2 가 먼저 실행돼 t2sql_query_record 로그가 존재(all 이면 자동 충족),
+  evaluation-outputs.json + admin/gateway/base outputs.
 
 실행:
   python scripts/e2e_verify.py --level 1        # MCP 레벨만
@@ -33,6 +41,7 @@
   python scripts/e2e_verify.py --level 4        # M2 clarification/semantic 만
   python scripts/e2e_verify.py --level 5        # M3 Gateway/Cedar/Redshift 만
   python scripts/e2e_verify.py --level 6        # M4 admin panel/큐레이션/OBO 만
+  python scripts/e2e_verify.py --level 7        # M5 개선 파이프라인만
   python scripts/e2e_verify.py --level all      # 전부(기본)
 
 ARN 은 runtime-outputs.json(AgenticT2SqlRuntimeStack) 에서 읽거나 인자로 준다.
@@ -981,10 +990,504 @@ async def _verify_cedar_admin_scope(gateway_url: str, user_token: str, checks: C
     await _with_gateway_session(gateway_url, user_token, work)
 
 
+# ───────────────────── 레벨 7: M5 개선 파이프라인 (Track A/B) ─────────────────────
+EVALUATION_OUTPUTS = ROOT / "infra" / "evaluation-outputs.json"
+
+
+def _load_evaluation_ctx() -> dict[str, str]:
+    """evaluation/admin/gateway/base outputs 에서 레벨7 검증 값을 읽는다."""
+    ctx = _load_admin_ctx()
+    if EVALUATION_OUTPUTS.exists():
+        ev = json.loads(EVALUATION_OUTPUTS.read_text()).get(
+            "AgenticT2SqlEvaluationStack", {}
+        )
+        ctx["evaluator_id"] = ev.get("ExecutionEvaluatorId", "")
+        ctx["online_eval_config_id"] = ev.get("OnlineEvalConfigId", "")
+        ctx["active_bundle_param"] = ev.get("ActiveBundleParamName", "")
+    return ctx
+
+
+async def _verify_fewshot_propagation(
+    gateway_url: str, manager_token: str, fewshot_id: str, checks: Checks
+) -> None:
+    """published 채굴 fewshot 이 OpenSearch 로 전파돼 search_schema 에 히트하는지 확인.
+
+    fewshot 은 질문 텍스트로 임베딩·검색되므로 entity 의 question 을 먼저 조회해
+    그 텍스트로 검색하고, 결과에 entity_id(또는 질문)가 나타나면 전파로 판정한다.
+    """
+    question = ""
+
+    async def fetch(session):
+        tools = await session.list_tools()
+        names = [t.name for t in tools.tools]
+        get_tool = _find_admin_tool(names, "get_entity")
+        if not get_tool:
+            return ""
+        r = await session.call_tool(
+            get_tool, {"entity_type": "fewshot", "entity_id": fewshot_id}
+        )
+        obj = _tool_payload_to_obj(r)
+        entity = obj.get("entity") if isinstance(obj, dict) else None
+        return str(entity.get("question", "")) if isinstance(entity, dict) else ""
+
+    try:
+        question = await _with_gateway_session(gateway_url, manager_token, fetch)
+    except Exception as exc:  # noqa: BLE001
+        print(_red(f"    fewshot 질문 조회 실패: {str(exc)[:120]}"))
+    if not question:
+        checks.check("채굴 fewshot 전파 검증 준비(질문 조회)", False, f"id={fewshot_id}")
+        return
+
+    deadline_attempts = max(1, PROPAGATION_TIMEOUT_SECONDS // PROPAGATION_INTERVAL_SECONDS)
+    hit = False
+    for attempt in range(deadline_attempts):
+
+        async def work(session):
+            tools = await session.list_tools()
+            names = [t.name for t in tools.tools]
+            search = _find_tool(names, "search_schema")
+            if not search:
+                return False
+            r = await session.call_tool(search, {"query": question, "top_k": 5})
+            obj = _tool_payload_to_obj(r)
+            for item in obj.get("results") or [] if isinstance(obj, dict) else []:
+                if not isinstance(item, dict):
+                    continue
+                blob = json.dumps(item, ensure_ascii=False)
+                if fewshot_id in blob or question[:20] in blob:
+                    return True
+            return False
+
+        try:
+            hit = await _with_gateway_session(gateway_url, manager_token, work, attempts=1)
+        except Exception:  # noqa: BLE001 — 폴링 중 일시 실패는 재시도
+            hit = False
+        if hit:
+            checks.check(
+                f"채굴 fewshot 이 search_schema 에 전파(≤{PROPAGATION_TIMEOUT_SECONDS}s)",
+                True,
+                f"약 {attempt * PROPAGATION_INTERVAL_SECONDS}s 후 히트",
+            )
+            return
+        if attempt < deadline_attempts - 1:
+            await asyncio.sleep(PROPAGATION_INTERVAL_SECONDS)
+    checks.check(
+        f"채굴 fewshot 이 search_schema 에 전파(≤{PROPAGATION_TIMEOUT_SECONDS}s)",
+        False,
+        f"id={fewshot_id} 미히트",
+    )
+
+
+async def verify_improvement_pipeline(
+    ctx: dict[str, str], checks: Checks, password: str
+) -> None:
+    """M5: Track B(reject·채굴→승인→전파·중복방지) + Track A(평가·bundle 승격) E2E."""
+    print("\n[레벨7] M5 개선 파이프라인 (Track A/B)")
+    import uuid
+
+    gateway_url = ctx.get("gateway_url", "")
+    client_id = ctx.get("m2m_client_id", "")
+    admin_url = ctx.get("admin_url", "")
+    manager_user = os.environ.get("E2E_MANAGER_USER", "e2e-manager@example.com")
+    user = os.environ.get("E2E_USER", "e2e-user@example.com")
+
+    if not gateway_url or not client_id:
+        print(_red("gateway/base outputs 누락 — 레벨7 skip"))
+        return
+    try:
+        manager_token = _cognito_token(client_id, manager_user, password)
+    except Exception as exc:  # noqa: BLE001
+        print(_red(f"Manager 토큰 실패({exc}) — 레벨7 skip"))
+        return
+
+    # ── (1) Track B: reject 흐름 — put(candidate) → reject → 상태·이력·미노출 ──
+    term = f"e2e-reject-{uuid.uuid4().hex[:8]}"
+    mined_state: dict[str, Any] = {"fewshot_id": "", "mined_ok": False}
+
+    async def work_reject(session):
+        tools = await session.list_tools()
+        names = [t.name for t in tools.tools]
+        put_tool = _find_admin_tool(names, "put_entity")
+        reject_tool = _find_admin_tool(names, "reject_entity")
+        list_tool = _find_admin_tool(names, "list_entities")
+        checks.check(
+            "Manager tools/list 에 reject_entity·mine_candidates 노출",
+            bool(reject_tool and _find_admin_tool(names, "mine_candidates")),
+            f"admin_tools={[n for n in names if 'datasource-admin-mcp___' in n]}",
+        )
+        if not (put_tool and reject_tool and list_tool):
+            return
+
+        r = await session.call_tool(
+            put_tool,
+            {
+                "entity_type": "term",
+                "entity_id": term,
+                "payload": {"term": term, "definition": f"E2E 반려 검증용({term})"},
+                "status": "candidate",
+                "actor": "e2e-manager",
+            },
+        )
+        obj = _tool_payload_to_obj(r)
+        if not (isinstance(obj, dict) and obj.get("status") == "ok"):
+            checks.check("reject 준비: put_entity(candidate)", False, f"resp={str(obj)[:160]}")
+            return
+
+        r2 = await session.call_tool(
+            reject_tool,
+            {
+                "entity_type": "term",
+                "entity_id": term,
+                "reason": "E2E 반려 사유 — 정의 불충분",
+                "actor": "e2e-manager",
+            },
+        )
+        obj2 = _tool_payload_to_obj(r2)
+        entity = obj2.get("entity") if isinstance(obj2, dict) else None
+        rejected = isinstance(entity, dict) and entity.get("status") == "rejected"
+        has_reason = isinstance(entity, dict) and bool(entity.get("rejection_reason"))
+        checks.check(
+            "reject_entity → status=rejected + rejection_reason 기록",
+            rejected and has_reason,
+            f"resp={str(obj2)[:160]}",
+        )
+
+        # candidate 목록에서 사라지고 rejected 목록에 남는다(반려 이력).
+        r3 = await session.call_tool(list_tool, {"entity_type": "term", "status": "candidate"})
+        obj3 = _tool_payload_to_obj(r3)
+        cand_ids = [
+            e.get("entity_id")
+            for e in (obj3.get("entities") or [] if isinstance(obj3, dict) else [])
+            if isinstance(e, dict)
+        ]
+        r4 = await session.call_tool(list_tool, {"entity_type": "term", "status": "rejected"})
+        obj4 = _tool_payload_to_obj(r4)
+        rej_ids = [
+            e.get("entity_id")
+            for e in (obj4.get("entities") or [] if isinstance(obj4, dict) else [])
+            if isinstance(e, dict)
+        ]
+        checks.check(
+            "rejected 는 candidate 목록 미노출 + rejected 목록 노출(이력)",
+            term not in cand_ids and term in rej_ids,
+            f"in_candidate={term in cand_ids}, in_rejected={term in rej_ids}",
+        )
+
+    await _with_gateway_session(gateway_url, manager_token, work_reject)
+
+    # ── (2) Track B: 채굴 → 승인 큐 → publish → 전파 → 중복 방지 ──
+    async def work_mine(session):
+        tools = await session.list_tools()
+        names = [t.name for t in tools.tools]
+        mine_tool = _find_admin_tool(names, "mine_candidates")
+        list_tool = _find_admin_tool(names, "list_entities")
+        publish_tool = _find_admin_tool(names, "publish_entity")
+        if not (mine_tool and list_tool and publish_tool):
+            checks.check("mine_candidates 도구 확보", False, f"tools={names}")
+            return
+
+        r = await session.call_tool(mine_tool, {"hours": 24, "actor": "e2e-mining"})
+        obj = _tool_payload_to_obj(r)
+        ok = isinstance(obj, dict) and obj.get("status") == "ok"
+        mined = int(obj.get("mined", 0)) if ok else 0
+        skipped = int(obj.get("skipped_existing", 0)) if ok else 0
+        # 레벨 2 가 남긴 t2sql_query_record 전제 — 신규 채굴 또는 기존 중복 skip 중 하나는 있어야 한다.
+        checks.check(
+            "mine_candidates 실행 → 채굴(mined+skipped ≥ 1)",
+            ok and (mined + skipped) >= 1,
+            f"resp={str(obj)[:200]}",
+        )
+        if not ok:
+            return
+
+        # 채굴된 fewshot 후보 하나를 승인 대상으로 고른다(이번 실행 or 기존 채굴분).
+        fewshot_id = ""
+        for cand in obj.get("candidates") or []:
+            if isinstance(cand, dict) and cand.get("entity_type") == "fewshot":
+                fewshot_id = str(cand.get("entity_id", ""))
+                break
+        if not fewshot_id:
+            r2 = await session.call_tool(list_tool, {"entity_type": "fewshot"})
+            obj2 = _tool_payload_to_obj(r2)
+            for e in obj2.get("entities") or [] if isinstance(obj2, dict) else []:
+                if isinstance(e, dict) and str(e.get("entity_id", "")).startswith("mined-"):
+                    fewshot_id = str(e["entity_id"])
+                    break
+        if not fewshot_id:
+            checks.check("채굴 fewshot 후보 확보", False, "mined-* fewshot 없음")
+            return
+        mined_state["fewshot_id"] = fewshot_id
+
+        # 승인 큐(candidate)에 노출되는지 — 이미 published 였다면(재실행) 그 상태 자체가 승인 완료 증거.
+        r3 = await session.call_tool(
+            list_tool, {"entity_type": "fewshot", "status": "candidate"}
+        )
+        obj3 = _tool_payload_to_obj(r3)
+        cand_ids = [
+            e.get("entity_id")
+            for e in (obj3.get("entities") or [] if isinstance(obj3, dict) else [])
+            if isinstance(e, dict)
+        ]
+        in_queue = fewshot_id in cand_ids
+        if in_queue:
+            r4 = await session.call_tool(
+                publish_tool,
+                {"entity_type": "fewshot", "entity_id": fewshot_id, "actor": "e2e-manager"},
+            )
+            obj4 = _tool_payload_to_obj(r4)
+            entity = obj4.get("entity") if isinstance(obj4, dict) else None
+            published = isinstance(entity, dict) and entity.get("status") == "published"
+        else:
+            cur = await session.call_tool(
+                list_tool, {"entity_type": "fewshot", "status": "published"}
+            )
+            cur_obj = _tool_payload_to_obj(cur)
+            published = fewshot_id in [
+                e.get("entity_id")
+                for e in (cur_obj.get("entities") or [] if isinstance(cur_obj, dict) else [])
+                if isinstance(e, dict)
+            ]
+        checks.check(
+            "채굴 후보 승인 큐 유입 → publish → published",
+            published,
+            f"fewshot_id={fewshot_id}, was_in_queue={in_queue}",
+        )
+        mined_state["mined_ok"] = published
+
+        # 중복 채굴 방지: 재실행 시 같은 후보를 다시 적재하지 않는다.
+        r5 = await session.call_tool(mine_tool, {"hours": 24, "actor": "e2e-mining"})
+        obj5 = _tool_payload_to_obj(r5)
+        re_mined_ids = [
+            c.get("entity_id")
+            for c in (obj5.get("candidates") or [] if isinstance(obj5, dict) else [])
+            if isinstance(c, dict)
+        ]
+        checks.check(
+            "중복 채굴 방지: 재실행 시 동일 후보 재적재 없음",
+            isinstance(obj5, dict)
+            and obj5.get("status") == "ok"
+            and fewshot_id not in re_mined_ids
+            and int(obj5.get("skipped_existing", 0)) >= 1,
+            f"skipped={obj5.get('skipped_existing') if isinstance(obj5, dict) else '?'}",
+        )
+
+    await _with_gateway_session(gateway_url, manager_token, work_mine)
+
+    # ── (3) 채굴 fewshot 의 OpenSearch 전파(질문 텍스트로 search_schema 히트) ──
+    if mined_state["mined_ok"] and mined_state["fewshot_id"]:
+        await _verify_fewshot_propagation(
+            gateway_url, manager_token, mined_state["fewshot_id"], checks
+        )
+
+    # ── (4) Track A: evaluator 존재(ACTIVE) ──
+    evaluator_id = ctx.get("evaluator_id", "")
+    if evaluator_id:
+        try:
+            import boto3
+
+            cc = boto3.client("bedrock-agentcore-control", region_name=REGION)
+            ev = cc.get_evaluator(evaluatorId=evaluator_id)
+            checks.check(
+                "EX evaluator(agentic_t2sql_execution_accuracy) ACTIVE",
+                ev.get("status") == "ACTIVE",
+                f"status={ev.get('status')}",
+            )
+        except Exception as exc:  # noqa: BLE001
+            checks.check("EX evaluator 조회", False, f"오류={str(exc)[:120]}")
+    else:
+        print("    evaluation-outputs.json 의 ExecutionEvaluatorId 없음 — evaluator 체크 skip")
+
+    # ── (5) Track A: admin API — 배치 평가 시작/조회, online eval, bundle 승격 ──
+    if not admin_url:
+        print("    admin_url 없음 — admin 평가 API 체크 skip")
+    else:
+        lcode, lbody = _http_request(
+            f"{admin_url}/api/auth/login",
+            method="POST",
+            body={"username": manager_user, "password": password},
+        )
+        api_token = lbody.get("accessToken", "") if isinstance(lbody, dict) else ""
+        if not api_token:
+            api_token = manager_token  # admin API 는 Cognito AccessToken 을 그대로 받는다.
+
+        scode, sbody = _http_request(
+            f"{admin_url}/api/eval/runs",
+            method="POST",
+            token=api_token,
+            body={"hours": 24},
+            timeout=60,
+        )
+        run_id = ""
+        if isinstance(sbody, dict):
+            run_id = str(sbody.get("batch_evaluation_id", "") or "")
+        checks.check(
+            "POST /api/eval/runs → 배치 평가 시작(batch_evaluation_id)",
+            scode in (200, 202) and bool(run_id),
+            f"HTTP {scode}, id={run_id or str(sbody)[:120]}",
+        )
+
+        gcode, gbody = _http_request(f"{admin_url}/api/eval/runs", token=api_token)
+        listed = False
+        if isinstance(gbody, dict):
+            runs = gbody.get("runs") or []
+            listed = any(
+                isinstance(x, dict) and x.get("batch_evaluation_id") == run_id for x in runs
+            ) or (bool(runs) and not run_id)
+        checks.check(
+            "GET /api/eval/runs 에 시작한 평가 노출",
+            gcode == 200 and listed,
+            f"HTTP {gcode}",
+        )
+
+        ocode, obody = _http_request(f"{admin_url}/api/eval/online", token=api_token)
+        online_ok = isinstance(obody, dict) and obody.get("configured") is True
+        checks.check(
+            "GET /api/eval/online → online eval 구성 확인",
+            ocode == 200 and online_ok,
+            f"HTTP {ocode}, body={str(obody)[:120]}",
+        )
+
+        # bundle: 목록 → (없으면 생성) → 승격(SSM 갱신) → 원복(롤백 검증).
+        bcode, bbody = _http_request(f"{admin_url}/api/bundles", token=api_token)
+        bundles = bbody.get("bundles") if isinstance(bbody, dict) else None
+        prev_active = bbody.get("active") if isinstance(bbody, dict) else None
+        checks.check("GET /api/bundles 200", bcode == 200, f"HTTP {bcode}")
+
+        bundle_id, version_id = "", ""
+        if isinstance(bundles, list) and bundles:
+            first = bundles[0]
+            bundle_id = str(first.get("bundle_id", ""))
+            version_id = str(first.get("version_id", "") or "")
+        if bcode == 200 and not bundle_id:
+            ccode, cbody = _http_request(
+                f"{admin_url}/api/bundles",
+                method="POST",
+                token=api_token,
+                body={
+                    "systemPrompt": "E2E bundle snapshot — orchestrator 기본 프롬프트 자리",
+                    "modelId": "us.anthropic.claude-sonnet-5",
+                    "description": "E2E 최초 bundle 스냅샷",
+                },
+                timeout=60,
+            )
+            if isinstance(cbody, dict):
+                bundle_id = str(cbody.get("bundle_id", ""))
+                version_id = str(cbody.get("version_id", "") or "")
+            checks.check(
+                "POST /api/bundles → 최초 bundle 생성",
+                ccode in (200, 201) and bool(bundle_id),
+                f"HTTP {ccode}",
+            )
+        if bundle_id and not version_id:
+            vcode, vbody = _http_request(
+                f"{admin_url}/api/bundles/{bundle_id}/versions", token=api_token
+            )
+            versions = vbody.get("versions") if isinstance(vbody, dict) else None
+            if isinstance(versions, list) and versions:
+                version_id = str(versions[0].get("version_id", ""))
+
+        if bundle_id and version_id:
+            pcode, pbody = _http_request(
+                f"{admin_url}/api/bundles/{bundle_id}/promote",
+                method="POST",
+                token=api_token,
+                body={"versionId": version_id},
+            )
+            promoted = False
+            try:
+                import boto3
+
+                ssm = boto3.client("ssm", region_name=REGION)
+                param = ctx.get("active_bundle_param") or "/agentic-t2sql/active-bundle"
+                value = json.loads(ssm.get_parameter(Name=param)["Parameter"]["Value"])
+                promoted = (
+                    value.get("bundleId") == bundle_id
+                    and value.get("versionId") == version_id
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(_red(f"    SSM 확인 실패: {str(exc)[:120]}"))
+            checks.check(
+                "bundle 승격 → SSM active-bundle 갱신 확인",
+                pcode == 200 and promoted,
+                f"HTTP {pcode}, ssm_match={promoted}",
+            )
+            # 원복(롤백 동작 검증): 이전 active 로 되돌린다. 이전이 없으면 빈 값으로.
+            restore = (
+                prev_active
+                if isinstance(prev_active, dict) and prev_active.get("bundleId")
+                else {"bundleId": "", "versionId": ""}
+            )
+            if restore.get("bundleId"):
+                rcode, _ = _http_request(
+                    f"{admin_url}/api/bundles/{restore['bundleId']}/promote",
+                    method="POST",
+                    token=api_token,
+                    body={"versionId": restore.get("versionId", "")},
+                )
+                checks.check("bundle 원복(롤백 경로) 동작", rcode == 200, f"HTTP {rcode}")
+            else:
+                # 데모 초기 상태(빈 포인터)로 되돌린다 — orchestrator 는 기본값 폴백.
+                try:
+                    import boto3
+
+                    ssm = boto3.client("ssm", region_name=REGION)
+                    param = ctx.get("active_bundle_param") or "/agentic-t2sql/active-bundle"
+                    ssm.put_parameter(
+                        Name=param,
+                        Value=json.dumps({"bundleId": "", "versionId": ""}),
+                        Overwrite=True,
+                    )
+                    checks.check("bundle 원복(초기 빈 포인터) 동작", True, "SSM 직접 원복")
+                except Exception as exc:  # noqa: BLE001
+                    checks.check("bundle 원복 동작", False, f"오류={str(exc)[:120]}")
+        else:
+            checks.check("bundle 승격 검증", False, "bundleId/versionId 확보 실패")
+
+    # ── (6) Cedar 회귀: 일반 사용자에게 M5 admin 도구 미노출/거부 ──
+    try:
+        user_token = _cognito_token(client_id, user, password)
+    except Exception as exc:  # noqa: BLE001
+        print(_red(f"일반 사용자 토큰 실패({exc}) — Cedar 회귀 skip"))
+        return
+
+    async def work_cedar(session):
+        tools = await session.list_tools()
+        names = [t.name for t in tools.tools]
+        mine_tool = _find_admin_tool(names, "mine_candidates")
+        reject_tool = _find_admin_tool(names, "reject_entity")
+        if mine_tool is None and reject_tool is None:
+            checks.check(
+                "Cedar: 일반 사용자에게 mine/reject 도구 미노출", True, "tools/list 미노출"
+            )
+            return
+        # 노출됐다면 호출이 거부돼야 한다(M4 학습: status==ok 면 무조건 실패).
+        target = mine_tool or reject_tool
+        try:
+            r = await session.call_tool(
+                target,
+                {"hours": 1} if target == mine_tool else {
+                    "entity_type": "term",
+                    "entity_id": "e2e-should-be-blocked",
+                    "reason": "must not apply",
+                },
+            )
+            obj = _tool_payload_to_obj(r)
+            succeeded = isinstance(obj, dict) and obj.get("status") == "ok"
+            checks.check(
+                "Cedar: 일반 사용자 M5 admin 도구 거부",
+                not succeeded,
+                f"resp={str(obj)[:160]}",
+            )
+        except Exception as exc:  # noqa: BLE001 — 예외 거부도 PASS
+            checks.check("Cedar: 일반 사용자 M5 admin 도구 거부", True, f"예외={str(exc)[:120]}")
+
+    await _with_gateway_session(gateway_url, user_token, work_cedar)
+
+
 # ─────────────────────────────── main ───────────────────────────────
 def main() -> int:
     parser = argparse.ArgumentParser(description="agentic Text-to-SQL E2E 검증기")
-    parser.add_argument("--level", choices=["1", "2", "4", "5", "6", "all"], default="all")
+    parser.add_argument("--level", choices=["1", "2", "4", "5", "6", "7", "all"], default="all")
     parser.add_argument("--orchestrator-arn")
     parser.add_argument("--sql-arn")
     parser.add_argument("--semantic-arn")
@@ -1033,6 +1536,17 @@ def main() -> int:
             password = _e2e_password("레벨6")
             if password:
                 asyncio.run(verify_admin_panel(actx, checks, password))
+
+    if args.level in ("7", "all"):
+        ectx = _load_evaluation_ctx()
+        if not ectx.get("gateway_url"):
+            print("[레벨7] gateway-outputs.json 없음 — M5 미배포. skip.")
+        elif not EVALUATION_OUTPUTS.exists():
+            print("[레벨7] evaluation-outputs.json 없음 — Evaluation 스택 미배포. skip.")
+        else:
+            password = _e2e_password("레벨7")
+            if password:
+                asyncio.run(verify_improvement_pipeline(ectx, checks, password))
 
     return checks.summary()
 

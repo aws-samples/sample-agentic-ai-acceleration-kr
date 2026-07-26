@@ -167,6 +167,9 @@ export class AgenticT2SqlRuntimeStack extends Stack {
         REDSHIFT_SECRET_ARN: props.redshiftRoSecret.secretArn,
         // 등록 데이터소스 자격증명 시크릿 프리픽스(role 정책의 리소스 제한과 반드시 일치).
         DATASOURCE_SECRET_PREFIX: `${config.appPrefix}/datasource/`,
+        // M5 Track B: 후보 채굴기(mine_candidates)가 orchestrator 의 `t2sql_query_record`
+        // 로그를 찾을 프리픽스. adminMcpRole 의 logs 리소스 제한과 일치해야 한다.
+        ORCHESTRATOR_LOG_GROUP_PREFIX: '/aws/bedrock-agentcore/runtimes/',
       },
     });
 
@@ -202,6 +205,13 @@ export class AgenticT2SqlRuntimeStack extends Stack {
         // 모드의 Cognito M2M env(COGNITO_*)도 그 시점에 함께 주입한다.
         TOOL_PLANE_MODE: config.toolPlaneMode,
         GATEWAY_URL: config.gatewayUrl,
+        // ───────── M5: bundle 기반 프롬프트/모델 오버라이드 + 버전 스탬프(§9.5) ─────────
+        // 활성 bundle 포인터(SSM). 파라미터 자체는 evaluation 스택 소유이고 runtime→evaluation
+        // 참조는 배포 순서상 역방향이므로, 값은 config 리터럴(이름 규칙)로 주입한다.
+        // 파라미터가 없거나 빈 값이면 orchestrator 는 코드 기본값으로 폴백한다(AGENTREL04).
+        CONFIG_BUNDLE_PARAM: config.activeBundleParamName,
+        // t2sql_query_record 의 version.agent 스탬프(평가·채굴 결과의 버전 귀인).
+        APP_VERSION: config.appVersion,
       },
     });
 

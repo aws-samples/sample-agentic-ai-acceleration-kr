@@ -287,31 +287,31 @@
       <span>OTEL 트레이스 · 대시보드 · 알람</span>
     </div>
     <div class="node agentcore" id="n-eval" style="left:1075px; top:150px; width:270px">
-      <b>AgentCore Evaluations</b>
-      <span>• code-based: Execution Accuracy<br>• trajectory: 도구 시퀀스 준수<br>• LLM-judge: 내러티브 품질<br>• online eval: 라이브 샘플링</span>
+      <b>AgentCore Evaluations — M5 ✅</b>
+      <span>• code-based(Lambda): Execution Accuracy<br>&nbsp;&nbsp;(goldset 매칭 → gold/생성 SQL read-only<br>&nbsp;&nbsp;재실행 → 결과셋 동등성)<br>• LLM-judge builtin: Correctness·ToolSelection<br>• online eval: 트레이스 샘플링 상시 채점<br>• batch eval: admin panel 에서 실행·리뷰</span>
     </div>
-    <div class="node agentcore small" id="n-insights" style="left:1075px; top:295px; width:270px">
-      <b>Insights</b>
+    <div class="node agentcore small" id="n-insights" style="left:1075px; top:315px; width:270px; opacity:.75">
+      <b>Insights <span style="color:var(--c-clarify)">(Preview·후속)</span></b>
       <span>failure/intent/trajectory 패턴 · silent failure 탐지</span>
     </div>
     <div class="node small" id="n-miner" style="left:1075px; top:855px; width:270px; border-left:4px solid var(--l4)">
-      <b>Semantic 후보 채굴 (Track B)</b>
-      <span>실패 클러스터→동의어·join-path 후보<br>고득점 트레이스→few-shot 수확<br>clarification 선택→용어 기본값<br>→ DynamoDB에 status: candidate</span>
+      <b>Semantic 후보 채굴 (Track B) — M5 ✅</b>
+      <span>t2sql_query_record 로그 채굴(mine_candidates)<br>성공 질의→few-shot 후보 · 실패 표현→용어 후보<br>→ DynamoDB status: candidate (승인 큐 유입)<br>반려(rejected) 이력·중복 채굴 방지</span>
     </div>
-    <div class="node agentcore small" id="n-reco" style="left:1075px; top:385px; width:270px">
-      <b>Recommendations</b>
-      <span>prompt·tool description 개선안 자동 생성</span>
+    <div class="node agentcore small" id="n-reco" style="left:1075px; top:395px; width:270px">
+      <b>Recommendations — M5 ✅ <span style="color:var(--c-clarify)">(Preview)</span></b>
+      <span>prompt·tool description 개선안 자동 생성<br>(admin panel 에서 실행 → bundle 버전 반영)</span>
     </div>
-    <div class="node agentcore small" id="n-bundle" style="left:1075px; top:475px; width:270px">
-      <b>Configuration Bundle</b>
-      <span>불변 버전 스냅샷 (branch/diff)<br>재배포 없이 에이전트에 적용</span>
+    <div class="node agentcore small" id="n-bundle" style="left:1075px; top:485px; width:270px">
+      <b>Configuration Bundle — M5 ✅ <span style="color:var(--c-clarify)">(Preview)</span></b>
+      <span>불변 버전 스냅샷 · 승격 = SSM 포인터 전환<br>orchestrator 60s TTL 캐시 반영 (재배포 없음)<br>실패 시 코드 기본값 폴백 · 롤백 = 재승격</span>
     </div>
-    <div class="node agentcore small" id="n-ab" style="left:1075px; top:575px; width:270px">
-      <b>A/B Testing</b>
-      <span>Gateway 트래픽 분할 · 통계적 유의성</span>
+    <div class="node agentcore small" id="n-ab" style="left:1075px; top:585px; width:270px; opacity:.75">
+      <b>A/B Testing <span style="color:var(--c-clarify)">(미제공 → 폴백)</span></b>
+      <span>안정 API 미확인 — 수동 전량 전환 +<br>online eval 전후 비교로 대체 (§8 완화)</span>
     </div>
-    <div class="node small" id="n-registry" style="left:1075px; top:665px; width:270px; opacity:.75">
-      <b>AgentCore Registry <span style="color:var(--c-clarify)">(Preview·선택)</span></b>
+    <div class="node small" id="n-registry" style="left:1075px; top:675px; width:270px; opacity:.75">
+      <b>AgentCore Registry <span style="color:var(--c-clarify)">(Preview·미사용)</span></b>
       <span>에이전트·도구 조직 카탈로그</span>
     </div>
     <div class="node small" id="n-wa" style="left:1075px; top:760px; width:270px; opacity:.75">
@@ -390,20 +390,20 @@ const EDGES = [
   ["admin","n-adminweb","n-cognito","사용자·그룹 관리 (Admin 전용)",null],
   ["admin","n-cognito","n-gateway","JWT → Cedar policy 평가",3],
   ["admin","n-cw","n-adminweb","트레이스·메트릭 조회",null],
-  // ④ 평가·개선 루프
-  ["eval","n-runtime","n-otel","OTEL 트레이스",1],
-  ["eval","n-otel","n-eval","online eval 샘플링",2],
-  ["eval","n-eval","n-insights","",3],
-  ["eval","n-insights","n-reco","",4],
-  ["eval","n-reco","n-bundle","개선안 → 새 버전",5],
-  ["eval","n-adminweb","n-bundle","Manager 승격 승인",6],
-  ["eval","n-bundle","n-ab","버전 비교",7],
-  ["eval","n-ab","n-gateway","트래픽 분할",8],
-  ["eval","n-bundle","n-runtime","승인된 설정 무중단 적용",9],
-  // ④-B 평가·개선 루프 Track B: semantic layer 보강
-  ["eval","n-insights","n-miner","Track B: 실패 클러스터·고득점 트레이스",10],
-  ["eval","n-miner","n-ddb","동의어·join-path·few-shot 후보 (candidate, 에이전트 미노출)",11],
-  ["eval","n-adminweb","n-miner","Manager 승인 큐 검토·승인 → published",12],
+  // ④ 평가·개선 루프 (M5 구현 반영: batch/online eval → 추천 → bundle 새 버전 →
+  //    Manager 승격(SSM 포인터) → orchestrator TTL 캐시 반영. A/B 는 폴백이라 점선 의미)
+  ["eval","n-runtime","n-otel","OTEL 트레이스 + t2sql_query_record",1],
+  ["eval","n-otel","n-eval","online eval 샘플링 · batch eval(admin 실행)",2],
+  ["eval","n-eval","n-insights","(후속)",3],
+  ["eval","n-eval","n-reco","reward = evaluator 스코어",4],
+  ["eval","n-reco","n-bundle","개선안 → 새 버전 (UpdateConfigurationBundle)",5],
+  ["eval","n-adminweb","n-bundle","Manager 승격 승인 → SSM active-bundle 전환",6],
+  ["eval","n-bundle","n-ab","(A/B 미제공 — 수동 전환 폴백)",7],
+  ["eval","n-bundle","n-runtime","orchestrator 60s TTL 캐시로 무중단 반영",8],
+  // ④-B 평가·개선 루프 Track B: semantic layer 보강 (M5 구현: mine_candidates 도구)
+  ["eval","n-otel","n-miner","Track B: 성공 질의·실패 표현 채굴 (mine_candidates)",10],
+  ["eval","n-miner","n-ddb","few-shot·용어 후보 (candidate, 에이전트 미노출)",11],
+  ["eval","n-adminweb","n-miner","Manager 승인/반려 (publish / reject+사유)",12],
   ["eval","n-ddb","n-os","승인 후 동기화",13],
   ["eval","n-ddb","n-neptune","",13],
 ];

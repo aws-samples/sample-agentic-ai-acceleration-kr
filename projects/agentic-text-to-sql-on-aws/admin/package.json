@@ -12,10 +12,12 @@
     "format:check": "prettier --check ."
   },
   "dependencies": {
+    "@aws-sdk/client-bedrock-agentcore": "^3.1095.0",
     "@aws-sdk/client-bedrock-agentcore-control": "^3.895.0",
     "@aws-sdk/client-cloudwatch": "^3.895.0",
     "@aws-sdk/client-cloudwatch-logs": "^3.895.0",
     "@aws-sdk/client-cognito-identity-provider": "^3.895.0",
+    "@aws-sdk/client-ssm": "^3.1095.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "aws-jwt-verify": "^5.2.1",
     "next": "14.2.29",

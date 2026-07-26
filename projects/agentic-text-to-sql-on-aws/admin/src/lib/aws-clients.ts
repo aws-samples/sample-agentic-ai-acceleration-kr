@@ -11,16 +11,20 @@
  * 클라이언트는 모듈 레벨에서 lazy 생성해 커넥션·자격증명 캐시를 재사용한다.
  */
 
+import { BedrockAgentCoreClient } from '@aws-sdk/client-bedrock-agentcore';
 import { BedrockAgentCoreControlClient } from '@aws-sdk/client-bedrock-agentcore-control';
 import { CloudWatchClient } from '@aws-sdk/client-cloudwatch';
 import { CloudWatchLogsClient } from '@aws-sdk/client-cloudwatch-logs';
 import { CognitoIdentityProviderClient } from '@aws-sdk/client-cognito-identity-provider';
+import { SSMClient } from '@aws-sdk/client-ssm';
 import { AWS_REGION } from './env';
 
 let cognito: CognitoIdentityProviderClient | null = null;
 let agentcore: BedrockAgentCoreControlClient | null = null;
+let agentcoreData: BedrockAgentCoreClient | null = null;
 let cloudwatch: CloudWatchClient | null = null;
 let logs: CloudWatchLogsClient | null = null;
+let ssm: SSMClient | null = null;
 
 export function cognitoClient(): CognitoIdentityProviderClient {
   if (!cognito) cognito = new CognitoIdentityProviderClient({ region: AWS_REGION });
@@ -32,6 +36,15 @@ export function agentCoreControlClient(): BedrockAgentCoreControlClient {
   return agentcore;
 }
 
+/**
+ * AgentCore **데이터플레인** 클라이언트 (§9.6) — StartBatchEvaluation / GetBatchEvaluation /
+ * StartRecommendation / GetRecommendation. control 평면과 엔드포인트가 다르므로 별도 클라이언트다.
+ */
+export function agentCoreDataClient(): BedrockAgentCoreClient {
+  if (!agentcoreData) agentcoreData = new BedrockAgentCoreClient({ region: AWS_REGION });
+  return agentcoreData;
+}
+
 export function cloudWatchClient(): CloudWatchClient {
   if (!cloudwatch) cloudwatch = new CloudWatchClient({ region: AWS_REGION });
   return cloudwatch;
@@ -40,4 +53,10 @@ export function cloudWatchClient(): CloudWatchClient {
 export function cloudWatchLogsClient(): CloudWatchLogsClient {
   if (!logs) logs = new CloudWatchLogsClient({ region: AWS_REGION });
   return logs;
+}
+
+/** SSM — 활성 bundle 포인터(`/agentic-t2sql/active-bundle`) 조회·승격 (§9.1). */
+export function ssmClient(): SSMClient {
+  if (!ssm) ssm = new SSMClient({ region: AWS_REGION });
+  return ssm;
 }

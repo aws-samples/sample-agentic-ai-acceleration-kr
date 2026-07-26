@@ -1,4 +1,4 @@
-"""실 FastMCP 로 도구 8종이 등록·스키마화되는지 검증 — §8.3 시그니처 계약 테스트.
+"""실 FastMCP 로 도구 10종이 등록·스키마화되는지 검증 — §8.3·§9.4 시그니처 계약 테스트.
 
 CLAUDE.md M2 학습: ``from __future__ import annotations`` 하에서 데코레이터가
 ``get_type_hints`` 로 어노테이션을 모듈 전역에서 평가하므로, 함수 내부 지연 임포트한 타입을
@@ -14,7 +14,7 @@ import pytest
 
 from datasource_admin_mcp import server
 
-# §8.3 계약: 도구명 → (필수 인자, 선택 인자 기본값)
+# §8.3(M4) + §9.4(M5) 계약: 도구명 → (필수 인자, 선택 인자 기본값)
 EXPECTED_TOOLS: dict[str, tuple[list[str], dict[str, object]]] = {
     "list_entities": ([], {"entity_type": None, "status": None}),
     "get_entity": (["entity_type", "entity_id"], {}),
@@ -30,6 +30,12 @@ EXPECTED_TOOLS: dict[str, tuple[list[str], dict[str, object]]] = {
     ),
     "test_datasource": (["datasource_id"], {}),
     "crawl_schema": (["datasource_id"], {"actor": "admin-panel"}),
+    # M5 §9.4 additive
+    "reject_entity": (
+        ["entity_type", "entity_id"],
+        {"reason": "", "actor": "admin-panel"},
+    ),
+    "mine_candidates": ([], {"hours": 24, "actor": "mining-batch"}),
 }
 
 
@@ -40,8 +46,29 @@ def tools() -> dict:
     return {tool.name: tool for tool in listed}
 
 
-def test_all_eight_tools_registered(tools: dict) -> None:
+def test_all_contracted_tools_registered(tools: dict) -> None:
     assert set(tools) == set(EXPECTED_TOOLS), f"등록된 도구: {sorted(tools)}"
+
+
+def test_m4_tools_still_registered(tools: dict) -> None:
+    # additive only 계약: M4 도구 8종은 제거·개명되지 않아야 한다.
+    m4_tools = {
+        "list_entities",
+        "get_entity",
+        "put_entity",
+        "publish_entity",
+        "unpublish_entity",
+        "register_datasource",
+        "test_datasource",
+        "crawl_schema",
+    }
+    assert m4_tools <= set(tools)
+
+
+def test_mine_candidates_hours_is_integer_typed(tools: dict) -> None:
+    # hours 가 정수 스키마여야 MCP 클라이언트가 숫자를 전달한다.
+    schema = tools["mine_candidates"].inputSchema["properties"]["hours"]
+    assert schema.get("type") == "integer", schema
 
 
 @pytest.mark.parametrize("name", sorted(EXPECTED_TOOLS))

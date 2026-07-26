@@ -27,7 +27,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { ADMIN_MCP_TARGET, requiredEnv } from './env';
 
-/** §8.3 datasource-admin-mcp 도구명 (프리픽스 없는 순수 이름). */
+/** §8.3 / §9.4 datasource-admin-mcp 도구명 (프리픽스 없는 순수 이름). */
 export type AdminToolName =
   | 'list_entities'
   | 'get_entity'
@@ -36,7 +36,10 @@ export type AdminToolName =
   | 'unpublish_entity'
   | 'register_datasource'
   | 'test_datasource'
-  | 'crawl_schema';
+  | 'crawl_schema'
+  // M5 additive (§9.4) — 반려·후보 채굴.
+  | 'reject_entity'
+  | 'mine_candidates';
 
 /** 도구 반환 규약: 성공 `{status:"ok",...}` / 실패 `{status:"error",message}`. */
 export interface McpToolResult {

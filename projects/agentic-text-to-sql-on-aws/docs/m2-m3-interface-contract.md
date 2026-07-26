@@ -1,4 +1,4 @@
-# M2 / M3 / M4 인터페이스 기록 (Interface Record)
+# M2 / M3 / M4 / M5 인터페이스 기록 (Interface Record)
 
 > 마일스톤이 산출·소비하는 인터페이스(리소스명·도구 시그니처·env var·CDK export)의 기록.
 > 구현이 확정될 때마다 갱신한다.
@@ -275,3 +275,160 @@ M2M 서비스 토큰 대신 이 토큰을 Bearer 로 사용(사용자 위임). �
 5. Cedar: e2e-user(일반) 토큰으로 admin 도구 호출 → 거부(또는 tools/list 미노출),
    run_sql/search_schema 는 여전히 허용(action 스코프 회귀 확인)
 6. admin API OBO: Manager 토큰으로 `GET /api/semantic/entities` 200, e2e-user 토큰 403
+
+## 9. M5 접점 계약 (개선 파이프라인 Track A·B) — 착수 전 고정
+
+> M5 도 독립 모듈 병렬 구현이므로 아래 계약을 구현 에이전트 프롬프트에 동일하게 박는다.
+> **변경 시 이 문서를 먼저 갱신**한다.
+
+### 9.0 Preview/GA 재확인 결과 (2026-07-27, us-west-2 라이브 확인)
+
+| 기능 | 판정 | 근거 (CLI/boto3 교차 확인) | M5 결정 |
+|---|---|---|---|
+| AgentCore Evaluations (custom evaluator·code-based Lambda·on-demand `Evaluate`·`StartBatchEvaluation`·online eval) | **사용 가능** (us-west-2 응답 확인) | boto3 1.43.56 `bedrock-agentcore-control`: CreateEvaluator/CreateOnlineEvaluationConfig, 데이터플레인: Evaluate/StartBatchEvaluation. `list_evaluators` 로 Builtin 13종 ACTIVE 확인. CDK L2 `Evaluator`/`OnlineEvaluationConfig` (aws-cdk-lib 2.262) | **네이티브 사용** |
+| Configuration Bundle (`CreateConfigurationBundle` 등, 불변 버전·branch·diff) | **API 실존·응답 확인, 서비스 상태 Preview** (AWS 블로그 "AgentCore Optimization now in preview") | `list_configuration_bundles` 응답 OK. components = map<string, {configuration: document}> | **사용하되 승격은 자체 SSM 포인터** (아래 9.4) |
+| Recommendations (`StartRecommendation` SYSTEM_PROMPT/TOOL_DESCRIPTION) | **API 실존·응답 확인, Preview** | 데이터플레인 StartRecommendation/GetRecommendation, `list_recommendations` OK | **admin panel 에서 호출** (실패 시 graceful degrade) |
+| A/B Testing (Gateway 트래픽 분할) | **안정 API 표면 미확인** | Gateway update API 에 분할 파라미터 없음(설치 SDK 기준) | **미구현 — 수동 bundle 전환 폴백** + online eval 전후 비교. README 명시 |
+| Agent Registry | API 실존(레코드 승인 워크플로) | CreateRegistry 등 | **미사용** (bundle+SSM 으로 충분, 범위 밖) |
+| 로컬 AWS CLI 2.31.25 | Evaluations 서브커맨드 **없음** (모델 구버전) | `aws bedrock-agentcore-control help` | 스크립트·E2E 는 **boto3(orchestrator venv)** 사용, CLI 의존 금지 |
+
+### 9.1 아키텍처 결정 (확정)
+
+- **Track A 평가**: code-based evaluator 는 **Lambda** (`agentic-t2sql-ex-evaluator`) — CLAUDE.md
+  핵심 제약의 명시적 예외(Evaluations 서비스 규격). Execution Accuracy(EX):
+  스팬에서 생성 SQL·질문을 추출 → goldset 매칭 → gold SQL 과 생성 SQL 을 **read-only
+  (agent_ro)** 로 실행해 정규화 결과셋 비교. goldset 은 Lambda asset 에 동봉(`goldset-v1.jsonl`).
+- **online eval**: `OnlineEvaluationConfig` (L2) — orchestrator 트레이스 샘플링,
+  builtin(Correctness·ToolSelectionAccuracy 등) + EX evaluator.
+- **bundle 승격 = SSM 포인터 전환**: 활성 bundle 은 SSM `/agentic-t2sql/active-bundle`
+  (JSON `{"bundleId","versionId"}`) 가 단일 원천. orchestrator 는 세션 시작 시 TTL 캐시(60s)로
+  읽어 `system_prompt`/`model_id` 를 오버라이드, **실패·빈 값이면 코드 기본값으로 폴백**
+  (AGENTREL04). bundle components 의 키는 runtime ARN 대신 **논리 키 `"orchestrator"`**
+  (자기 ARN 자기참조 회피 — 문서 예제와 다름, 의도적 편차).
+- **Track B 채굴기는 admin-mcp 도구** (`mine_candidates`) — Lambda 아님, 기존 MCP 도구 평면
+  유지. orchestrator 가 남기는 구조화 로그(`t2sql_query_record` JSON)를 CloudWatch 에서 읽어
+  fewshot/term 후보를 SemanticRepository 에 candidate 로 적재(단일 쓰기 유지). Manager 가
+  admin panel 에서 수동 트리거(+E2E). **중복 채굴 방지**: 동일 entity_id(질문 해시)가 어떤
+  status 로든 존재하면 skip.
+- **reject 상태 추가**: `VALID_STATUSES` 에 `rejected` additive 추가.
+  `SemanticRepository.reject(..., reason)` 는 payload 에 `rejection_reason` 기록.
+  graph_sync/OSIS 는 `status != "published"` 처리 경로라 변경 불요(rejected = 비노출).
+- **버저닝(§5.3)**: orchestrator 는 모든 `t2sql_query_record` 에 version vector
+  `{bundle: <bundleId>@<versionId>|"default", agent: APP_VERSION env}` 를 스탬프.
+  goldset 은 파일명 버전(`goldset-v1`), evaluator 는 Lambda env `EVALUATOR_VERSION`.
+
+### 9.2 디렉토리·스택
+
+```
+evaluation/                    # Python uv 패키지 (EX evaluator Lambda + goldset)
+├── pyproject.toml
+├── src/evaluation/handler.py  # Lambda handler (code-based evaluator 계약)
+├── src/evaluation/goldset/goldset-v1.jsonl
+└── tests/
+infra/lib/evaluation-stack.ts  # AgenticT2SqlEvaluationStack
+agents/datasource-admin-mcp/src/datasource_admin_mcp/miner.py   # Track B 채굴기
+```
+
+- `AgenticT2SqlEvaluationStack` 의존: base(Aurora·agent_ro 시크릿) + runtime(orchestrator
+  Runtime 객체 — `DataSourceConfig.fromAgentRuntimeEndpoint`). **배포 순서**:
+  base → … → gateway-scoped → **evaluation** → admin (admin 이 evaluation 출력을 env 로 소비).
+- deploy.sh 에 `evaluation` 타깃 추가.
+
+### 9.3 신규 리소스 이름
+
+| 리소스 | 이름 |
+|---|---|
+| EX evaluator Lambda | `agentic-t2sql-ex-evaluator` |
+| AgentCore Evaluator (code-based) | `agentic_t2sql_execution_accuracy` (언더스코어 규칙) |
+| OnlineEvaluationConfig | `agentic_t2sql_online_eval` |
+| Online eval 실행 role | `agentic-t2sql-eval-exec-role` (Latin-1 description!) |
+| SSM 활성 bundle 파라미터 | `/agentic-t2sql/active-bundle` |
+| Configuration Bundle (admin 이 최초 생성) | `agentic_t2sql_orchestrator` |
+| goldset | `evaluation/src/evaluation/goldset/goldset-v1.jsonl` (5문항+, aurora 만) |
+
+### 9.4 admin-mcp 신규 도구 (Track B)
+
+```
+reject_entity(entity_type: str, entity_id: str, reason: str = "", actor: str = "admin-panel")
+  -> {"status":"ok","entity":{...}}    # status=rejected, payload.rejection_reason 기록
+mine_candidates(hours: int = 24, actor: str = "mining-batch")
+  -> {"status":"ok","scanned":N,"mined":N,"skipped_existing":N,"candidates":[{entity_type,entity_id}]}
+  # orchestrator 로그 그룹(prefix /aws/bedrock-agentcore/runtimes/)에서 t2sql_query_record
+  # JSON 을 FilterLogEvents 로 수집 → 성공(NLQ,SQL) → fewshot 후보,
+  # 실패 반복 표현 → term 후보. entity_id = "mined-" + sha256(질문)[:12].
+```
+
+- admin-mcp role(base 소유)에 `logs:DescribeLogGroups` + `logs:FilterLogEvents`
+  (`/aws/bedrock-agentcore/runtimes/*`) 추가.
+- **admin-mcp 이미지 갱신 후 gateway target 도구 재동기화 필요**:
+  `aws bedrock-agentcore-control synchronize-gateway-targets` (신규 도구 노출).
+- Cedar: 신규 도구는 `datasource-admin-mcp___*` 이므로 phase 2 스코프에서 일반 User 자동
+  차단(변경 불요). Manager/Admin 은 광역 permit 으로 허용.
+
+### 9.5 orchestrator additive 변경
+
+| 항목 | 내용 |
+|---|---|
+| env | `CONFIG_BUNDLE_PARAM=/agentic-t2sql/active-bundle`, `APP_VERSION`(이미지 태그/sha) |
+| IAM(base) | orchestrator role: `ssm:GetParameter`(해당 파라미터), `bedrock-agentcore:GetConfigurationBundle`·`GetConfigurationBundleVersion` |
+| 코드 | `bundle_config.py`: SSM(TTL 60s)→GetConfigurationBundleVersion→`components["orchestrator"].configuration` 의 `system_prompt`/`model_id` 오버라이드. 실패 시 기본값+경고 로그 |
+| 로그 | 실행 종료 시 `t2sql_query_record` JSON 1줄: `{question, sql, status:"ok"|"error"|"clarification", session_id, version:{bundle,agent}}` (채굴·평가·버전귀인의 단일 원천) |
+
+### 9.6 admin web API 경로 (M5 additive)
+
+인증·인가 규칙은 §8.4 와 동일(Manager|Admin). bundle 승격·reject 는 Manager 이상.
+
+```
+GET  /api/eval/evaluators                  ListEvaluators (builtin+custom)
+POST /api/eval/runs {hours?, evaluators?}  StartBatchEvaluation (orchestrator 로그 소스, 기본 EX+Correctness)
+GET  /api/eval/runs                        ListBatchEvaluations
+GET  /api/eval/runs/{id}                   GetBatchEvaluation (결과·스코어)
+GET  /api/eval/online                      online eval config 상태 + 최근 스코어 요약
+POST /api/recommendations {type}           StartRecommendation (SYSTEM_PROMPT|TOOL_DESCRIPTION)
+GET  /api/recommendations, /{id}           List/GetRecommendation
+GET  /api/bundles                          ListConfigurationBundles (+active 표시)
+POST /api/bundles                          최초 bundle 생성(현재 프롬프트 스냅샷)
+GET  /api/bundles/{id}/versions            ListConfigurationBundleVersions
+POST /api/bundles/{id}/versions            UpdateConfigurationBundle (새 버전 — 수동 편집/추천 반영)
+POST /api/bundles/{id}/promote {versionId} SSM active-bundle 갱신 (승격 승인) — 롤백도 동일 API
+POST /api/semantic/entities/{type}/{id}/reject {reason}  → MCP reject_entity (OBO)
+POST /api/mining/run {hours}               → MCP mine_candidates (OBO)
+```
+
+- admin-web task role additive: Evaluations/Bundle/Recommendation read+start·SSM Put/Get
+  (`/agentic-t2sql/active-bundle` 한정).
+
+### 9.7 env var (M5 additive)
+
+| env | 대상 | 값 |
+|---|---|---|
+| `AURORA_CLUSTER_ARN`,`AURORA_SECRET_ARN`,`DB_NAME`,`EVALUATOR_VERSION` | ex-evaluator Lambda | EX 실행 비교용(agent_ro) |
+| `CONFIG_BUNDLE_PARAM`,`APP_VERSION` | orchestrator | §9.5 |
+| `EXECUTION_EVALUATOR_ID`,`ONLINE_EVAL_CONFIG_ID`,`ACTIVE_BUNDLE_PARAM`,`ORCHESTRATOR_LOG_GROUP`,`ORCHESTRATOR_SERVICE_NAME` | admin-web | 평가 화면·bundle 승격 |
+
+### 9.8 CDK 출력 (evaluation-outputs.json)
+
+| 키 | 값 |
+|---|---|
+| `ExecutionEvaluatorId` / `ExecutionEvaluatorArn` | EX evaluator |
+| `OnlineEvalConfigId` | online eval config |
+| `ActiveBundleParamName` | SSM 파라미터명 |
+| `EvaluatorLambdaArn` | Lambda ARN |
+
+### 9.9 E2E 레벨 7 체크 (scripts/e2e_verify.py --level 7)
+
+1. reject: Manager 토큰 MCP `put_entity`(candidate) → `reject_entity(reason)` →
+   status=rejected + rejection_reason 기록, `list_entities(status=candidate)` 미노출
+2. rejected 조회: `list_entities(status=rejected)` 에 노출 (반려 이력)
+3. mining: `mine_candidates(hours=24)` → status ok, mined+skipped_existing ≥ 1
+   (레벨 2 실행이 남긴 `t2sql_query_record` 전제 — 레벨 7 은 레벨 2 이후 실행)
+4. mined 후보가 승인 큐(candidate)에 노출 → `publish_entity` → published
+5. 전파: 수 초 후 `search_schema` 로 mined fewshot 질문 검색 히트
+6. 중복 방지: `mine_candidates` 재실행 → 같은 entity_id 재적재 없음(skipped_existing 증가)
+7. Track A: `list_evaluators` 에 `agentic_t2sql_execution_accuracy` ACTIVE
+8. admin API: `POST /api/eval/runs` → batchEvaluationId 반환, `GET /api/eval/runs` 에 노출
+   (COMPLETED 대기는 하지 않음 — 비동기 작업 시작 검증까지)
+9. bundle: `GET /api/bundles` 200 → 없으면 `POST /api/bundles` 생성 →
+   `POST /api/bundles/{id}/promote` → SSM 파라미터 값 갱신 확인 → 원복(롤백 검증)
+10. online eval: `GET /api/eval/online` 에 config ACTIVE
+11. Cedar 회귀: e2e-user(일반) 토큰으로 `mine_candidates`/`reject_entity` 미노출·거부

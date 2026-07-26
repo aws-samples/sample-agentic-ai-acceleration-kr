@@ -4,9 +4,10 @@ AgentCore Runtime MCP 호스팅 규격(2026-07 검증): Host 0.0.0.0, 포트 800
 stateless streamable-HTTP. ``FastMCP(host="0.0.0.0", stateless_http=True)`` +
 ``mcp.run(transport="streamable-http")``.
 
-도구 8종 (docs/m2-m3-interface-contract.md §8.3 계약):
-  list_entities / get_entity / put_entity / publish_entity / unpublish_entity
-  register_datasource / test_datasource / crawl_schema
+도구 10종:
+  §8.3 (M4): list_entities / get_entity / put_entity / publish_entity / unpublish_entity
+             register_datasource / test_datasource / crawl_schema
+  §9.4 (M5): reject_entity / mine_candidates   — 개선 파이프라인 Track B
 
 admin web 은 DynamoDB 를 직접 쓰지 않고 **사용자 JWT → Gateway MCP → 이 서버**를 경유한다
 (§8.0: semantic 쓰기 경로 단일화 + Cedar 인가 강제 + 사용자별 OBO 실현).
@@ -27,6 +28,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from datasource_admin_mcp.crawler import SchemaCrawler
+from datasource_admin_mcp.miner import MAX_REPORTED_CANDIDATES, CandidateMiner
 from datasource_admin_mcp.registry import (
     BUILTIN_DATASOURCES,
     VALID_ENGINES,
@@ -175,6 +177,68 @@ def unpublish_entity(
     except Exception as exc:  # noqa: BLE001
         return _error(exc)
     return {"status": "ok", "entity": _strip(entity)}
+
+
+@mcp.tool()
+def reject_entity(
+    entity_type: str, entity_id: str, reason: str = "", actor: str = "admin-panel"
+) -> dict[str, Any]:
+    """candidate 엔티티를 반려(rejected)한다 — 승인 대기 큐에서 제외되고 이력이 남는다.
+
+    rejected 는 published 가 아니므로 파생 저장소(OpenSearch/Neptune)에 노출되지 않는다.
+    채굴기(mine_candidates)는 rejected 도 "이미 존재" 로 보아 재적재하지 않는다.
+    반려 후에도 publish_entity 로 재승인, unpublish_entity 로 재검토(candidate) 복귀가 가능하다.
+
+    Args:
+        entity_type: term|fewshot|table|column|join|datasource.
+        entity_id: 엔티티 식별자.
+        reason: 반려 사유(감사 기록용 — payload 의 rejection_reason 으로 저장). 빈 값이면 미기록.
+        actor: 감사 기록용 행위자(반려자).
+
+    Returns:
+        {"status":"ok","entity":{...}}  (status=rejected)
+        실패: {"status":"error","message":"..."}
+    """
+    try:
+        entity = get_repository().reject(entity_type, entity_id, reason=reason, actor=actor)
+    except Exception as exc:  # noqa: BLE001
+        return _error(exc)
+    return {"status": "ok", "entity": _strip(entity)}
+
+
+# --- 개선 파이프라인 Track B: 후보 채굴 ----------------------------------------
+
+
+@mcp.tool()
+def mine_candidates(hours: int = 24, actor: str = "mining-batch") -> dict[str, Any]:
+    """운영 로그에서 semantic 후보(fewshot/term)를 채굴해 candidate 로 적재한다.
+
+    orchestrator 가 남긴 구조화 로그(`t2sql_query_record`)를 CloudWatch Logs 에서 읽어
+    성공 질의는 fewshot 후보로, 실패·재질의 질문에서 반복 등장하는 표현은 term 후보로
+    적재한다. 적재는 전부 **candidate** 이므로 Manager 승인(publish) 후에야 검색에 반영된다.
+    동일 entity_id(질문 해시)가 이미 있으면(rejected 포함) 재적재하지 않는다.
+
+    Args:
+        hours: 스캔할 최근 시간 범위(기본 24시간).
+        actor: 감사 기록용 행위자(기본 mining-batch).
+
+    Returns:
+        {"status":"ok","scanned":N,"mined":N,"skipped_existing":N,
+         "candidates":[{"entity_type":"fewshot|term","entity_id":"mined-..."}]}
+        (candidates 는 응답 경량화를 위해 최대 50건까지만 실린다 — 카운트는 전체값)
+        실패: {"status":"error","message":"..."}
+    """
+    try:
+        summary = CandidateMiner(get_repository()).mine(hours=hours, actor=actor)
+    except Exception as exc:  # noqa: BLE001
+        return _error(exc)
+    return {
+        "status": "ok",
+        "scanned": summary["scanned"],
+        "mined": summary["mined"],
+        "skipped_existing": summary["skipped_existing"],
+        "candidates": summary["candidates"][:MAX_REPORTED_CANDIDATES],
+    }
 
 
 # --- 데이터소스 관리 도구 -----------------------------------------------------

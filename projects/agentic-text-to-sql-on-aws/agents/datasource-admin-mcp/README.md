@@ -13,7 +13,7 @@ admin web API는 DynamoDB를 **직접 쓰지 않는다**. 모든 큐레이션·�
 2. **Cedar**가 Manager/Admin 인가를 도구 평면에서 강제
 3. M3 이월 부채인 **사용자별 JWT On-Behalf-Of**를 admin 경로에서 실현
 
-## 도구 (8종)
+## 도구 (10종)
 
 모든 도구는 JSON dict를 반환하고, 실패는 `{"status":"error","message":"타입: 메시지"}`로
 정규화한다. `actor`는 감사 기록용(admin web이 JWT username을 전달).
@@ -25,6 +25,8 @@ admin web API는 DynamoDB를 **직접 쓰지 않는다**. 모든 큐레이션·�
 | `put_entity` | `(entity_type, entity_id, payload, status="candidate", actor="admin-panel")` | `{"status":"ok","entity":{...}}` |
 | `publish_entity` | `(entity_type, entity_id, actor="admin-panel")` | `{"status":"ok","entity":{...}}` |
 | `unpublish_entity` | `(entity_type, entity_id, actor="admin-panel")` | `{"status":"ok","entity":{...}}` |
+| `reject_entity` | `(entity_type, entity_id, reason="", actor="admin-panel")` | `{"status":"ok","entity":{...}}` |
+| `mine_candidates` | `(hours=24, actor="mining-batch")` | `{"status":"ok","scanned":N,"mined":N,"skipped_existing":N,"candidates":[...]}` |
 | `register_datasource` | `(datasource_id, engine, config, actor="admin-panel")` | `{"status":"ok","secret_arn":"..."}` |
 | `test_datasource` | `(datasource_id)` | `{"status":"ok","ok":bool,"detail":"..."}` |
 | `crawl_schema` | `(datasource_id, actor="admin-panel")` | `{"status":"ok","tables":N,"columns":N,"joins":N}` |
@@ -36,6 +38,30 @@ admin web API는 DynamoDB를 **직접 쓰지 않는다**. 모든 큐레이션·�
   파생 OpenSearch 인덱스의 `knn_vector` 매핑과 차원이 일치해야 kNN 질의가 성립한다.
 - 크롤 산출물은 항상 **candidate**다. Manager 승인(`publish_entity`) 후에야 Streams →
   OpenSearch/Neptune으로 전파되어 검색에 반영된다.
+- `status` 유효값: `candidate | published | rejected` (`rejected`는 M5 additive —
+  `reject_entity`가 사유를 payload `rejection_reason`으로 남긴다. `published`가 아니므로
+  파생 저장소에 노출되지 않고, 이후 `publish_entity`로 재승인 / `unpublish_entity`로
+  재검토 큐 복귀가 가능하다).
+
+## 후보 채굴 (개선 파이프라인 Track B — §9.4)
+
+`mine_candidates`는 orchestrator가 실행 종료 시 남기는 구조화 로그
+`t2sql_query_record {JSON}`(`{question, sql, status, session_id, version}`)을 CloudWatch
+Logs에서 읽어 semantic 후보를 **candidate**로 적재한다(승인 게이트 유지).
+
+| 후보 | 원천 | entity_id | payload |
+|---|---|---|---|
+| `fewshot` | `status="ok"` + SQL 존재 | `mined-<sha256(정규화 질문)[:12]>` | `question`, `sql`, `source="mined"`, `mined_from_session` |
+| `term` | `status="error"\|"clarification"` 질문에서 2회 이상 등장한 비스톱워드 토큰 | `mined-term-<sha256(토큰)[:12]>` | `term`, `definition`(정의 필요 플레이스홀더), `synonyms=[]`, `source="mined"` |
+
+- 로그 그룹은 env `ORCHESTRATOR_LOG_GROUP_PREFIX`(기본 `/aws/bedrock-agentcore/runtimes/`)
+  하위에서 이름에 `orchestrator`가 포함된 그룹만 스캔한다(`DescribeLogGroups` +
+  `FilterLogEvents(filterPattern="t2sql_query_record")`).
+- **중복 채굴 방지**: put 전에 `get_entity`로 동일 entity_id 존재를 확인해 **status 무관
+  (`rejected` 포함)** 이면 skip하고 `skipped_existing`을 올린다 — 반려한 후보가 배치
+  재실행으로 되살아나지 않는다.
+- 응답의 `candidates` 목록은 최대 50건까지만 실린다(카운트는 전체값).
+- 한 그룹의 `FilterLogEvents` 실패(권한 등)는 warning만 남기고 다른 그룹을 계속 스캔한다.
 
 ## 데이터소스 관리
 
@@ -64,6 +90,7 @@ admin web API는 DynamoDB를 **직접 쓰지 않는다**. 모든 큐레이션·�
 | `RedshiftDataApiConnector` | redshift-data(비동기: execute → describe 폴링 → get_result) |
 | `SchemaCrawler` | 크롤 결과를 `put_entity(status="candidate")`로 적재 |
 | `DatasourceRegistry` | Secrets Manager 기반 등록 저장소 |
+| `CandidateMiner` | CloudWatch Logs 레코드 → fewshot/term 후보를 `put_entity(status="candidate")`로 적재 |
 
 - 크롤 질의는 `information_schema.tables/columns` + FK(`table_constraints` 조인) 3개.
   Redshift는 PostgreSQL 8.0.2 기반이라 동일 질의를 쓴다. FK 질의 실패는 warning만 남기고
@@ -112,6 +139,7 @@ scripts/build-and-push.sh datasource-admin-mcp
 | `AURORA_CLUSTER_ARN` / `AURORA_SECRET_ARN` / `DB_NAME` | Aurora 크롤·점검 (read-only 시크릿) |
 | `REDSHIFT_WORKGROUP` / `REDSHIFT_DB` / `REDSHIFT_SECRET_ARN` | Redshift 크롤·점검 |
 | `DATASOURCE_SECRET_PREFIX` | 등록 시크릿 prefix (기본 `agentic-t2sql/datasource/`) |
+| `ORCHESTRATOR_LOG_GROUP_PREFIX` | 후보 채굴이 스캔할 로그 그룹 prefix (기본 `/aws/bedrock-agentcore/runtimes/`) |
 | `AWS_REGION` | 리전 (기본 `us-west-2`) |
 
 ## IAM 최소 권한 (`agentic-t2sql-admin-mcp-role`)
@@ -122,3 +150,5 @@ scripts/build-and-push.sh datasource-admin-mcp
   `DescribeSecret`/`GetSecretValue` + Aurora/Redshift read-only 시크릿 `GetSecretValue`
 - rds-data `ExecuteStatement` (Aurora 클러스터 한정), redshift-data
   `ExecuteStatement`/`DescribeStatement`/`GetStatementResult`/`CancelStatement`
+- CloudWatch Logs: `DescribeLogGroups` + `FilterLogEvents`
+  (`/aws/bedrock-agentcore/runtimes/*` 한정 — 후보 채굴, §9.4)

@@ -17,7 +17,7 @@
 | 5 | **Guardrails 4지점 배치**: 사용자 입력·semantic 검색 결과·DB 결과 재유입·최종 출력 (prompt-attack block + PII 마스킹) | AGENTSEC08 | M2~M3 |
 | 6 | **소비 상한/circuit breaker**: 세션 token cap·SQL 재시도 max·scan 상한, DynamoDB atomic counter | AGENTCOST07, AGENTREL07-BP02 | M1~M3 |
 | 7 | **prompt + semantic 캐싱 + DDL 이벤트 invalidation** | AGENTPERF03, AGENTCOST02/04 | M2~M3 |
-| 8 | **AgentCore Evaluations를 CI/CD promotion gate로** (gold NL→SQL→result 데이터셋) | AGENTOPS06 | M5 |
+| 8 | **AgentCore Evaluations를 CI/CD promotion gate로** (gold NL→SQL→result 데이터셋) | AGENTOPS06 | M5 ✅(평가 파이프라인 — CodePipeline 게이트 연결은 후속) |
 | 9 | **grounding + 실행 전 스키마 존재 검증 stage** (환각 SQL 감소) | AGENTREL05-BP03 | M1~M2 |
 | 10 | **tamper-evident audit**: 생성 SQL·resolved entity·실행 identity 구조화 로깅 → S3 Object Lock + OTel 전구간 tracing | AGENTSEC05, AGENTOPS05 | M3~M5 |
 
@@ -26,11 +26,11 @@
 ## 1. 운영 우수성 (AGENTOPS)
 
 - [ ] **AGENTOPS01-BP01/02** — 각 Strands 에이전트에 "job description" 정의: supervisor(intent 라우팅), specialist(schema-linking / SQL-generation / SQL-validation / result-explanation). autonomy 경계(예: SQL agent는 SELECT만) + 측정 가능한 성공 기준(SQL 실행 성공률, gold set 정확도, query cost 상한)
-- [ ] **AGENTOPS02** — 프롬프트/설정 lifecycle: 프롬프트를 코드에서 분리(Configuration Bundle), 버전/롤백, drift 감지
-- [ ] **AGENTOPS03** — AgentOps CI/CD: CodePipeline에 Evaluations promotion gate, 회귀 시 배포 차단·자동 롤백
+- [~] **AGENTOPS02** — 프롬프트/설정 lifecycle: 프롬프트를 코드에서 분리(Configuration Bundle), 버전/롤백, drift 감지 — 🔶 M5 부분: **Configuration Bundle 분리·버전·롤백 구현** ✅ (bundle 불변 버전 스냅샷 + SSM `/agentic-t2sql/active-bundle` 포인터 승격/롤백, orchestrator 60s TTL 캐시 오버라이드·실패 시 코드 기본값 폴백, admin panel 승격 승인 UI, version vector `{bundle,agent}` 를 `t2sql_query_record` 에 스탬프 — §5.3 ①축). drift 감지는 후속
+- [~] **AGENTOPS03** — AgentOps CI/CD: CodePipeline에 Evaluations promotion gate, 회귀 시 배포 차단·자동 롤백 — 🔶 M5 부분: **평가 게이트 재료 완성** ✅ (goldset-v1 8문항 + EX code-based evaluator + `StartBatchEvaluation` admin API — CI 에서 배치 평가 실행·스코어 비교가 가능한 상태). CodePipeline 연결·자동 차단/롤백은 후속
 - [x] **AGENTOPS04** — AgentCore Gateway = 권위 있는 tool catalog: 각 MCP 서버를 owner/version/param schema와 함께 등록, semantic discovery, 툴 fallback 정의 ✅ M3: Gateway 가 유일한 도구 평면(semantic tool search 기본 활성). orchestrator 는 TOOL_PLANE_MODE=gateway 로 전환됨(direct 는 폴백). M4: MCP target 3개(datasource-admin-mcp 추가 — 관리 도구도 동일 카탈로그·Cedar 인가 경로)
 - [ ] **AGENTOPS05** — NL→schema-linking→SQL-gen→validation→실행→설명 전 구간 OTel span + W3C Trace Context 전파(UI가 inbound에서 trace header 주입), 구조화 JSON audit 로깅
-- [~] **AGENTOPS06** — 다층 테스트 + 지속 평가(LLM-as-judge) + Manager 승인 워크플로우(admin panel) — 🔶 M4 부분: **Manager 승인 워크플로우 구현** ✅ (admin panel 승인 큐: candidate 검토 → publish → OpenSearch/Neptune 전파, Cedar 로 Manager/Admin 만 승인 가능, E2E 레벨6 검증). 다층 테스트는 단위(pytest 250+)·E2E(35체크) 구축, 지속 평가(LLM-as-judge)·Evaluations promotion gate 는 M5
+- [x] **AGENTOPS06** — 다층 테스트 + 지속 평가(LLM-as-judge) + Manager 승인 워크플로우(admin panel) ✅ M5 완성: M4 의 Manager 승인 워크플로우(승인 큐 publish + **rejected 반려 이력**) 에 더해 **지속 평가 구현** — online evaluation(트레이스 샘플링, builtin LLM-as-judge Correctness·ToolSelectionAccuracy + custom EX code-based evaluator) + admin panel 배치 평가 실행·결과 리뷰. 다층 테스트: 단위(pytest 380+)·E2E(레벨1~7). CodePipeline promotion gate 연결만 후속(AGENTOPS03)
 - [ ] **AGENTOPS07** — 소비 상한: 세션 token cap, SQL 재시도 max, Data API scan 상한 → 초과 시 loop 중단. break-glass 런북(분석가 직접 read-only 접근 경로)을 시스템 밖에 문서화
 - [ ] CloudFormation drift detection + AWS Config로 Runtime/Gateway/Cedar/Data API role 구성 drift 감지
 
@@ -51,7 +51,7 @@
 - [ ] **AGENTREL02-BP05** — 계층적 HITL: LIMIT+저비용 SELECT=autonomous / 대규모·고비용 스캔=notify / PII·admin 변경=approve. Step Functions `.waitForTaskToken` + timeout→safe-default(무한 대기 금지), reviewer·rationale·timestamp 감사
 - [ ] **AGENTREL06-BP04** — query 실행 idempotency: key = hash(최종 SQL + params + data-source + user scope), DynamoDB conditional write + TTL result cache
 - [~] **AGENTREL07-BP02** — Data API retry 분류 — 🔶 M3 부분: Redshift Data API async polling(0.5s 간격·60s 타임아웃·초과 시 cancel) 구현. self-correction 루프가 오류를 SQL 재생성으로 되먹임(MAX_SQL_CORRECTIONS 예산). 세분화된 retryable/non-retryable 분류·circuit breaker 는 후속
-- [ ] **AGENTREL04-BP03** — fallback chain: SQL-gen 주 모델 → 저가 모델 → 캐시/템플릿 쿼리 → graceful 응답("스키마/유사 템플릿 제시"). DB 에러를 SQL-gen에 되먹여 bounded self-repair(1회)
+- [~] **AGENTREL04-BP03** — fallback chain: SQL-gen 주 모델 → 저가 모델 → 캐시/템플릿 쿼리 → graceful 응답("스키마/유사 템플릿 제시"). DB 에러를 SQL-gen에 되먹여 bounded self-repair(1회) — 🔶 M5 부분: **설정 fallback 구현** ✅ (bundle 오버라이드 실패·빈 포인터 시 코드 기본 프롬프트·모델로 자동 폴백 — 개선 루프 장애가 코어 질의 경로를 막지 않음). self-correction 루프(M1, MAX_SQL_CORRECTIONS 예산)도 DB 에러 되먹임에 해당. 저가 모델·캐시/템플릿 체인은 후속
 - [x] **AGENTREL05-BP03** — grounding: SQL 생성기는 semantic layer/`information_schema`에서 검색한 실제 스키마에 grounding. semantic store 다운 시 degrade + 사용자 고지 ✅ M2: schema hybrid + 용어/fewshot 검색(Composite) grounding, term 검색·Neptune 순회 실패 시 graceful degrade 구현. (실행 전 컬럼 존재 검증 stage 는 M3+)
 - [ ] **AGENTREL08** — query timeout·LIMIT·max-scanned-bytes를 AppConfig로 외부화(핫스왑), 초과 시 truncated 결과 + 범위 축소 안내
 - [x] **AGENTREL03** — Memory 분류: 단기(session, TTL) / 장기(semantic) namespace 분리, checkpoint 복구 ✅ M2: STM(AgentCore Memory) ≠ semantic layer(DynamoDB system-of-record) 분리 유지. clarification interrupt 상태는 세션 캐시(LRU)로 복구, 캐시 미스 시 CLARIFICATION_EXPIRED graceful 처리. (AgentCoreMemorySessionManager 는 Graph 세션 미지원 — 알려진 한계)

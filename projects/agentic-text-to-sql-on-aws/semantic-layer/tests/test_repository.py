@@ -6,6 +6,7 @@ import pytest
 
 from semantic_layer.repository import (
     VALID_ENTITY_TYPES,
+    VALID_STATUSES,
     SemanticRepository,
     from_attribute_value,
     item_to_dict,
@@ -269,3 +270,119 @@ def test_graph_sync_ignores_datasource_entities():
     data = {"entity_type": "datasource", "entity_id": "warehouse", "engine": "redshift-serverless"}
     assert _upsert_statements("datasource", data) == []
     assert _delete_statements("datasource", data) == []
+
+
+# --- M5 additive: rejected 상태 ------------------------------------------------
+
+
+def test_rejected_status_is_valid_and_additive_only():
+    """기존 2종 상태는 그대로 유효해야 한다(additive only 계약)."""
+    assert VALID_STATUSES == {"candidate", "published", "rejected"}
+
+
+def test_reject_transitions_status_and_bumps_version():
+    repo, _ = make_repo()
+    repo.put_entity("term", "vip", {"term": "VIP", "definition": "d"}, status="candidate")
+    rejected = repo.reject("term", "vip", reason="정의가 모호함", actor="manager@example.com")
+    assert rejected["status"] == "rejected"
+    assert rejected["version"] == 2
+    assert rejected["updated_by"] == "manager@example.com"
+    assert rejected["rejection_reason"] == "정의가 모호함"
+    assert repo.get_entity("term", "vip")["status"] == "rejected"
+
+
+def test_reject_preserves_payload_and_embedding():
+    calls: list[str] = []
+
+    def counting_embedder(text: str) -> list[float]:
+        calls.append(text)
+        return [0.1] * 1024
+
+    client = FakeDynamoClient()
+    repo = SemanticRepository("t", client=client, embedder=counting_embedder, clock=lambda: "t")
+    repo.put_entity("term", "vip", {"term": "VIP", "definition": "d"}, status="candidate")
+    assert len(calls) == 1
+    rejected = repo.reject("term", "vip", reason="중복")
+    # status 전환은 내용 불변 → 임베딩 재계산 없음, payload 보존.
+    assert len(calls) == 1
+    assert rejected["term"] == "VIP"
+    assert rejected["definition"] == "d"
+
+
+def test_reject_without_reason_omits_rejection_reason_key():
+    repo, _ = make_repo()
+    repo.put_entity("table", "orders", {"table": "orders"})
+    rejected = repo.reject("table", "orders")
+    assert rejected["status"] == "rejected"
+    assert "rejection_reason" not in rejected
+    assert rejected["updated_by"] == "system"
+
+
+def test_reject_missing_entity_raises():
+    repo, _ = make_repo()
+    with pytest.raises(KeyError):
+        repo.reject("term", "does-not-exist")
+
+
+def test_rejected_can_be_published_again():
+    """반려 후 재승인 경로 — publish 는 status 무관하게 전환한다."""
+    repo, _ = make_repo()
+    repo.put_entity("term", "vip", {"term": "VIP", "definition": "d"})
+    repo.reject("term", "vip", reason="보류")
+    published = repo.publish("term", "vip", actor="manager@example.com")
+    assert published["status"] == "published"
+    assert published["version"] == 3
+    # 반려 사유는 이력으로 payload 에 남는다(감사 추적).
+    assert published["rejection_reason"] == "보류"
+
+
+def test_rejected_can_be_unpublished_back_to_candidate():
+    """반려 → 재검토 큐(candidate) 복귀 경로."""
+    repo, _ = make_repo()
+    repo.put_entity("term", "vip", {"term": "VIP", "definition": "d"})
+    repo.reject("term", "vip", reason="보류")
+    back = repo.unpublish("term", "vip")
+    assert back["status"] == "candidate"
+    assert back["version"] == 3
+
+
+def test_list_entities_filters_rejected():
+    repo, _ = make_repo()
+    repo.put_entity("term", "keep", {"term": "keep", "definition": "d"})
+    repo.put_entity("term", "drop", {"term": "drop", "definition": "d"})
+    repo.reject("term", "drop", reason="부정확")
+
+    assert [e["entity_id"] for e in repo.list_entities(status="rejected")] == ["drop"]
+    # 반려된 항목은 승인 대기 큐에서 사라진다.
+    assert [e["entity_id"] for e in repo.list_entities(status="candidate")] == ["keep"]
+
+
+def test_put_entity_accepts_rejected_status_directly():
+    repo, _ = make_repo()
+    entity = repo.put_entity("table", "orders", {"table": "orders"}, status="rejected")
+    assert entity["status"] == "rejected"
+
+
+def test_graph_sync_deletes_rejected_entities():
+    """rejected 는 published 가 아니므로 그래프에서 제거된다(코드 변경 불요 확인)."""
+    from semantic_layer.graph_sync import record_to_cypher
+
+    record = {
+        "eventName": "MODIFY",
+        "dynamodb": {
+            "Keys": {"pk": {"S": "table#orders"}, "sk": {"S": "v0"}},
+            "NewImage": {
+                "pk": {"S": "table#orders"},
+                "sk": {"S": "v0"},
+                "entity_type": {"S": "table"},
+                "entity_id": {"S": "orders"},
+                "status": {"S": "rejected"},
+                "table": {"S": "orders"},
+            },
+        },
+    }
+    statements = record_to_cypher(record)
+    assert statements, "rejected 레코드는 삭제 statement 를 만들어야 한다"
+    assert all("DELETE" in stmt.query.upper() for stmt in statements), [
+        stmt.query for stmt in statements
+    ]

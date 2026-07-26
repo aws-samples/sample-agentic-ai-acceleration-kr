@@ -1,4 +1,4 @@
-"""semantic 큐레이션 도구 유닛 테스트 (list/get/put/publish/unpublish). AWS 호출 없음."""
+"""semantic 큐레이션 도구 유닛 테스트 (list/get/put/publish/unpublish/reject). AWS 호출 없음."""
 
 from __future__ import annotations
 
@@ -126,6 +126,152 @@ def test_put_entity_rejects_unknown_type() -> None:
         repository_factory.reset()
     assert result["status"] == "error"
     assert "ValueError" in result["message"]
+
+
+# --- reject (M5 §9.4) ---------------------------------------------------------
+
+
+def test_reject_entity_records_reason_and_status(repo: FakeRepository) -> None:
+    server.put_entity("term", "vip", {"term": "VIP"})
+    result = server.reject_entity("term", "vip", "정의가 모호함", "manager@example.com")
+    assert result["status"] == "ok"
+    assert result["entity"]["status"] == "rejected"
+    assert result["entity"]["rejection_reason"] == "정의가 모호함"
+    assert result["entity"]["updated_by"] == "manager@example.com"
+    assert result["entity"]["version"] == 2
+
+
+def test_reject_entity_without_reason(repo: FakeRepository) -> None:
+    server.put_entity("term", "vip", {"term": "VIP"})
+    result = server.reject_entity("term", "vip")
+    assert result["entity"]["status"] == "rejected"
+    assert "rejection_reason" not in result["entity"]
+    assert result["entity"]["updated_by"] == "admin-panel"
+
+
+def test_rejected_disappears_from_candidate_queue(repo: FakeRepository) -> None:
+    server.put_entity("term", "keep", {"term": "keep"})
+    server.put_entity("term", "drop", {"term": "drop"})
+    server.reject_entity("term", "drop", "부정확")
+
+    candidates = server.list_entities(status="candidate")["entities"]
+    assert [e["entity_id"] for e in candidates] == ["keep"]
+    rejected = server.list_entities(status="rejected")["entities"]
+    assert [e["entity_id"] for e in rejected] == ["drop"]
+
+
+def test_reject_then_publish_reapproval_path(repo: FakeRepository) -> None:
+    server.put_entity("term", "vip", {"term": "VIP"})
+    server.reject_entity("term", "vip", "보류")
+    published = server.publish_entity("term", "vip")
+    assert published["entity"]["status"] == "published"
+
+
+def test_reject_missing_entity_returns_error(repo: FakeRepository) -> None:
+    result = server.reject_entity("term", "ghost", "없음")
+    assert result["status"] == "error"
+    assert "KeyError" in result["message"]
+
+
+def test_reject_strips_embedding(repo: FakeRepository) -> None:
+    server.put_entity("term", "vip", {"term": "VIP", "embedding": [0.1] * 1024})
+    assert "embedding" not in server.reject_entity("term", "vip", "이유")["entity"]
+
+
+def test_rejected_status_accepted_by_real_repository() -> None:
+    # M5 additive 검증: VALID_STATUSES 에 rejected 가 있어야 실 repository put 이 성공한다.
+    from semantic_layer.repository import SemanticRepository
+
+    from .fakes import fake_embedder
+
+    stored: list[dict] = []
+
+    class _Client:
+        def get_item(self, **kwargs):
+            return {}
+
+        def put_item(self, **kwargs):
+            stored.append(kwargs["Item"])
+            return {}
+
+    repository_factory.reset(
+        repository=SemanticRepository("t", client=_Client(), embedder=fake_embedder)
+    )
+    try:
+        result = server.put_entity("table", "orders", {"table": "orders"}, status="rejected")
+    finally:
+        repository_factory.reset()
+    assert result["status"] == "ok"
+    assert stored[0]["status"] == {"S": "rejected"}
+
+
+# --- mine_candidates (M5 §9.4) ------------------------------------------------
+
+
+def test_mine_candidates_returns_contract_shape(monkeypatch, repo: FakeRepository) -> None:
+    from datasource_admin_mcp import miner as miner_module
+
+    from .fakes import FakeLogsClient
+
+    group = "/aws/bedrock-agentcore/runtimes/agentic_t2sql_orchestrator-A/runtime-logs"
+    line = (
+        'INFO t2sql_query_record {"question":"월별 매출","sql":"SELECT 1",'
+        '"status":"ok","session_id":"s1"}'
+    )
+    logs = FakeLogsClient(groups=[group], events=[(group, 0, line)])
+
+    original = miner_module.CandidateMiner.__init__
+
+    def patched(self, repository, **kwargs):
+        kwargs.setdefault("logs_client", logs)
+        kwargs.setdefault("clock", lambda: 0.0)
+        original(self, repository, **kwargs)
+
+    monkeypatch.setattr(miner_module.CandidateMiner, "__init__", patched)
+
+    result = server.mine_candidates(hours=24, actor="e2e-manager")
+    assert result["status"] == "ok"
+    assert result["scanned"] == 1
+    assert result["mined"] == 1
+    assert result["skipped_existing"] == 0
+    assert result["candidates"][0]["entity_type"] == "fewshot"
+    assert result["candidates"][0]["entity_id"].startswith("mined-")
+    # 적재는 candidate 로만(승인 게이트 유지).
+    assert repo.puts[0]["status"] == "candidate"
+
+    # 재실행 시 중복 채굴 방지.
+    again = server.mine_candidates()
+    assert (again["mined"], again["skipped_existing"]) == (0, 1)
+
+
+def test_mine_candidates_truncates_candidate_list(monkeypatch, repo: FakeRepository) -> None:
+    from datasource_admin_mcp import miner as miner_module
+
+    fake_summary = {
+        "scanned": 120,
+        "mined": 70,
+        "skipped_existing": 5,
+        "candidates": [
+            {"entity_type": "fewshot", "entity_id": f"mined-{i:012d}"} for i in range(70)
+        ],
+    }
+    monkeypatch.setattr(
+        miner_module.CandidateMiner, "mine", lambda self, hours=24, actor="x": fake_summary
+    )
+    result = server.mine_candidates()
+    assert result["mined"] == 70  # 카운트는 전체
+    assert len(result["candidates"]) == 50  # 목록은 절단
+
+
+def test_mine_candidates_error_is_normalized(monkeypatch, repo: FakeRepository) -> None:
+    from datasource_admin_mcp import miner as miner_module
+
+    def boom(self, hours=24, actor="x"):
+        raise RuntimeError("logs unavailable")
+
+    monkeypatch.setattr(miner_module.CandidateMiner, "mine", boom)
+    result = server.mine_candidates()
+    assert result == {"status": "error", "message": "RuntimeError: logs unavailable"}
 
 
 def test_datasource_entity_type_accepted_by_real_repository() -> None:

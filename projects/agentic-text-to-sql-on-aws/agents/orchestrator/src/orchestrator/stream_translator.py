@@ -22,6 +22,7 @@ clarification interrupt 는 CUSTOM 이벤트로 표면화하고, 상위(app.py)�
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Iterator
 from typing import Any
 
@@ -43,6 +44,9 @@ class StreamTranslator:
         # clarification interrupt 가 표면화되면 True. 상위(app.py)가 이를 보고
         # 정상 RUN_FINISHED 로 스트림을 닫고 재개는 새 요청으로 처리한다.
         self.clarification_pending: bool = False
+        # M5 additive: 마지막 run_sql 호출 SQL (t2sql_query_record 로그용).
+        # 이벤트 방출에는 영향이 없는 관측 전용 필드다.
+        self.last_sql: str | None = None
 
     def translate(self, event: dict[str, Any]) -> Iterator[dict[str, Any]]:
         """단일 Strands 이벤트를 0개 이상의 AG-UI 이벤트로 변환."""
@@ -133,6 +137,7 @@ class StreamTranslator:
         yield from self._close_text()
         strands_id = str(tool_use["toolUseId"])
         name = str(tool_use.get("name", ""))
+        self._track_sql(name, tool_use.get("input"))
         if strands_id not in self._active_tool_ids:
             call_id = self._id("tool")
             self._active_tool_ids[strands_id] = call_id
@@ -146,6 +151,29 @@ class StreamTranslator:
             if key not in self._emitted_tool_args:
                 self._emitted_tool_args.add(key)
                 yield agui_events.tool_call_args(call_id, snapshot)
+
+    def _track_sql(self, tool_name: str, raw_input: Any) -> None:
+        """run_sql 호출 인자에서 SQL 을 추출해 last_sql 에 기록(관측 전용).
+
+        Gateway 모드에서는 도구명이 `<Target>___run_sql` 프리픽스를 갖기 때문에
+        suffix 로 판정한다. 인자는 누적 스트리밍되므로(부분 JSON) 파싱 실패는 무시하고,
+        나중에 완성된 스냅샷이 오면 갱신된다.
+        """
+        if not tool_name.endswith("run_sql"):
+            return
+        if isinstance(raw_input, dict):
+            payload: Any = raw_input
+        elif isinstance(raw_input, str) and raw_input.strip().startswith("{"):
+            try:
+                payload = json.loads(raw_input)
+            except (json.JSONDecodeError, ValueError):
+                return
+        else:
+            return
+        if isinstance(payload, dict):
+            sql = payload.get("sql")
+            if isinstance(sql, str) and sql.strip():
+                self.last_sql = sql.strip()
 
     def _flush_text(self) -> Iterator[dict[str, Any]]:
         """열린 텍스트 메시지와 도구 호출을 모두 종료(노드 경계/스트림 종료)."""

@@ -6,9 +6,9 @@ Amazon Bedrock AgentCore 기반의 agentic Text-to-SQL 솔루션입니다. 사�
 
 > ⚠️ **데모/샘플 목적 전용입니다.** 이 코드는 학습과 참조를 위한 것으로, 프로덕션 사용 전에는 인증 강제(현재 미강제), HTTPS/TLS, 최소 권한 재점검, 비용·용량 재산정이 필요합니다. 실제 데이터·자격증명으로 실행할 때 유의하세요.
 
-## 구현 범위 (M4)
+## 구현 범위 (M5)
 
-이 저장소의 현재 상태는 **M4 — Admin panel**입니다. Manager/Admin 페르소나가 admin panel에서 semantic 지식을 큐레이션·승인하고, 그 쓰기 경로가 **사용자 JWT On-Behalf-Of → Gateway MCP → datasource-admin-mcp**로 흐르며 Cedar가 도구 단위로 인가합니다. M5는 로드맵입니다.
+이 저장소의 현재 상태는 **M5 — 개선 파이프라인**입니다. 운영 트레이스가 평가(Track A)와 semantic 지식 채굴(Track B)의 공통 원천이 되고, 두 트랙 모두 Manager 승인을 거쳐야 운영에 반영됩니다.
 
 | 마일스톤 | 범위 | 상태 |
 |---|---|---|
@@ -16,7 +16,14 @@ Amazon Bedrock AgentCore 기반의 agentic Text-to-SQL 솔루션입니다. 사�
 | **M2** | Semantic layer 완성(Neptune·DynamoDB·Streams 동기화) + clarification(interrupt 재요청) | ✅ 구현 |
 | **M3** | Tool/보안 완성 (Gateway · Identity · Cedar policy · Redshift 소스 · 가드레일) | ✅ 구현 |
 | **M4** | Admin panel (데이터소스 등록 · semantic 큐레이션·승인 큐 · 권한 · 디버깅 · 사용자 JWT OBO) | ✅ 구현 |
-| M5 | 개선 파이프라인 (Track A: 평가→insight→bundle→A/B, Track B: semantic 지식 채굴) | 🗺️ 로드맵 |
+| **M5** | 개선 파이프라인 (Track A: 평가→추천→bundle 승격, Track B: semantic 지식 채굴→승인 큐) | ✅ 구현 |
+
+**M5에서 추가된 것**
+- **Track A — 평가 파이프라인** (`evaluation/`, `infra/lib/evaluation-stack.ts`): gold NL→SQL 데이터셋(`goldset-v1.jsonl`, 8문항) 기반 **Execution Accuracy(EX) custom code-based evaluator**. 스팬에서 (질문, 생성 SQL)을 복원해 goldset 과 매칭하고, gold SQL·생성 SQL 을 read-only(agent_ro)로 각각 실행해 정규화 결과셋을 비교합니다(LLM judge 비용 없음). ※ 이 evaluator 만 Lambda 로 구현 — AgentCore Evaluations 의 code-based evaluator 서비스 규격이며, "Tool layer Lambda 금지" 제약의 명시적 예외입니다.
+- **Online evaluation**: orchestrator 트레이스를 상시 샘플링 평가하는 `OnlineEvaluationConfig`(builtin Correctness·ToolSelectionAccuracy + EX). admin panel 의 **평가·개선** 화면에서 배치 평가 실행(`StartBatchEvaluation`)·결과 리뷰·개선 추천(`StartRecommendation` — 시스템 프롬프트/도구 설명)을 수행합니다.
+- **Configuration Bundle 승격 (A/B 폴백)**: 프롬프트·모델 설정을 불변 버전 스냅샷(bundle)으로 관리하고, **승격 = SSM `/agentic-t2sql/active-bundle` 포인터 전환**입니다. orchestrator 가 60초 TTL 캐시로 활성 bundle 을 읽어 시스템 프롬프트/모델을 오버라이드하며, 실패·빈 값이면 코드 기본값으로 폴백합니다(재배포 없는 전환·롤백). ⚠️ **A/B 트래픽 분할은 조사 시점(2026-07) 안정 API 표면이 확인되지 않아 미구현** — 수동 전량 전환 + online eval 전후 비교로 대체하는 폴백입니다(ARCHITECTURE §8 리스크 완화).
+- **Track B — semantic 지식 채굴**: orchestrator 가 실행 종료마다 남기는 구조화 로그(`t2sql_query_record` — 질문·SQL·상태·**version vector**{bundle, agent})를 `mine_candidates` 도구가 CloudWatch Logs 에서 읽어, 성공 질의는 **few-shot 후보**, 실패 질의의 반복 표현은 **용어 후보**로 DynamoDB 에 candidate 적재합니다(단일 쓰기 유지, 자동 반영 없음). M4 승인 큐로 유입되어 Manager 승인 시 published → 기존 Streams 동기화로 전파됩니다.
+- **승인 큐 반려(rejected) 상태** (M4 이월 부채 해소): `rejected` 상태와 반려 사유(`rejection_reason`)가 추가되어 반려 이력이 남고, 채굴기는 rejected 를 포함한 기존 entity_id 를 재적재하지 않습니다(반려한 후보가 배치 재실행으로 되살아나지 않음). 반려된 항목도 재승인(publish) 가능합니다.
 
 **M4에서 추가된 것**
 - **Admin panel** (`admin/`, ECS Fargate + 전용 ALB): Cognito 로그인(USER_PASSWORD_AUTH) → `aws-jwt-verify` 검증 → `cognito:groups`로 화면·API 인가(Manager/Admin 분리, `iam/*`는 Admin 전용). 화면: semantic 큐레이션 · **승인 큐(candidate → publish)** · 데이터소스 등록/테스트/스키마 크롤 · Cognito 사용자·그룹 관리 + Cedar 정책 read-only 뷰 · 메트릭 요약/세션 트레이스 탐색기.
@@ -39,7 +46,11 @@ Amazon Bedrock AgentCore 기반의 agentic Text-to-SQL 솔루션입니다. 사�
 
 설계 전체는 [`ARCHITECTURE.md`](./ARCHITECTURE.md), 구현 체크리스트는 [`docs/well-architected-checklist.md`](./docs/well-architected-checklist.md)를 참고하세요.
 
-> **Preview 기능 주의**: AgentCore Optimization(Insights/Recommendations/Experiments)·Registry 등 일부 기능은 조사 시점(2026-07) 기준 Preview이며 M5 로 후치되어 있습니다. Policy·Evaluations는 출처 간 Preview/GA 표기가 상충하므로 구현 착수 시 최신 문서로 재확인이 필요합니다. M1 범위에는 Preview 의존 기능이 포함되지 않습니다.
+> **Preview 기능 상태 (M5 착수 시점 2026-07-27 재확인, us-west-2 라이브 검증)**:
+> - **Evaluations**(custom evaluator·code-based Lambda·배치/온라인 평가): API 실존·동작 확인 → **네이티브 사용**.
+> - **Configuration Bundle · Recommendations**: API 실존·응답 확인, 단 서비스 발표 기준 **Preview**(AgentCore Optimization) → 사용하되 admin 화면에 Preview 임을 명시하고 호출 실패는 안내로 graceful degrade.
+> - **A/B Testing(Gateway 트래픽 분할)**: 안정 API 표면 미확인 → **미구현, 수동 bundle 전환 폴백**(SSM 포인터 + online eval 전후 비교).
+> - **Agent Registry**: 범위 밖(미사용). 상세 판정 근거는 `docs/m2-m3-interface-contract.md` §9.0.
 
 ## 아키텍처 (5계층)
 
@@ -87,13 +98,15 @@ agentic-text-to-sql-on-aws/
 │       ├── gateway-stack.ts       # AgentCore Gateway + MCP target 3 + Cedar PolicyEngine (M3·M4)
 │       ├── ui-stack.ts            # ECS Fargate + 퍼블릭 ALB
 │       ├── admin-stack.ts         # admin panel — ECS Fargate + 전용 ALB (M4)
+│       ├── evaluation-stack.ts    # EX evaluator Lambda + Evaluator + OnlineEvalConfig + SSM bundle 포인터 (M5)
 │       └── config.ts              # cdk.json context 기반 공통 설정
 ├── agents/
 │   ├── orchestrator/              # Strands Graph 오케스트레이터 (AG-UI, 포트 8080, clarification 포함)
 │   ├── sql-execution-mcp/         # SQL 검증(SQLGlot AST)·실행(Data API) MCP (포트 8000)
 │   ├── semantic-retrieval-mcp/    # 스키마+용어+few-shot hybrid 검색 · Neptune join-path MCP (포트 8000)
 │   └── datasource-admin-mcp/      # semantic 큐레이션·승인 + 데이터소스 관리 MCP (M4, Manager/Admin 전용)
-├── semantic-layer/                # DynamoDB CRUD·버전 관리 · seed · Streams→Neptune Lambda (M2, uv)
+├── semantic-layer/                # DynamoDB CRUD·버전 관리(candidate/published/rejected) · seed · Streams→Neptune Lambda (M2·M5, uv)
+├── evaluation/                    # Execution Accuracy(EX) code-based evaluator Lambda + goldset (M5, uv)
 ├── ui/                            # Next.js + CopilotKit (AG-UI 프록시 · clarification 폼)
 ├── admin/                         # admin panel — Next.js web + API (M4, Cognito 인증·JWT OBO)
 ├── sample-data/                   # 결정적 샘플 데이터 생성기 + seed/인덱싱 스크립트 (uv)
@@ -164,9 +177,15 @@ scripts/build-and-push.sh admin-web
 scripts/deploy.sh admin
 #    → infra/admin-outputs.json 생성 (AdminAlbUrl 출력)
 
-# 9) E2E 스모크 테스트 (레벨1~6: MCP · orchestrator SSE · UI · clarification ·
-#    Gateway/Cedar/Redshift · admin panel 큐레이션·승인·OBO)
-#    레벨5~6은 Cognito 테스트 사용자가 필요합니다 — 아래 스크립트가 멱등 생성합니다
+# 9) [M5] Evaluation 스택 배포 (EX evaluator Lambda + Evaluator + OnlineEvalConfig
+#    + SSM active-bundle 포인터) — admin 스택이 이 출력을 env 로 소비하므로 admin 전에
+#    배포하는 것이 정순입니다(이미 admin 을 배포했다면 admin 재배포로 env 반영).
+scripts/deploy.sh evaluation
+#    → infra/evaluation-outputs.json 생성
+
+# 10) E2E 스모크 테스트 (레벨1~7: MCP · orchestrator SSE · UI · clarification ·
+#    Gateway/Cedar/Redshift · admin panel 큐레이션·승인·OBO · M5 개선 파이프라인)
+#    레벨5~7은 Cognito 테스트 사용자가 필요합니다 — 아래 스크립트가 멱등 생성합니다
 #    (e2e-user / e2e-denied(Denied) / e2e-manager(Manager), 비밀번호는
 #     agentic-t2sql/e2e/user-password 시크릿).
 scripts/create-e2e-users.sh
@@ -178,7 +197,9 @@ scripts/e2e-smoke.sh
 각 컴포넌트의 로컬 개발·테스트 방법은 해당 디렉토리 README를 참고하세요
 ([orchestrator](./agents/orchestrator/README.md) · [sql-execution-mcp](./agents/sql-execution-mcp/README.md) · [semantic-retrieval-mcp](./agents/semantic-retrieval-mcp/README.md) · [datasource-admin-mcp](./agents/datasource-admin-mcp/README.md) · [sample-data](./sample-data/README.md) · [ui](./ui/README.md) · [admin](./admin/README.md)).
 
-**admin panel 사용**: `infra/admin-outputs.json`의 `AdminAlbUrl`로 접속해 Manager 또는 Admin 그룹 사용자로 로그인합니다(데모용 계정은 `scripts/create-e2e-users.sh`가 만드는 `e2e-manager@example.com`). 용어를 candidate로 등록 → 승인 큐에서 publish → 수 초 내 OpenSearch/Neptune에 전파되어 에이전트 질의에 반영됩니다.
+**admin panel 사용**: `infra/admin-outputs.json`의 `AdminAlbUrl`로 접속해 Manager 또는 Admin 그룹 사용자로 로그인합니다(데모용 계정은 `scripts/create-e2e-users.sh`가 만드는 `e2e-manager@example.com`). 용어를 candidate로 등록 → 승인 큐에서 publish → 수 초 내 OpenSearch/Neptune에 전파되어 에이전트 질의에 반영됩니다. 승인 큐에서 **반려**하면 rejected 상태와 사유가 이력으로 남고, 반려 목록에서 재승인할 수 있습니다.
+
+**개선 파이프라인 사용 (M5)**: admin panel 의 **평가·개선** 화면에서 ① "후보 채굴 실행"으로 최근 운영 질의에서 few-shot/용어 후보를 채굴(→ 승인 큐 유입), ② 배치 평가를 실행해 EX·Correctness 스코어를 리뷰, ③ 개선 추천(시스템 프롬프트/도구 설명)을 생성해 bundle 새 버전으로 반영, ④ 원하는 bundle 버전을 **승격**하면 orchestrator 가 약 60초 내(캐시 TTL) 새 프롬프트·모델로 전환됩니다. 롤백은 이전 버전을 다시 승격하면 됩니다.
 
 ## 보안 참고 사항
 
@@ -193,7 +214,7 @@ scripts/e2e-smoke.sh
 - **M1의 한계 (프로덕션 전 보완 필요)**:
   - ALB가 **HTTP**로 노출됩니다(UI·admin panel 모두). 프로덕션은 ACM 인증서 + HTTPS(TLS) 리스너로 전환하세요.
   - **채팅 UI는 인증이 강제되지 않습니다.** UI 프록시(`/api/copilotkit`)에 Cognito JWT 검증 훅 자리만 마련돼 있습니다. admin panel(M4)은 Cognito 로그인 + JWT 검증 + 그룹 인가가 강제되며, 사용자 토큰이 Gateway MCP까지 OBO로 전파됩니다. orchestrator 경로의 사용자 토큰 전파는 additive로 구현돼 있으나(`forwardedProps.userAccessToken`) UI 로그인이 없어 기본은 서비스 계정 위임입니다.
-  - 승인 큐는 반려(reject) 시 별도 상태 없이 candidate로 유지됩니다(Track B 수확 파이프라인은 M5 범위).
+  - Online evaluation 샘플링이 데모 편의상 100%입니다 — 운영에서는 judge 모델 비용에 맞춰 낮추세요(`infra/lib/config.ts` `onlineEvalSamplingPercentage`).
 
 ## 리소스 정리 (cleanup)
 

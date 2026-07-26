@@ -10,6 +10,10 @@
 #  레벨6 (M4): admin panel ALB·인증/인가 + Manager 큐레이션→승인→전파
 #             + Cedar admin 도구 접근 제어(사용자 JWT OBO)
 #             (admin-outputs.json 필요, 테스트 사용자는 scripts/create-e2e-users.sh 로 생성)
+#  레벨7 (M5): 개선 파이프라인 — reject·채굴→승인→전파·중복방지(Track B)
+#             + EX evaluator·배치 평가·online eval·bundle 승격/원복(Track A)
+#             (evaluation-outputs.json 필요. 레벨2 가 남긴 질의 로그를 채굴하므로
+#              단독 실행 시 레벨2 를 먼저 돌릴 것 — all 은 순서 자동 충족)
 #
 # 전제: Runtime 스택 배포 완료(runtime-outputs.json). UI 레벨은 ui-outputs.json,
 #       레벨6 은 admin-outputs.json + gateway/base outputs 필요(없으면 skip).
@@ -18,6 +22,7 @@
 #   scripts/e2e-smoke.sh          # 가능한 레벨 전부
 #   scripts/e2e-smoke.sh 1        # MCP 레벨만
 #   scripts/e2e-smoke.sh 6        # M4 admin/큐레이션/OBO 만
+#   scripts/e2e-smoke.sh 7        # M5 개선 파이프라인만
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -59,9 +64,10 @@ case "$LEVEL" in
   4) run_py_levels 4 ;;
   5) run_py_levels 5 ;;
   6) run_py_levels 6 ;;
+  7) run_py_levels 7 ;;
   all)
     run_py_levels all
     verify_ui
     ;;
-  *) echo "사용법: $0 {1|2|3|4|5|6|all}" >&2; exit 2 ;;
+  *) echo "사용법: $0 {1|2|3|4|5|6|7|all}" >&2; exit 2 ;;
 esac

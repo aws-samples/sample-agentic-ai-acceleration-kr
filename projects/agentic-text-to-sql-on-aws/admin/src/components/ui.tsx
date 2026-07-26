@@ -18,7 +18,7 @@ export function Alert({
   return <div className={`adm-alert adm-alert-${kind}`}>{message}</div>;
 }
 
-/** candidate/published 상태 배지. */
+/** candidate/published/rejected 상태 배지. */
 export function StatusBadge({ status }: { status?: string }) {
   const label = status ? (STATUS_LABEL[status] ?? status) : '-';
   const modifier =
@@ -26,7 +26,9 @@ export function StatusBadge({ status }: { status?: string }) {
       ? 'adm-badge-published'
       : status === 'candidate'
         ? 'adm-badge-candidate'
-        : '';
+        : status === 'rejected'
+          ? 'adm-badge-rejected'
+          : '';
   return <span className={`adm-badge ${modifier}`}>{label}</span>;
 }
 

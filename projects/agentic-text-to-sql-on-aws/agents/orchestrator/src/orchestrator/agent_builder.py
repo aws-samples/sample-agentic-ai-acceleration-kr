@@ -8,6 +8,10 @@ stream_async 로 스트리밍하므로 stream_translator 가 그대로 처리한
 
 MODE 는 config.Settings.mode 로 선택한다(기본 "graph").
 SDK 의존성은 지연 임포트하여 순수 로직 테스트와 분리한다.
+
+M5 additive: `bundle_override` 를 주입하면 활성 Configuration Bundle 의
+`system_prompt` / `model_id` 로 코드 기본값을 오버라이드한다(§9.5). 미주입(None)이면
+기존 동작 그대로다.
 """
 
 from __future__ import annotations
@@ -15,6 +19,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from .bundle_config import DEFAULT_BUNDLE_LABEL, BundleOverride
 from .config import Settings
 from .prompts import SYSTEM_PROMPT
 
@@ -24,6 +29,8 @@ class OrchestratorBuilder:
 
     tools_by_server: {"sql": [run_sql tools], "semantic": [search_schema tools]}
     session_manager: AgentCoreMemorySessionManager | None (STM)
+    bundle_override: BundleOverride | None (M5 additive) — system_prompt/model_id 오버라이드.
+      None 이면 코드 기본값(SYSTEM_PROMPT, Settings.model_id)을 사용한다.
     """
 
     def __init__(
@@ -33,6 +40,7 @@ class OrchestratorBuilder:
         semantic_tools: list[Any],
         session_manager: Any | None = None,
         clarification_tool: Any | None = None,
+        bundle_override: BundleOverride | None = None,
     ) -> None:
         self._settings = settings
         self._sql_tools = sql_tools
@@ -40,6 +48,29 @@ class OrchestratorBuilder:
         self._session_manager = session_manager
         # clarification(재요청) 도구. 테스트에서 주입 가능. None 이면 실제 도구를 지연 생성.
         self._clarification_tool = clarification_tool
+        self._bundle_override = bundle_override
+
+    @property
+    def system_prompt(self) -> str:
+        """실제 사용할 시스템 프롬프트(bundle 오버라이드 우선)."""
+        override = self._bundle_override
+        if override is not None and override.system_prompt:
+            return override.system_prompt
+        return SYSTEM_PROMPT
+
+    @property
+    def model_id(self) -> str:
+        """실제 사용할 모델 ID(bundle 오버라이드 우선)."""
+        override = self._bundle_override
+        if override is not None and override.model_id:
+            return override.model_id
+        return self._settings.model_id
+
+    @property
+    def bundle_label(self) -> str:
+        """version vector 스탬프용 bundle 라벨(미적용 시 "default")."""
+        override = self._bundle_override
+        return override.bundle_label if override is not None else DEFAULT_BUNDLE_LABEL
 
     def _get_clarification_tool(self) -> Any:
         """clarification 도구를 반환(주입값 우선, 없으면 지연 생성)."""
@@ -53,7 +84,7 @@ class OrchestratorBuilder:
         from strands.models import BedrockModel
 
         return BedrockModel(
-            model_id=self._settings.model_id,
+            model_id=self.model_id,
             region_name=self._settings.region,
             streaming=True,
             temperature=0.0,
@@ -65,7 +96,7 @@ class OrchestratorBuilder:
 
         return Agent(
             model=self._model(),
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=self.system_prompt,
             tools=[self._get_clarification_tool(), *self._semantic_tools, *self._sql_tools],
             session_manager=self._session_manager,
         )
@@ -87,12 +118,13 @@ class OrchestratorBuilder:
         from strands.multiagent import GraphBuilder
 
         model = self._model()
+        base_prompt = self.system_prompt
 
         intent = Agent(
             name="intent",
             model=model,
             system_prompt=(
-                SYSTEM_PROMPT
+                base_prompt
                 + "\n\n## 현재 단계: intent 분석\n"
                 "사용자 질문의 의도(집계/조회 대상, 필터, 기간 등)를 한국어로 간결히 정리하세요. "
                 "다음 중 하나라도 해당하면 **반드시** `request_clarification` 도구를 한 번 호출해 "
@@ -111,7 +143,7 @@ class OrchestratorBuilder:
             name="schema_linking",
             model=model,
             system_prompt=(
-                SYSTEM_PROMPT
+                base_prompt
                 + "\n\n## 현재 단계: schema linking\n"
                 "`search_schema` 도구를 호출해 질문과 관련된 테이블/컬럼/용어를 조회하고, "
                 "다음 단계의 SQL 작성에 필요한 스키마 컨텍스트를 정리해 전달하세요."
@@ -122,7 +154,7 @@ class OrchestratorBuilder:
             name="sql_generation",
             model=model,
             system_prompt=(
-                SYSTEM_PROMPT
+                base_prompt
                 + "\n\n## 현재 단계: SQL 생성\n"
                 "앞 단계의 스키마 컨텍스트만 사용해 단일 PostgreSQL SELECT 문을 작성하세요. "
                 "직전 실행이 실패했다면 오류 메시지를 반영해 수정하세요. SQL 만 출력합니다."
@@ -132,7 +164,7 @@ class OrchestratorBuilder:
             name="execution",
             model=model,
             system_prompt=(
-                SYSTEM_PROMPT
+                base_prompt
                 + "\n\n## 현재 단계: 실행\n"
                 "앞 단계의 SQL 을 `run_sql` 도구로 실행하세요. "
                 "결과 상태(ok/rejected/error)와 결과 표(또는 오류 메시지)를 그대로 전달하세요."
@@ -143,7 +175,7 @@ class OrchestratorBuilder:
             name="synthesis",
             model=model,
             system_prompt=(
-                SYSTEM_PROMPT
+                base_prompt
                 + "\n\n## 현재 단계: 결과 요약\n"
                 "실행 결과 표를 바탕으로 사용자 질문에 대한 답을 자연어로 요약하세요. "
                 "질의 언어에 맞추되 불명확하면 한국어로 답합니다."

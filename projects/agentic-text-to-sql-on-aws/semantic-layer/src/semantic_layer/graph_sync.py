@@ -8,8 +8,9 @@
 ------------------------------
 - ``sk != "v0"`` (버전 이력) 레코드는 무시 → 빈 리스트.
 - ``INSERT``/``MODIFY`` 의 NewImage 가 ``published`` → MERGE 멱등 upsert.
-- NewImage 가 ``candidate`` (published→candidate 강등 포함) 또는 ``REMOVE`` → 노드/엣지 삭제.
-  candidate 는 에이전트에 노출되지 않아야 하므로 그래프에서 제거한다.
+- NewImage 가 ``published`` 이외(``candidate``/``rejected`` — published 에서의 강등 포함)
+  또는 ``REMOVE`` → 노드/엣지 삭제. candidate/rejected 는 에이전트에 노출되지 않아야
+  하므로 그래프에서 제거한다(M5 rejected additive 는 코드 변경 없이 이 경로로 처리된다).
 
 그래프 모델
 ----------
@@ -116,7 +117,7 @@ def _upsert_statements(entity_type: str, data: dict) -> list[CypherStatement]:
 
 
 def _delete_statements(entity_type: str, data: dict) -> list[CypherStatement]:
-    """candidate 강등/REMOVE 시 노드·엣지 삭제 문 목록."""
+    """candidate/rejected 강등 또는 REMOVE 시 노드·엣지 삭제 문 목록."""
     if entity_type == "table":
         name = data.get("table") or data.get("entity_id")
         return [CypherStatement("MATCH (t:Table {name: $name}) DETACH DELETE t", {"name": name})]
@@ -165,7 +166,7 @@ def record_to_cypher(record: dict) -> list[CypherStatement]:
             return []
         if data.get("status") == "published":
             return _upsert_statements(entity_type, data)
-        # candidate(신규 또는 published→candidate 강등)는 그래프에서 제거.
+        # published 이외(candidate/rejected — 신규 또는 published 에서의 강등)는 그래프에서 제거.
         return _delete_statements(entity_type, data)
 
     return []

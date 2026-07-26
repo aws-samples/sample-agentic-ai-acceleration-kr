@@ -30,14 +30,17 @@ Runtime 은 runtimeSessionId 로 같은 microVM 라우팅을 지향하지만 프
 
 from __future__ import annotations
 
+import json
 import logging
+import sys
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 from . import agui_events
 from .agent_builder import OrchestratorBuilder
+from .bundle_config import DEFAULT_BUNDLE_LABEL, load_bundle_override
 from .clarification import build_resume_task
-from .config import Settings
+from .config import DEFAULT_APP_VERSION, Settings
 from .ids import SequentialIdFactory
 from .mcp_client import create_tool_clients
 from .memory import create_session_manager
@@ -45,7 +48,14 @@ from .request import ParsedRequest, parse_run_input
 from .session_cache import SessionCache
 from .stream_translator import StreamTranslator
 
+# AgentCore Runtime 은 stdout 만 로그 그룹으로 보낸다 — 루트 로거가 핸들러 없이는
+# t2sql_query_record(INFO)가 CloudWatch 에 실리지 않는다(M5 배포 실측: LLM stdout 만 보임).
+# BedrockAgentCoreApp 이 별도 설정을 하지 않으므로 여기서 stdout 핸들러를 명시한다.
+logging.basicConfig(level=logging.INFO, stream=sys.stdout, force=False)
 logger = logging.getLogger("orchestrator")
+
+# §9.5 구조화 로그 마커 — 평가(EX evaluator)·채굴기(mine_candidates)·버전 귀인의 단일 원천.
+QUERY_RECORD_MARKER = "t2sql_query_record"
 
 SETTINGS = Settings.from_env()
 
@@ -65,10 +75,15 @@ class RunnerSession:
         runner: Any,
         clients: list[Any],
         session_manager: Any | None,
+        bundle_label: str = DEFAULT_BUNDLE_LABEL,
+        question: str | None = None,
     ) -> None:
         self.runner = runner
         self._clients = clients
         self._session_manager = session_manager
+        # M5 additive: version vector 스탬프·재개 시 질의 귀인용(관측 전용).
+        self.bundle_label = bundle_label
+        self.question = question
 
     def close(self) -> None:
         """MCP 클라이언트와 세션 매니저 자원을 정리한다(예외는 삼킨다)."""
@@ -77,6 +92,34 @@ class RunnerSession:
             _safe_close(client, "stop", None, None, None)
         if self._session_manager is not None:
             _safe_close(self._session_manager, "close")
+
+
+def log_query_record(
+    *,
+    question: str | None,
+    sql: str | None,
+    status: str,
+    session_id: str,
+    bundle_label: str,
+    app_version: str,
+) -> dict[str, Any]:
+    """실행 종료 시 `t2sql_query_record` 구조화 로그 1줄을 남긴다 (§9.5).
+
+    이 로그가 EX 평가(스팬 파싱)와 Track B 후보 채굴(FilterLogEvents)의 단일 원천이다.
+    로깅 실패가 요청 흐름을 막지 않도록 예외를 삼킨다. 반환값은 테스트/디버그용 레코드.
+    """
+    record = {
+        "question": question or None,
+        "sql": sql or None,
+        "status": status,
+        "session_id": session_id,
+        "version": {"bundle": bundle_label, "agent": app_version},
+    }
+    try:
+        logger.info("%s %s", QUERY_RECORD_MARKER, json.dumps(record, ensure_ascii=False))
+    except Exception:  # noqa: BLE001 — 관측 로그 실패가 응답을 막아선 안 된다
+        logger.warning("t2sql_query_record 직렬화 실패", exc_info=True)
+    return record
 
 
 def _safe_close(obj: Any, method: str, *args: Any) -> None:
@@ -144,6 +187,10 @@ async def _fresh_orchestration(
 ) -> AsyncIterator[dict[str, Any]]:
     """신규 질의 처리. interrupt 발생 시 실행 세션을 캐시에 살려둔다."""
     translator = StreamTranslator(SequentialIdFactory(req.run_id))
+    # 활성 Configuration Bundle 오버라이드 조회(M5). 실패·미설정이면 None → 코드 기본값.
+    bundle_override = load_bundle_override(
+        settings.config_bundle_param, region=settings.region
+    )
     # 도구 평면 모드(direct/gateway)를 추상화한 클라이언트 묶음.
     # 사용자 AccessToken 이 전달되면 gateway 모드에서 OBO(사용자 위임)로 호출한다.
     tool_clients = create_tool_clients(settings, user_access_token=req.user_access_token)
@@ -153,7 +200,15 @@ async def _fresh_orchestration(
 
     # interrupt 재개를 위해 클라이언트를 컨텍스트 매니저가 아닌 명시적 start/stop 으로 관리.
     session = RunnerSession(
-        runner=None, clients=tool_clients.clients, session_manager=session_manager
+        runner=None,
+        clients=tool_clients.clients,
+        session_manager=session_manager,
+        bundle_label=(
+            bundle_override.bundle_label
+            if bundle_override is not None
+            else DEFAULT_BUNDLE_LABEL
+        ),
+        question=req.question,
     )
     try:
         tool_clients.start()
@@ -165,14 +220,20 @@ async def _fresh_orchestration(
             sql_tools=sql_tools,
             semantic_tools=semantic_tools,
             session_manager=session_manager,
+            bundle_override=bundle_override,
         )
         session.runner = _build_runner(builder, settings.mode)
-        async for event in _drive(session, req, translator, task=req.question):
+        async for event in _drive(
+            session, req, translator, task=req.question, app_version=settings.app_version
+        ):
             yield event
     except Exception as exc:  # noqa: BLE001 — 어떤 실패든 AG-UI 오류로 사용자에 전달
         logger.exception("오케스트레이션 실패")
         for agui_event in translator.finalize():
             yield agui_event
+        _emit_query_record(
+            session, req, translator, status="error", app_version=settings.app_version
+        )
         session.close()
         SESSION_CACHE.pop(req.session_id)
         yield agui_events.run_error(f"처리 중 오류가 발생했습니다: {exc}", code="RUNTIME_ERROR")
@@ -196,12 +257,17 @@ async def _resume_orchestration(
     translator = StreamTranslator(SequentialIdFactory(req.run_id))
     task = build_resume_task(req.clarification_response or {})
     try:
-        async for event in _drive(session, req, translator, task=task):
+        async for event in _drive(
+            session, req, translator, task=task, app_version=settings.app_version
+        ):
             yield event
     except Exception as exc:  # noqa: BLE001
         logger.exception("clarification 재개 실패")
         for agui_event in translator.finalize():
             yield agui_event
+        _emit_query_record(
+            session, req, translator, status="error", app_version=settings.app_version
+        )
         session.close()
         yield agui_events.run_error(f"처리 중 오류가 발생했습니다: {exc}", code="RUNTIME_ERROR")
 
@@ -213,16 +279,26 @@ async def _drive(
     req: ParsedRequest,
     translator: StreamTranslator,
     task: Any,
+    app_version: str = DEFAULT_APP_VERSION,
 ) -> AsyncIterator[dict[str, Any]]:
     """runner 를 구동해 이벤트를 방출하고, 완료 후 세션 수명을 결정한다.
 
     interrupt(clarification) 로 끝나면 세션을 캐시에 유지(재개 대비), 정상 종료면 자원 정리.
+    종료 시점에 `t2sql_query_record` 구조화 로그를 남긴다(§9.5, app_version 은 additive).
     """
     async for strands_event in session.runner.stream_async(task):
         for agui_event in translator.translate(strands_event):
             yield agui_event
     for agui_event in translator.finalize():
         yield agui_event
+
+    _emit_query_record(
+        session,
+        req,
+        translator,
+        status="clarification" if translator.clarification_pending else "ok",
+        app_version=app_version,
+    )
 
     if translator.clarification_pending:
         # 재개를 위해 실행 세션(클라이언트 포함)을 살려둔다. 상한 초과분은 정리.
@@ -231,6 +307,27 @@ async def _drive(
                 evicted.close()
     else:
         session.close()
+
+
+def _emit_query_record(
+    session: RunnerSession | None,
+    req: ParsedRequest,
+    translator: StreamTranslator | None,
+    *,
+    status: str,
+    app_version: str,
+) -> None:
+    """세션/트랜슬레이터 상태에서 query record 를 조립해 로깅(§9.5)."""
+    log_query_record(
+        question=(req.question or (session.question if session is not None else None)),
+        sql=translator.last_sql if translator is not None else None,
+        status=status,
+        session_id=req.session_id,
+        bundle_label=(
+            session.bundle_label if session is not None else DEFAULT_BUNDLE_LABEL
+        ),
+        app_version=app_version,
+    )
 
 
 def _clarification_expired_events(id_factory: SequentialIdFactory) -> Iterator[dict[str, Any]]:

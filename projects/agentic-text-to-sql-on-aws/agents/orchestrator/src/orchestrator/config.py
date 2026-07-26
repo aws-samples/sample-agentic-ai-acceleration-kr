@@ -15,6 +15,8 @@ DEFAULT_MODEL_ID = "us.anthropic.claude-sonnet-5"
 DEFAULT_REGION = "us-west-2"
 DEFAULT_MAX_SQL_CORRECTIONS = 3
 DEFAULT_TOOL_PLANE_MODE = "direct"
+# 버전 vector 의 agent 기본값(이미지 태그/sha 미주입 시).
+DEFAULT_APP_VERSION = "dev"
 
 
 @dataclass(frozen=True)
@@ -34,6 +36,11 @@ class Settings:
     - cognito_client_id / cognito_user / cognito_password_secret_arn / cognito_user_pool_id:
       gateway 모드의 Cognito M2M(USER_PASSWORD_AUTH) 인증 파라미터.
       비밀번호는 Secrets Manager(ARN)에서 읽는다 — 평문 env 노출 금지.
+
+    개선 파이프라인(M5 additive):
+    - config_bundle_param: 활성 Configuration Bundle 포인터 SSM 파라미터명
+      (빈 값이면 bundle 오버라이드 기능 비활성 — 코드 기본값만 사용)
+    - app_version: 이미지 태그/sha 등 에이전트 버전 문자열. version vector 스탬프용.
     """
 
     sql_mcp_arn: str
@@ -49,6 +56,9 @@ class Settings:
     cognito_user: str
     cognito_password_secret_arn: str
     cognito_user_pool_id: str
+    # M5 additive — 기본값이 있어 기존 생성 코드(위치·키워드 인자)는 영향 없음.
+    config_bundle_param: str = ""
+    app_version: str = DEFAULT_APP_VERSION
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> Settings:
@@ -72,6 +82,8 @@ class Settings:
             cognito_user=env.get("COGNITO_USER", ""),
             cognito_password_secret_arn=env.get("COGNITO_PASSWORD_SECRET_ARN", ""),
             cognito_user_pool_id=env.get("COGNITO_USER_POOL_ID", ""),
+            config_bundle_param=env.get("CONFIG_BUNDLE_PARAM", "").strip(),
+            app_version=env.get("APP_VERSION", "").strip() or DEFAULT_APP_VERSION,
         )
 
     def is_gateway_mode(self) -> bool:

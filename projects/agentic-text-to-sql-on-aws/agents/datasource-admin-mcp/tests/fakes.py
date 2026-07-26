@@ -58,7 +58,7 @@ class FakeSecretsClient:
 
 
 class FakeRepository:
-    """SemanticRepository 대역 — put/get/list/publish/unpublish 만 지원."""
+    """SemanticRepository 대역 — put/get/list/publish/unpublish/reject 지원."""
 
     def __init__(self) -> None:
         # (entity_type, entity_id) -> entity dict
@@ -110,8 +110,23 @@ class FakeRepository:
     def unpublish(self, entity_type: str, entity_id: str, actor: str = "system") -> dict[str, Any]:
         return self._set_status(entity_type, entity_id, "candidate", actor)
 
+    def reject(
+        self,
+        entity_type: str,
+        entity_id: str,
+        reason: str = "",
+        actor: str = "system",
+    ) -> dict[str, Any]:
+        extra = {"rejection_reason": reason} if reason else None
+        return self._set_status(entity_type, entity_id, "rejected", actor, extra=extra)
+
     def _set_status(
-        self, entity_type: str, entity_id: str, status: str, actor: str
+        self,
+        entity_type: str,
+        entity_id: str,
+        status: str,
+        actor: str,
+        extra: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         current = self.store.get((entity_type, entity_id))
         if current is None:
@@ -127,6 +142,8 @@ class FakeRepository:
             "updated_by",
         }
         payload = {k: v for k, v in current.items() if k not in meta}
+        if extra:
+            payload.update(extra)
         return self.put_entity(entity_type, entity_id, payload, status=status, actor=actor)
 
 
@@ -210,6 +227,45 @@ def _rds_field(value: Any) -> dict:
 def fake_embedder(text: str) -> list[float]:
     """결정적 1024차원 임베딩 대역(실제 값 무의미)."""
     return [float(len(text) % 7)] * 1024
+
+
+class FakeLogsClient:
+    """CloudWatch Logs client 대역 — describe_log_groups / filter_log_events.
+
+    ``events`` 는 (로그그룹명, 타임스탬프ms, 메시지) 목록. filter_log_events 는
+    startTime·filterPattern(마커 포함 여부)로 필터링하며 호출 인자를 기록한다.
+    """
+
+    def __init__(
+        self,
+        groups: list[str] | None = None,
+        events: list[tuple[str, int, str]] | None = None,
+    ) -> None:
+        self.groups = groups if groups is not None else []
+        self.events = events if events is not None else []
+        self.describe_calls: list[dict[str, Any]] = []
+        self.filter_calls: list[dict[str, Any]] = []
+
+    def describe_log_groups(self, **kwargs: Any) -> dict:
+        self.describe_calls.append(kwargs)
+        prefix = kwargs.get("logGroupNamePrefix", "")
+        return {
+            "logGroups": [
+                {"logGroupName": name} for name in self.groups if name.startswith(prefix)
+            ]
+        }
+
+    def filter_log_events(self, **kwargs: Any) -> dict:
+        self.filter_calls.append(kwargs)
+        group = kwargs["logGroupName"]
+        start_time = kwargs.get("startTime", 0)
+        pattern = (kwargs.get("filterPattern") or "").strip('"')
+        selected = [
+            {"timestamp": ts, "message": message}
+            for (name, ts, message) in self.events
+            if name == group and ts >= start_time and (not pattern or pattern in message)
+        ]
+        return {"events": selected}
 
 
 class FakeBedrockClient:

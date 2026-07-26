@@ -45,7 +45,11 @@ META_FIELDS = frozenset(
 # M4 additive: "datasource" — admin panel 이 등록한 데이터소스 연결 메타(자격증명 제외).
 # graph_sync 는 미지원 타입에 빈 statement 를 반환하므로 그래프 동기화에 영향이 없다.
 VALID_ENTITY_TYPES = frozenset({"term", "fewshot", "table", "column", "join", "datasource"})
-VALID_STATUSES = frozenset({"candidate", "published"})
+
+# M5 additive: "rejected" — 승인 큐에서 반려된 항목(§9.1). published 가 아니므로
+# 파생 저장소(OpenSearch/Neptune)에는 노출되지 않는다(graph_sync 는 삭제 경로로 처리).
+# candidate 와 구분해 두면 채굴기가 반려된 후보를 재적재하지 않고, 반려 이력도 조회 가능하다.
+VALID_STATUSES = frozenset({"candidate", "published", "rejected"})
 
 
 def _utcnow_iso() -> str:
@@ -257,16 +261,43 @@ class SemanticRepository:
         return self._set_status(entity_type, entity_id, "published", actor)
 
     def unpublish(self, entity_type: str, entity_id: str, actor: str = "system") -> dict:
-        """status 를 candidate 로 전환(put_entity 경유 → 버전 증가)."""
+        """status 를 candidate 로 전환(put_entity 경유 → 버전 증가).
+
+        rejected 항목에도 적용 가능하다(반려 → 재검토 큐 복귀 경로).
+        """
         return self._set_status(entity_type, entity_id, "candidate", actor)
 
+    def reject(
+        self,
+        entity_type: str,
+        entity_id: str,
+        reason: str = "",
+        actor: str = "system",
+    ) -> dict:
+        """status 를 rejected 로 전환하고 반려 사유를 payload 에 기록(M5 §9.1).
+
+        ``reason`` 이 비어 있지 않으면 payload 에 ``rejection_reason`` 으로 남긴다
+        (빈 문자열이면 키를 추가하지 않는다 — 불필요한 필드 오염 방지).
+        rejected 는 published 가 아니므로 파생 저장소에서는 제거된다.
+        ``publish``/``unpublish`` 로 반려 후 재승인·재검토가 가능하다.
+        """
+        extra = {"rejection_reason": reason} if reason else None
+        return self._set_status(entity_type, entity_id, "rejected", actor, extra=extra)
+
     def _set_status(
-        self, entity_type: str, entity_id: str, status: str, actor: str
+        self,
+        entity_type: str,
+        entity_id: str,
+        status: str,
+        actor: str,
+        extra: dict | None = None,
     ) -> dict:
         current = self.get_entity(entity_type, entity_id)
         if current is None:
             raise KeyError(f"엔티티 없음: {entity_type}#{entity_id}")
         payload = {k: v for k, v in current.items() if k not in META_FIELDS}
+        if extra:
+            payload.update(extra)
         # embedding 은 payload 에 남아 재계산되지 않는다(status 전환은 내용 불변).
         return self.put_entity(entity_type, entity_id, payload, status=status, actor=actor)
 
