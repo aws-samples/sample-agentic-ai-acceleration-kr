@@ -35,8 +35,8 @@ uv run ruff check .
 
 > 유닛 테스트는 순수 로직(설정 파싱, MCP 응답 파싱, self-correction 판단, 프롬프트 빌더,
 > AG-UI 이벤트 변환, 요청 파싱, URL 조립, Graph 조건 함수, clarification reason/필드 정규화,
-> interrupt→CUSTOM 변환, 세션 캐시 LRU, clarification 재개/만료 흐름)만 커버한다. 실제 Bedrock/MCP
-> 호출은 통합 테스트(E2E)에서 검증한다.
+> interrupt→CUSTOM 변환, 세션 캐시 LRU, clarification 재개/만료 흐름, 도구 평면 모드 검증·
+> gateway suffix 분류·Cognito 토큰 캐시)만 커버한다. 실제 Bedrock/MCP 호출은 통합 테스트(E2E)에서 검증한다.
 
 ## 환경 변수
 
@@ -51,6 +51,31 @@ uv run ruff check .
 | `AWS_REGION` | 리전 (기본 `us-west-2`) |
 | `MAX_SQL_CORRECTIONS` | self-correction 최대 재시도 (기본 3) |
 | `ORCHESTRATOR_MODE` | `graph`(기본) \| `agent`(폴백) |
+| `TOOL_PLANE_MODE` | 도구 평면: `direct`(기본) \| `gateway` (아래 절 참고) |
+| `GATEWAY_URL` | (gateway 모드) Gateway MCP 엔드포인트 URL |
+| `COGNITO_CLIENT_ID` / `COGNITO_USER` / `COGNITO_PASSWORD_SECRET_ARN` / `COGNITO_USER_POOL_ID` | (gateway 모드) Cognito M2M 인증. 비밀번호는 Secrets Manager ARN 으로 전달 |
+
+## 도구 평면(tool plane) 모드 — direct ↔ gateway (M3)
+
+오케스트레이터는 MCP 도구를 두 경로로 접근할 수 있으며 `TOOL_PLANE_MODE` 로 전환한다.
+설정만 바꾸면 파이프라인(Graph/Agent) 코드는 그대로 동작한다.
+
+| 모드 | 연결 | 인증 | 필수 env |
+|---|---|---|---|
+| `direct`(기본) | sql/semantic Runtime MCP 서버에 **직접**(클라이언트 2개) | SigV4 (`bedrock-agentcore`) | `SQL_MCP_ARN`, `SEMANTIC_MCP_ARN` |
+| `gateway` | **단일** Gateway MCP 엔드포인트가 모든 도구 집약(클라이언트 1개) | Cognito M2M Bearer 토큰 | `GATEWAY_URL`, `COGNITO_*` 4종 |
+
+- **도구 분류(gateway)**: Gateway 는 모든 도구를 한 엔드포인트로 노출하므로, 도구명 **suffix**
+  로 분류한다 — `...run_sql` → SQL 도구, `...search_schema` → semantic 도구. Gateway target
+  프리픽스(`<TargetName>___run_sql`)가 붙어도 안전하게 매칭된다.
+- **인증(gateway)**: `initiate_auth(USER_PASSWORD_AUTH)` 로 Cognito AccessToken 을 받아
+  `Authorization: Bearer <token>` 헤더로 전달한다. 토큰은 만료 5분 전까지 microVM 내 캐시에서
+  재사용한다. 비밀번호는 `COGNITO_PASSWORD_SECRET_ARN`(Secrets Manager)에서 읽어 LLM/로그에
+  노출하지 않는다.
+- **⚠️ 한계 — 서비스 계정 위임**: gateway 모드 인증은 오케스트레이터의 **서비스 계정** 자격으로
+  Gateway 에 접근한다(M3 범위). **사용자별 JWT 전파(On-Behalf-Of)** — 최종 사용자 신원을
+  도구 계층까지 흘려 per-user 인가/감사에 쓰는 것 — 는 **M4+ 로 미룬다**. 따라서 현재 gateway
+  모드에서 Cedar 정책은 오케스트레이터 서비스 계정 principal 기준으로 평가된다.
 
 ## 컨테이너 빌드 (ARM64)
 
@@ -131,6 +156,6 @@ AgentCore Runtime 규격: `0.0.0.0:8080`, `POST /invocations`(SSE), `GET /ping`,
 
 ## 범위 밖 (후속)
 
-- Gateway 경유 도구 접근 + Cedar (M3) — 현재는 Runtime MCP 직접 연결
+- 사용자별 JWT 전파(On-Behalf-Of) — gateway 모드는 현재 서비스 계정 위임만 지원 (M4+)
 - Long-term memory / 개인화 (M2+)
 - clarification 재개의 microVM 간 영속화 — 현재는 microVM 로컬 캐시(같은 VM 내)만 지원

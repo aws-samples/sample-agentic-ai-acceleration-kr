@@ -10,11 +10,18 @@
 레벨 4 (M2 clarification): 모호한 질의 → CUSTOM(clarification_request) 수신 →
   같은 runtimeSessionId 로 clarificationResponse 재호출 → 정상 완료 확인.
   semantic 검색 확장(용어/fewshot 히트)도 이 레벨에서 확인.
+레벨 5 (M3 Gateway/Cedar/Redshift):
+  - Cognito M2M 토큰으로 Gateway MCP 접속 → tools/list(집약) 확인
+  - User 그룹 사용자: run_sql/search_schema 허용, Denied 그룹: forbid 확인 (Cedar)
+  - run_sql(datasource="redshift") 정상 실행 + DELETE 거부
+  전제: gateway-outputs.json + Cognito 테스트 사용자(E2E_USER/E2E_DENIED_USER env 또는
+  기본 e2e-user@example.com / e2e-denied@example.com, 비밀번호는 E2E_USER_PASSWORD env).
 
 실행:
   python scripts/e2e_verify.py --level 1        # MCP 레벨만
   python scripts/e2e_verify.py --level 2        # 에이전트 레벨만
   python scripts/e2e_verify.py --level 4        # M2 clarification/semantic 만
+  python scripts/e2e_verify.py --level 5        # M3 Gateway/Cedar/Redshift 만
   python scripts/e2e_verify.py --level all      # 전부(기본)
 
 ARN 은 runtime-outputs.json(AgenticT2SqlRuntimeStack) 에서 읽거나 인자로 준다.
@@ -428,10 +435,171 @@ async def verify_semantic_extension(arn: str, checks: Checks) -> None:
     await _with_mcp_session(arn, work)
 
 
+# ─────────────────────────────── 레벨 5: M3 Gateway/Cedar/Redshift ───────────────────────────────
+GATEWAY_OUTPUTS = ROOT / "infra" / "gateway-outputs.json"
+BASE_OUTPUTS = ROOT / "infra" / "base-outputs.json"
+
+
+def _load_gateway_ctx() -> dict[str, str]:
+    """gateway/base outputs 에서 레벨5 검증에 필요한 값을 읽는다."""
+    ctx: dict[str, str] = {}
+    if GATEWAY_OUTPUTS.exists():
+        gw = json.loads(GATEWAY_OUTPUTS.read_text()).get("AgenticT2SqlGatewayStack", {})
+        ctx["gateway_url"] = gw.get("GatewayUrl", "")
+    if BASE_OUTPUTS.exists():
+        base = json.loads(BASE_OUTPUTS.read_text()).get("AgenticT2SqlBaseStack", {})
+        ctx["m2m_client_id"] = base.get("CognitoM2mClientId", "")
+        ctx["user_pool_id"] = base.get("CognitoUserPoolId", "")
+    return ctx
+
+
+def _cognito_token(client_id: str, username: str, password: str) -> str:
+    """USER_PASSWORD_AUTH 로 AccessToken 획득."""
+    import boto3
+
+    idp = boto3.client("cognito-idp", region_name=REGION)
+    resp = idp.initiate_auth(
+        ClientId=client_id,
+        AuthFlow="USER_PASSWORD_AUTH",
+        AuthParameters={"USERNAME": username, "PASSWORD": password},
+    )
+    return resp["AuthenticationResult"]["AccessToken"]
+
+
+async def _with_gateway_session(gateway_url: str, token: str, work, attempts: int = 4):
+    """Bearer JWT 로 Gateway MCP 세션을 열어 work(session) 실행."""
+    from mcp import ClientSession
+    from mcp.client.streamable_http import streamablehttp_client
+
+    headers = {"Authorization": f"Bearer {token}"}
+    last_exc: Exception | None = None
+    for i in range(attempts):
+        try:
+            async with streamablehttp_client(gateway_url, headers=headers) as (read, write, *_):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    return await work(session)
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if i < attempts - 1:
+                await asyncio.sleep(3 * (i + 1))
+    raise RuntimeError(f"Gateway MCP 세션 실패({attempts}회): {last_exc}")
+
+
+def _find_tool(names: list[str], suffix: str) -> str | None:
+    """Gateway 프리픽스(<Target>___)를 무시하고 suffix 로 도구를 찾는다."""
+    for n in names:
+        if n.endswith(suffix):
+            return n
+    return None
+
+
+async def verify_gateway(ctx: dict[str, str], checks: Checks) -> None:
+    """Gateway 집약 + Cedar 허용/거부 + Redshift datasource E2E."""
+    print("\n[레벨5] Gateway / Cedar / Redshift")
+    gateway_url = ctx.get("gateway_url", "")
+    client_id = ctx.get("m2m_client_id", "")
+    if not gateway_url or not client_id:
+        print(_red("gateway-outputs.json / base-outputs.json 값 누락 — 레벨5 skip"))
+        return
+
+    user = os.environ.get("E2E_USER", "e2e-user@example.com")
+    denied_user = os.environ.get("E2E_DENIED_USER", "e2e-denied@example.com")
+    password = os.environ.get("E2E_USER_PASSWORD", "")
+    if not password:
+        # 권장 경로: 시크릿 ARN/이름만 받아 스크립트 내부에서 해석(플레인텍스트 비노출).
+        secret_id = os.environ.get(
+            "E2E_USER_PASSWORD_SECRET", "agentic-t2sql/e2e/user-password"
+        )
+        try:
+            import boto3
+
+            password = boto3.client("secretsmanager", region_name=REGION).get_secret_value(
+                SecretId=secret_id
+            )["SecretString"]
+        except Exception as exc:  # noqa: BLE001
+            print(_red(f"E2E 비밀번호 시크릿({secret_id}) 로드 실패({exc}) — 레벨5 skip"))
+            return
+
+    # ── 일반 사용자: tools/list 집약 + run_sql(aurora/redshift) + DELETE 거부 ──
+    token = _cognito_token(client_id, user, password)
+
+    async def work_user(session):
+        tools = await session.list_tools()
+        names = [t.name for t in tools.tools]
+        run_sql = _find_tool(names, "run_sql")
+        search_schema = _find_tool(names, "search_schema")
+        checks.check(
+            "Gateway tools/list 에 run_sql·search_schema 집약",
+            bool(run_sql and search_schema),
+            f"tools={names}",
+        )
+        if not run_sql:
+            return
+
+        # Cedar 허용 경로: 일반 사용자도 run_sql 허용(permit_authenticated_search_and_run).
+        r = await session.call_tool(run_sql, {"sql": "SELECT COUNT(*) FROM customers"})
+        obj = _tool_payload_to_obj(r)
+        ok = isinstance(obj, dict) and obj.get("status") == "ok"
+        checks.check("Gateway 경유 run_sql(aurora) 실행", ok, f"resp={str(obj)[:120]}")
+
+        # Redshift datasource 라우팅.
+        r2 = await session.call_tool(
+            run_sql, {"sql": "SELECT COUNT(*) FROM customers", "datasource": "redshift"}
+        )
+        obj2 = _tool_payload_to_obj(r2)
+        ok2 = isinstance(obj2, dict) and obj2.get("status") == "ok"
+        checks.check("run_sql(datasource=redshift) 실행", ok2, f"resp={str(obj2)[:160]}")
+
+        # Redshift 에서도 READ-ONLY 방어.
+        r3 = await session.call_tool(
+            run_sql, {"sql": "DELETE FROM customers", "datasource": "redshift"}
+        )
+        obj3 = _tool_payload_to_obj(r3)
+        checks.check(
+            "run_sql(redshift) DELETE → rejected",
+            isinstance(obj3, dict) and obj3.get("status") == "rejected",
+            f"status={obj3.get('status') if isinstance(obj3, dict) else obj3}",
+        )
+
+    await _with_gateway_session(gateway_url, token, work_user)
+
+    # ── Denied 그룹 사용자: Cedar forbid 확인 ──
+    try:
+        denied_token = _cognito_token(client_id, denied_user, password)
+    except Exception as exc:  # noqa: BLE001
+        print(_red(f"Denied 사용자 토큰 실패({exc}) — Cedar 거부 체크 skip"))
+        return
+
+    async def work_denied(session):
+        tools = await session.list_tools()
+        names = [t.name for t in tools.tools]
+        run_sql = _find_tool(names, "run_sql")
+        if not run_sql:
+            # 정책이 tools/list 자체를 걸러내는 구현이면 이 자체가 deny 증거.
+            checks.check("Cedar 거부: Denied 그룹에 도구 미노출/차단", True, f"tools={names}")
+            return
+        try:
+            r = await session.call_tool(run_sql, {"sql": "SELECT 1"})
+            obj = _tool_payload_to_obj(r)
+            text = str(obj)
+            denied = (
+                (isinstance(obj, dict) and obj.get("isError"))
+                or "denied" in text.lower()
+                or "authoriz" in text.lower()
+                or "forbid" in text.lower()
+            )
+            checks.check("Cedar 거부: Denied 그룹 run_sql 차단", bool(denied), f"resp={text[:160]}")
+        except Exception as exc:  # noqa: BLE001 — 예외로 거부되는 구현도 PASS
+            checks.check("Cedar 거부: Denied 그룹 run_sql 차단", True, f"예외={str(exc)[:120]}")
+
+    await _with_gateway_session(gateway_url, denied_token, work_denied)
+
+
 # ─────────────────────────────── main ───────────────────────────────
 def main() -> int:
     parser = argparse.ArgumentParser(description="agentic Text-to-SQL E2E 검증기")
-    parser.add_argument("--level", choices=["1", "2", "4", "all"], default="all")
+    parser.add_argument("--level", choices=["1", "2", "4", "5", "all"], default="all")
     parser.add_argument("--orchestrator-arn")
     parser.add_argument("--sql-arn")
     parser.add_argument("--semantic-arn")
@@ -462,6 +630,13 @@ def main() -> int:
             return 2
         asyncio.run(verify_semantic_extension(arns["semantic"], checks))
         verify_clarification(arns["orchestrator"], checks)
+
+    if args.level in ("5", "all"):
+        ctx = _load_gateway_ctx()
+        if not ctx.get("gateway_url"):
+            print("[레벨5] gateway-outputs.json 없음 — Gateway 미배포. skip.")
+        else:
+            asyncio.run(verify_gateway(ctx, checks))
 
     return checks.summary()
 

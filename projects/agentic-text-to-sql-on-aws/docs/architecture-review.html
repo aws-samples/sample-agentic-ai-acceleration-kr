@@ -236,13 +236,13 @@
     <!-- ══════════ L3: Tool ══════════ -->
     <div class="node agentcore" id="n-gateway" style="left:230px; top:415px; width:250px">
       <b>AgentCore Gateway</b>
-      <span>MCP 도구 집약 · semantic tool search</span>
-      <span class="chip" style="background:#f0716e; color:#fff">Identity: JWT 인바운드</span>
-      <span class="chip" style="background:#f0716e; color:#fff">Policy: Cedar default-deny</span>
+      <span>MCP 도구 집약 · semantic tool search (M3 ✅)</span>
+      <span class="chip" style="background:#f0716e; color:#fff">Identity: Cognito JWT 인바운드</span>
+      <span class="chip" style="background:#f0716e; color:#fff">PolicyEngine: Cedar ENFORCE</span>
     </div>
     <div class="node agentcore small" id="n-mcp-sql" style="left:530px; top:400px; width:200px">
       <b>sql-execution-mcp</b>
-      <span>AgentCore Runtime 호스팅 (MCP :8000)<br>AST allow-list 검증 → Data API 실행</span>
+      <span>AgentCore Runtime 호스팅 (MCP :8000)<br>AST allow-list 검증(pg·redshift dialect)<br>→ datasource 라우팅 Data API 실행 (M3 ✅)</span>
     </div>
     <div class="node agentcore small" id="n-mcp-sem" style="left:530px; top:470px; width:200px">
       <b>semantic-retrieval-mcp</b>
@@ -274,7 +274,7 @@
     </div>
     <div class="node aws" id="n-redshift" style="left:530px; top:765px; width:200px">
       <b>Redshift Serverless</b>
-      <span>Redshift Data API · read-only</span>
+      <span>Redshift Data API · read-only (M3 ✅)<br>4 RPU · datasource="redshift"</span>
     </div>
     <div class="node aws small" id="n-secrets" style="left:780px; top:770px; width:190px">
       <b>Secrets Manager</b>

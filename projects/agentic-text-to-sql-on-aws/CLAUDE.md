@@ -33,7 +33,10 @@ Amazon Bedrock AgentCore 기반 agentic Text-to-SQL 솔루션. **설계는 합�
 - [x] M2: Semantic layer 완성(Neptune·DynamoDB·동기화) + clarification E2E — **배포·E2E 17체크 검증 완료** (2026-07-26).
       Semantic 스택(DynamoDB·Neptune Serverless·OSIS·graph-sync Lambda) 추가 배포,
       semantic MCP 는 VPC 모드 전환. 인터페이스 기록: `docs/m2-m3-interface-contract.md`
-- [ ] M3: Gateway·Identity·Cedar·Redshift·가드레일 전체
+- [x] M3: Gateway·Identity·Cedar·Redshift·가드레일 전체 — **배포·E2E 22체크 검증 완료** (2026-07-26).
+      Gateway 스택(Gateway+MCP target 2+Cedar PolicyEngine ENFORCE), Redshift Serverless(Base),
+      orchestrator 는 TOOL_PLANE_MODE=gateway 전환(Cognito M2M 서비스 계정 위임).
+      사용자별 JWT On-Behalf-Of 전파는 M4+ 로 이월.
 - [ ] M4: Admin panel
 - [ ] M5: 개선 파이프라인 (Track A + Track B)
 - 향후: `demo/` Jupyter notebook 실습 구조 (ARCHITECTURE.md §10)
@@ -82,6 +85,26 @@ Amazon Bedrock AgentCore 기반 agentic Text-to-SQL 솔루션. **설계는 합�
   `AgentCoreMemorySessionManager` 는 Graph(multiagent) 세션 영속화를 지원하지 않음 —
   microVM 교체 시 CLARIFICATION_EXPIRED 로 재질의 안내 (알려진 한계).
 - macOS 기본 bash 3.2 는 `declare -A` 미지원 — 스크립트는 case 함수 매핑으로.
+
+## M3 실전 학습 사항 (M4+ 작업 시 참고)
+
+- **Gateway↔PolicyEngine 연결은 gateway 서비스 role 권한이 배포 게이트**: Gateway 생성 시
+  서비스가 gateway role 로 `GetPolicyEngine`·`AuthorizeAction`·`PartiallyAuthorizeActions` 를
+  호출해 검증(GenesisPolicyEngineCheck). 권한 리소스는 policy-engine ARN **과 gateway ARN 양쪽**
+  (gateway 는 생성 전이라 이름 규칙 와일드카드로).
+- **Cedar 정책에 `action in [AgentCore::Action::"<Target>___<tool>"]` 스코프는 생성 시점 검증 실패**
+  ("unable to find an applicable action") — CFN 상 정책이 target 도구 동기화 전에 검증됨.
+  도구별 스코프는 target 생성 후 2-phase 로 갱신하거나 when 절 조건으로 표현할 것.
+- **Cedar principal 의 JWT claim 은 tag**: `principal.hasTag("cognito:groups") &&
+  principal.getTag("cognito:groups") like "*Manager*"` 패턴 (배열 claim 은 문자열 직렬화).
+  Denied 그룹 forbid 는 tools/list 자체를 빈 목록으로 만든다(도구 미노출 = deny 증거).
+- **Redshift Data API 로 CREATE USER 등 관리 작업**은 SecretArn 없이 호출하면 IAM 매핑
+  사용자(권한 부족)로 실행됨 — namespace 의 `manageAdminPassword` 가 만든
+  `redshift!<ns>-<admin>` 시크릿을 get_namespace 로 찾아 SecretArn 으로 넘겨야 한다.
+- **Redshift Serverless workgroup 은 3-AZ 서브넷 요구** — 기존 2-AZ VPC 재사용 불가,
+  Data API 만 쓰면 NAT 없는 전용 isolated VPC 로 충분.
+- Gateway 도구명은 `<TargetName>___<tool>` 프리픽스 — 클라이언트는 suffix 매칭으로 분류.
+- docker keychain 오류(`already exists in the keychain`) 시 `docker logout <registry>` 후 재로그인.
 
 ## 에이전트 팀 운영 규칙
 

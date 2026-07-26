@@ -60,6 +60,32 @@ done
 # --- OpenSearch 인덱싱 ---
 uv run index-schema-docs
 
+# --- M3: Redshift Serverless seed (2번째 데이터 소스, Aurora 와 동일 데이터셋) ---
+# base-outputs.json 에 Redshift 출력이 있으면(M3 배포됨) 적재한다. 없으면 skip(M1/M2 호환).
+RS_WORKGROUP="$(jq_out RedshiftWorkgroupName 2>/dev/null || echo null)"
+RS_RO_SECRET="$(jq_out RedshiftRoSecretArn 2>/dev/null || echo null)"
+if [[ -n "$RS_WORKGROUP" && "$RS_WORKGROUP" != "null" ]]; then
+  export REDSHIFT_WORKGROUP="$RS_WORKGROUP"
+  export REDSHIFT_DB="$DB_NAME"
+  export REDSHIFT_RO_SECRET_ARN="$RS_RO_SECRET"
+  echo "[seed] redshift workgroup=$REDSHIFT_WORKGROUP db=$REDSHIFT_DB"
+  # Serverless resume 지연으로 첫 호출이 실패할 수 있어 3회 재시도.
+  attempt=1; max=3
+  until uv run seed-redshift; do
+    code=$?
+    if [[ $attempt -ge $max ]]; then
+      echo "ERROR: seed-redshift 가 ${max}회 실패(exit=$code)." >&2
+      exit $code
+    fi
+    wait=$((attempt * 20))
+    echo "[retry] seed-redshift 실패(exit=$code). ${wait}s 후 재시도 ($attempt/$max)..."
+    sleep "$wait"
+    attempt=$((attempt + 1))
+  done
+else
+  echo "[seed] Redshift 출력 없음 — redshift seed skip (M1/M2 호환)."
+fi
+
 # --- M2: semantic layer seed (DynamoDB → Streams → OpenSearch/Neptune 동기화) ---
 # semantic-outputs.json 이 있으면(Semantic 스택 배포됨) DynamoDB 에 용어/fewshot/스키마
 # 엔티티를 적재한다. OSIS·graph-sync Lambda 가 파생 저장소로 전파한다(최종 일관성).

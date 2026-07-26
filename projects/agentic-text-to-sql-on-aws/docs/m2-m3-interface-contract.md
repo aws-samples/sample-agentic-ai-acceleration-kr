@@ -66,12 +66,29 @@ run_sql(sql: str, datasource: str = "aurora") ->
 ### 5.1 스택 구성
 
 ```
-AgenticT2SqlBaseStack      (기존)
+AgenticT2SqlBaseStack      (기존 — M3 에서 Redshift Serverless·M2M 클라이언트 추가)
 AgenticT2SqlSemanticStack  (신규 M2 — DynamoDB·Neptune·동기화. Base 의존)
-AgenticT2SqlGatewayStack   (신규 M3 — Gateway·Cedar·Identity. ⚠️ 배치 확정 대기)
-AgenticT2SqlRuntimeStack   (기존 — env 추가·M3 JWT authorizer)
+AgenticT2SqlRuntimeStack   (기존 — M3 env 추가: TOOL_PLANE_MODE/GATEWAY_URL, REDSHIFT_*)
+AgenticT2SqlGatewayStack   (신규 M3 — Gateway·Cedar·Identity. Base+Runtime 의존, Runtime 이후 배포)
 AgenticT2SqlUiStack        (기존)
 ```
+
+**배포 순서**: Base → Semantic → (이미지 push) → Runtime → **Gateway** → UI.
+Gateway 는 runtime MCP ARN 을 참조하므로 runtime 이후 배포된다(runtime→gateway 역참조 없음 → 사이클 없음).
+
+**M3 배치 결정 (확정)**:
+- **Redshift 는 Gateway 가 아닌 Base 스택**에 둔다. 이유: (1) runtime 이 Gateway 보다 먼저 배포되므로
+  sql-mcp 의 `REDSHIFT_SECRET_ARN` 을 Gateway 산출물로 주입하려면 배포 후 update-agent-runtime 이 필요
+  → 대신 Base 소유로 두면 object 참조(결정적 cross-stack export)로 runtime 에 직접 주입된다. (2) sql-mcp
+  실행 role 이 Base 소유라 Redshift 권한도 Base 에서 부여하는 게 자연스럽다.
+- **Redshift 전용 3-AZ VPC(`agentic-t2sql-rs-vpc`)를 Base 에 별도 생성.** Redshift Serverless workgroup 은
+  3개 AZ 서브넷을 요구하는데 기존 base VPC 는 maxAzs:2 이고, 배포된 VPC 의 AZ 수 변경은 파괴적 교체라
+  회피. Data API 만 쓰므로 NAT 없는 PRIVATE_ISOLATED 로 비용 최소화.
+- **Gateway↔PolicyEngine 연결은 L2 escape hatch** (`(gateway.node.defaultChild as CfnGateway)
+  .policyEngineConfiguration = {arn, mode:'ENFORCE'}`). L2 Gateway 에 policyEngine prop 없음(확인).
+- **Cedar action 이름 규칙 `<TargetName>___<toolName>`** (트리플 언더스코어, AWS 공식 문서 gateway-tool-naming).
+  target 이름: `sql-execution-mcp` / `semantic-retrieval-mcp` → action `sql-execution-mcp___run_sql`,
+  `semantic-retrieval-mcp___search_schema`.
 
 ### 5.2 신규 리소스 이름
 
@@ -79,9 +96,12 @@ AgenticT2SqlUiStack        (기존)
 |---|---|---|
 | DynamoDB 테이블 (semantic system-of-record) | `agentic-t2sql-semantic` | M2 |
 | Neptune 클러스터 (또는 Analytics 그래프) | `agentic-t2sql-graph` | M2 |
-| Gateway | `agentic-t2sql-gateway` (이름 규칙 ⚠️ 확정 대기) | M3 |
+| Gateway | `agentic-t2sql-gateway` | M3 |
+| PolicyEngine | `agentic_t2sql_policy_engine` (⚠️ 언더스코어만, 하이픈 불가) | M3 |
+| Gateway MCP target | `sql-execution-mcp` / `semantic-retrieval-mcp` | M3 |
 | Redshift Serverless namespace / workgroup | `agentic-t2sql-rs-ns` / `agentic-t2sql-rs-wg` | M3 |
 | Redshift read-only 시크릿 | `agentic-t2sql/redshift/agent_ro` | M3 |
+| M2M(USER_PASSWORD_AUTH) Cognito 클라이언트 | `agentic-t2sql-m2m-client` | M3 |
 
 ### 5.3 신규 CfnOutput exportName
 
@@ -89,8 +109,9 @@ AgenticT2SqlUiStack        (기존)
 |---|---|---|
 | `agentic-t2sql-semantic-table-name` / `-arn` | DynamoDB 테이블명/ARN | M2 |
 | `agentic-t2sql-graph-endpoint` | Neptune 엔드포인트 | M2 |
-| `agentic-t2sql-gateway-url` / `-id` | Gateway MCP URL / ID | M3 |
-| `agentic-t2sql-redshift-workgroup` / `-secret-arn` | workgroup / RS 시크릿 | M3 |
+| `agentic-t2sql-gateway-url` / `-id` | Gateway MCP URL / ID (Gateway 스택) | M3 |
+| `agentic-t2sql-redshift-workgroup` / `-secret-arn` | workgroup / RS 시크릿 (Base 스택) | M3 |
+| `agentic-t2sql-m2m-client-id` | M2M Cognito 클라이언트 ID (Base 스택) | M3 |
 
 ### 5.4 Runtime env var 추가분
 

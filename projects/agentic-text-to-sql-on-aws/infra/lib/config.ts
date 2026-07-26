@@ -39,6 +39,38 @@ export interface AppConfig {
   readonly graphMinNcu: number;
   /** Neptune Serverless 최대 용량 (NCU) */
   readonly graphMaxNcu: number;
+
+  // ───────────── M3: Gateway / Identity / Policy(Cedar) ─────────────
+  /** Gateway 이름 (agentic-t2sql-gateway). 하이픈 허용 패턴 ^([0-9a-zA-Z][-]?){1,48}$ */
+  readonly gatewayName: string;
+  /** PolicyEngine 이름. ⚠️ 패턴 ^[A-Za-z][A-Za-z0-9_]*$ — 하이픈 불가, 언더스코어만. */
+  readonly policyEngineName: string;
+  /** Gateway MCP target 이름(도구 이름 prefix 가 됨: `<target>___<tool>`). */
+  readonly sqlTargetName: string;
+  readonly semanticTargetName: string;
+  /**
+   * 오케스트레이터 도구 평면 모드: "direct"(기본, Runtime MCP 직접 SigV4) | "gateway"(Gateway 집약).
+   * Gateway 배포 후 update-agent-runtime 으로 "gateway" 전환한다(순환 의존 방지).
+   */
+  readonly toolPlaneMode: string;
+  /**
+   * Gateway MCP 엔드포인트 URL. runtime→gateway 참조가 순환이므로 배포 시점엔 알 수 없다.
+   * 기본 '' 로 두고 gateway 배포 후 update-agent-runtime 으로 주입한다.
+   */
+  readonly gatewayUrl: string;
+
+  // ───────────── M3: Redshift Serverless (Data Layer 2번째 소스) ─────────────
+  /** Redshift Serverless namespace 이름 (agentic-t2sql-rs-ns). */
+  readonly redshiftNamespaceName: string;
+  /** Redshift Serverless workgroup 이름 (agentic-t2sql-rs-wg). */
+  readonly redshiftWorkgroupName: string;
+  /**
+   * Redshift base capacity (RPU). 4 RPU 최소(us-west-2/Oregon 는 4 RPU 런치 리전) — 데모 비용 최소.
+   * 배포 시 4 가 거부되면 8 로 상향(context redshiftBaseCapacity=8).
+   */
+  readonly redshiftBaseCapacity: number;
+  /** Redshift read-only 사용자(agent_ro) 시크릿 이름. */
+  readonly redshiftRoSecretName: string;
 }
 
 const DEFAULTS = {
@@ -60,6 +92,19 @@ const DEFAULTS = {
   semanticIndex: 't2sql-semantic',
   graphMinNcu: 1,
   graphMaxNcu: 2.5,
+  // M3 gateway / policy
+  gatewayName: 'agentic-t2sql-gateway',
+  // PolicyEngine·Policy 이름은 언더스코어만 허용(하이픈 불가) → prefix 의 하이픈을 치환.
+  policyEngineName: 'agentic_t2sql_policy_engine',
+  sqlTargetName: 'sql-execution-mcp',
+  semanticTargetName: 'semantic-retrieval-mcp',
+  toolPlaneMode: 'direct',
+  gatewayUrl: '',
+  // M3 redshift
+  redshiftNamespaceName: 'agentic-t2sql-rs-ns',
+  redshiftWorkgroupName: 'agentic-t2sql-rs-wg',
+  redshiftBaseCapacity: 4,
+  redshiftRoSecretName: 'agentic-t2sql/redshift/agent_ro',
 } as const;
 
 /**
@@ -88,5 +133,18 @@ export function loadConfig(scope: Construct): AppConfig {
     semanticIndex: ctx('semanticIndex') ?? DEFAULTS.semanticIndex,
     graphMinNcu: (ctx('graphMinNcu') as number | undefined) ?? DEFAULTS.graphMinNcu,
     graphMaxNcu: (ctx('graphMaxNcu') as number | undefined) ?? DEFAULTS.graphMaxNcu,
+    // M3 gateway / policy
+    gatewayName: ctx('gatewayName') ?? DEFAULTS.gatewayName,
+    policyEngineName: ctx('policyEngineName') ?? DEFAULTS.policyEngineName,
+    sqlTargetName: ctx('sqlTargetName') ?? DEFAULTS.sqlTargetName,
+    semanticTargetName: ctx('semanticTargetName') ?? DEFAULTS.semanticTargetName,
+    toolPlaneMode: ctx('toolPlaneMode') ?? DEFAULTS.toolPlaneMode,
+    gatewayUrl: ctx('gatewayUrl') ?? DEFAULTS.gatewayUrl,
+    // M3 redshift
+    redshiftNamespaceName: ctx('redshiftNamespaceName') ?? DEFAULTS.redshiftNamespaceName,
+    redshiftWorkgroupName: ctx('redshiftWorkgroupName') ?? DEFAULTS.redshiftWorkgroupName,
+    redshiftBaseCapacity:
+      (ctx('redshiftBaseCapacity') as number | undefined) ?? DEFAULTS.redshiftBaseCapacity,
+    redshiftRoSecretName: ctx('redshiftRoSecretName') ?? DEFAULTS.redshiftRoSecretName,
   };
 }

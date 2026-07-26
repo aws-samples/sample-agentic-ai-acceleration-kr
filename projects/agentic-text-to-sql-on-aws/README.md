@@ -6,17 +6,24 @@ Amazon Bedrock AgentCore 기반의 agentic Text-to-SQL 솔루션입니다. 사�
 
 > ⚠️ **데모/샘플 목적 전용입니다.** 이 코드는 학습과 참조를 위한 것으로, 프로덕션 사용 전에는 인증 강제(현재 미강제), HTTPS/TLS, 최소 권한 재점검, 비용·용량 재산정이 필요합니다. 실제 데이터·자격증명으로 실행할 때 유의하세요.
 
-## 구현 범위 (M2)
+## 구현 범위 (M3)
 
-이 저장소의 현재 상태는 **M2 — Semantic layer 완성 + clarification**입니다. 자연어 질의 → 스키마 링킹(비즈니스 용어·few-shot·join-path 포함) → SQL 생성 → AST 검증 → 실행 → 결과 스트리밍이 동작하며, 질의가 모호하면 에이전트가 인터랙티브 폼으로 되묻고 같은 세션에서 재개합니다. M3~M5는 로드맵입니다.
+이 저장소의 현재 상태는 **M3 — Tool/보안 완성**입니다. AgentCore Gateway가 유일한 도구 평면이고(Cognito JWT 인바운드 + Cedar 정책 ENFORCE), 데이터 소스는 Aurora PostgreSQL + Redshift Serverless 2종이며, READ-ONLY 4중 방어가 완성돼 있습니다. M4~M5는 로드맵입니다.
 
 | 마일스톤 | 범위 | 상태 |
 |---|---|---|
 | **M1** | 코어 파이프라인 E2E (CDK 인프라 · Aurora 샘플 데이터 · OpenSearch 최소형 · AG-UI 통합) | ✅ 구현 |
 | **M2** | Semantic layer 완성(Neptune·DynamoDB·Streams 동기화) + clarification(interrupt 재요청) | ✅ 구현 |
-| M3 | Tool/보안 완성 (Gateway · Identity · Cedar policy · Redshift 소스 · 가드레일) | 🗺️ 로드맵 |
+| **M3** | Tool/보안 완성 (Gateway · Identity · Cedar policy · Redshift 소스 · 가드레일) | ✅ 구현 |
 | M4 | Admin panel (데이터소스 등록 · semantic 큐레이션 · 권한 · 디버깅) | 🗺️ 로드맵 |
 | M5 | 개선 파이프라인 (Track A: 평가→insight→bundle→A/B, Track B: semantic 지식 채굴) | 🗺️ 로드맵 |
+
+**M3에서 추가된 것**
+- **AgentCore Gateway 단일 도구 평면**: 두 MCP 서버(Runtime 호스팅)를 Gateway MCP target으로 등록(아웃바운드 SigV4). semantic tool search 기본 활성. orchestrator는 `TOOL_PLANE_MODE=gateway`로 Gateway를 경유합니다(직접 연결 `direct`는 폴백).
+- **Identity(인바운드 JWT)**: Gateway가 Cognito user pool JWT(customJWTAuthorizer)를 검증. orchestrator는 Cognito M2M(USER_PASSWORD_AUTH) 서비스 계정으로 토큰을 받아 위임합니다. 사용자별 JWT On-Behalf-Of 전파는 M4+ 범위입니다.
+- **Cedar Policy ENFORCE**: PolicyEngine(default-deny + forbid-wins)을 Gateway에 연결. Manager/Admin 그룹 전체 허용, 일반 인증 사용자 허용, `Denied` 그룹 forbid(거부 검증용) 정책 3개.
+- **Redshift Serverless(4 RPU)**: 두 번째 데이터 소스. `run_sql(sql, datasource="aurora"|"redshift")` 라우팅, Redshift Data API 비동기 폴링 실행기, redshift dialect AST 검증(UNLOAD/COPY 차단), read-only `agent_ro` 사용자.
+- **READ-ONLY 4중 방어 완성**: ① Cedar default-deny ② SQLGlot AST allow-list(LLM 밖, 소스별 dialect) ③ 최소 권한 IAM ④ DB SELECT-only grant (Aurora·Redshift 동형).
 
 **M2에서 추가된 것**
 - **DynamoDB system-of-record** (`semantic-layer/`): 비즈니스 용어·few-shot·스키마 메타의 CRUD와 항목 단위 버전 관리(`v0` 최신본 + 이력), `candidate`/`published` 분리(미승인 지식은 에이전트에 노출되지 않음 — 지식 오염 방어선).
@@ -65,12 +72,13 @@ Amazon Bedrock AgentCore 기반의 agentic Text-to-SQL 솔루션입니다. 사�
 
 ```
 agentic-text-to-sql-on-aws/
-├── infra/                         # CDK (TypeScript) — 4개 스택
-│   ├── bin/agentic-t2sql.ts       # 앱 진입점 (base → semantic → runtime → ui)
+├── infra/                         # CDK (TypeScript) — 5개 스택
+│   ├── bin/agentic-t2sql.ts       # 앱 진입점 (base → semantic → runtime → gateway → ui)
 │   └── lib/
-│       ├── base-stack.ts          # VPC/Aurora/OpenSearch/ECR/Cognito/Memory/IAM
+│       ├── base-stack.ts          # VPC/Aurora/Redshift Serverless/OpenSearch/ECR/Cognito/Memory/IAM
 │       ├── semantic-stack.ts      # DynamoDB/Neptune Serverless/OSIS/graph-sync Lambda (M2)
 │       ├── runtime-stack.ts       # AgentCore Runtime × 3 (orchestrator + MCP 2)
+│       ├── gateway-stack.ts       # AgentCore Gateway + MCP target 2 + Cedar PolicyEngine (M3)
 │       ├── ui-stack.ts            # ECS Fargate + 퍼블릭 ALB
 │       └── config.ts              # cdk.json context 기반 공통 설정
 ├── agents/
@@ -99,7 +107,7 @@ agentic-text-to-sql-on-aws/
 
 ## 실행 순서
 
-스택은 base → semantic → (이미지 push · seed) → runtime → ui 순으로 의존합니다. 아래 스크립트가 순서를 캡슐화합니다.
+스택은 base → semantic → (이미지 push · seed) → runtime → gateway → ui 순으로 의존합니다. 아래 스크립트가 순서를 캡슐화합니다.
 
 ```bash
 # 0) 인프라 의존성 설치
@@ -126,12 +134,20 @@ scripts/seed.sh
 scripts/deploy.sh runtime
 #    → infra/runtime-outputs.json 생성
 
-# 6) UI 이미지 빌드·푸시 후 UI 스택 배포
+# 6) Gateway 스택 배포 (Gateway + MCP target 2 + Cedar PolicyEngine ENFORCE)
+scripts/deploy.sh gateway
+#    → infra/gateway-outputs.json 생성 (GatewayUrl 출력)
+#    이후 orchestrator 를 gateway 모드로 전환하려면 update-agent-runtime 으로
+#    TOOL_PLANE_MODE=gateway + GATEWAY_URL + COGNITO_* env 를 주입합니다 (README 아래 참고).
+
+# 7) UI 이미지 빌드·푸시 후 UI 스택 배포
 scripts/build-and-push.sh ui
 scripts/deploy.sh ui
 #    → infra/ui-outputs.json 생성 (AlbUrl 출력)
 
-# 7) E2E 스모크 테스트 (MCP · orchestrator SSE · UI ALB · clarification/semantic 확장)
+# 8) E2E 스모크 테스트 (레벨1~5: MCP · orchestrator SSE · UI · clarification · Gateway/Cedar/Redshift)
+#    레벨5는 Cognito 테스트 사용자(e2e-user/e2e-denied + Denied 그룹)와
+#    agentic-t2sql/e2e/user-password 시크릿이 필요합니다.
 scripts/e2e-smoke.sh
 ```
 

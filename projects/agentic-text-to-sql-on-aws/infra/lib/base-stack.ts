@@ -12,6 +12,7 @@ import {
   aws_opensearchservice as opensearch,
   aws_secretsmanager as secretsmanager,
   aws_bedrockagentcore as agentcore,
+  aws_redshiftserverless as redshiftserverless,
 } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import { AppConfig } from './config';
@@ -49,6 +50,14 @@ export class AgenticT2SqlBaseStack extends Stack {
 
   public readonly userPool: cognito.UserPool;
   public readonly userPoolClient: cognito.UserPoolClient;
+  /** M3: E2E·orchestrator 용 M2M(USER_PASSWORD_AUTH) 테스트 클라이언트 */
+  public readonly m2mClient: cognito.UserPoolClient;
+
+  // ───────────── M3: Redshift Serverless (2번째 데이터 소스) ─────────────
+  public readonly redshiftWorkgroup: redshiftserverless.CfnWorkgroup;
+  public readonly redshiftRoSecret: secretsmanager.ISecret;
+  /** Redshift workgroup ARN (sql-mcp Data API grant·env 주입) */
+  public readonly redshiftWorkgroupArn: string;
 
   constructor(scope: Construct, id: string, props: BaseStackProps) {
     super(scope, id, props);
@@ -114,6 +123,67 @@ export class AgenticT2SqlBaseStack extends Stack {
       // 샘플/데모 환경: 스택 삭제 시 정리. 프로덕션에서는 RETAIN + 삭제 방지 검토.
       removalPolicy: RemovalPolicy.DESTROY,
     });
+
+    // ───────────────────────── Redshift Serverless (2번째 데이터 소스, M3) ─────────────────────────
+    // ⚠️ Redshift Serverless workgroup 은 3개 AZ 에 걸친 서브넷을 요구한다(문서: serverless-usage-
+    //    considerations / getting-started-cluster-in-vpc). base VPC 는 maxAzs:2 라 부족하고, 이미
+    //    배포된 VPC 의 AZ 수를 늘리면 파괴적 교체가 발생하므로, Redshift 전용 3-AZ VPC 를 별도로 만든다.
+    //    Data API(redshift-data)는 AWS API 평면이라 publiclyAccessible=false 여도 동작하므로
+    //    NAT 없는 격리 서브넷으로 비용을 최소화한다(sql-mcp 는 Data API 로만 접근).
+    const redshiftVpc = new ec2.Vpc(this, 'RedshiftVpc', {
+      vpcName: `${prefix}-rs-vpc`,
+      maxAzs: 3,
+      natGateways: 0,
+      subnetConfiguration: [
+        { name: 'rs-isolated', subnetType: ec2.SubnetType.PRIVATE_ISOLATED, cidrMask: 24 },
+      ],
+    });
+
+    // Redshift 전용 SG. Data API 만 사용하므로 인바운드 규칙은 두지 않는다(기본 deny).
+    const redshiftSg = new ec2.SecurityGroup(this, 'RedshiftSg', {
+      vpc: redshiftVpc,
+      securityGroupName: `${prefix}-redshift-sg`,
+      description: 'Redshift Serverless workgroup SG (Data API only; no direct inbound)',
+      allowAllOutbound: true,
+    });
+
+    // read-only 사용자(agent_ro) 시크릿. seed 가 이 자격증명으로 Redshift 사용자를 만들고
+    // SELECT-only 권한을 부여한다(READ-ONLY 4중 방어의 DB grant 계층 — Aurora 와 동형).
+    this.redshiftRoSecret = new secretsmanager.Secret(this, 'RedshiftRoSecret', {
+      secretName: config.redshiftRoSecretName,
+      description: 'Read-only Redshift user credentials for the SQL execution MCP (Data API)',
+      generateSecretString: {
+        secretStringTemplate: JSON.stringify({ username: config.readOnlyDbUser }),
+        generateStringKey: 'password',
+        // Redshift 비밀번호 제약(ASCII, 인용부호·슬래시 등 일부 문자 불가) 회피용으로 구두점 제외.
+        excludePunctuation: true,
+        passwordLength: 32,
+      },
+    });
+
+    // namespace: 관리자 자격증명은 Secrets Manager 자동 관리(manageAdminPassword) — 평문 노출 금지.
+    const redshiftNamespace = new redshiftserverless.CfnNamespace(this, 'RedshiftNamespace', {
+      namespaceName: config.redshiftNamespaceName,
+      dbName: config.dbName,
+      adminUsername: 'rs_admin',
+      manageAdminPassword: true,
+    });
+
+    this.redshiftWorkgroup = new redshiftserverless.CfnWorkgroup(this, 'RedshiftWorkgroup', {
+      workgroupName: config.redshiftWorkgroupName,
+      namespaceName: config.redshiftNamespaceName,
+      baseCapacity: config.redshiftBaseCapacity,
+      publiclyAccessible: false,
+      subnetIds: redshiftVpc.selectSubnets({ subnetType: ec2.SubnetType.PRIVATE_ISOLATED })
+        .subnetIds,
+      securityGroupIds: [redshiftSg.securityGroupId],
+    });
+    // workgroup 은 namespace 생성 후에 만들어져야 한다(같은 namespaceName 참조).
+    this.redshiftWorkgroup.addDependency(redshiftNamespace);
+
+    // workgroup ARN 은 배포 시점에 workgroup id(UUID)가 붙어 결정적이지 않으므로 와일드카드로 표현.
+    // sql-mcp role 에 대한 실제 권한 부여는 IAM role 정의 이후 섹션에서 수행한다.
+    this.redshiftWorkgroupArn = `arn:${this.partition}:redshift-serverless:${this.region}:${this.account}:workgroup/*`;
 
     // ───────────────────────── OpenSearch 관리형 도메인 (최소형) ─────────────────────────
     // AgentCore Runtime 은 PUBLIC 네트워크 모드이므로 MCP 서버가 도메인에 접근하려면
@@ -190,6 +260,16 @@ export class AgenticT2SqlBaseStack extends Stack {
       description: '매니저: semantic 큐레이션, 평가 리뷰/승인',
     });
 
+    // M3: E2E·orchestrator(서비스 위임) 용 M2M 클라이언트.
+    // USER_PASSWORD_AUTH(ADMIN_NO_SRP 아님) 를 켜서 클라이언트 API 로 AccessToken 을 받는다.
+    // Gateway 인바운드 JWT authorizer 의 allowedClients 에 이 client id 가 포함돼야 한다
+    // (gateway-stack 이 base.m2mClient 를 참조). generateSecret false — public client.
+    this.m2mClient = this.userPool.addClient('M2mClient', {
+      userPoolClientName: `${prefix}-m2m-client`,
+      generateSecret: false,
+      authFlows: { userPassword: true, userSrp: false },
+    });
+
     // ───────────────────────── AgentCore Memory (STM only, M1) ─────────────────────────
     // 장기 메모리 전략(LTM)은 M1 범위 밖. STM raw event 보존 30일.
     this.memory = new agentcore.Memory(this, 'Memory', {
@@ -228,6 +308,30 @@ export class AgenticT2SqlBaseStack extends Stack {
       }),
     );
     this.agentRoSecret.grantRead(this.sqlMcpRole);
+
+    // sql-mcp: Redshift Data API + GetCredentials + RS read-only 시크릿 read (M3, datasource="redshift").
+    // ⚠️ workgroup id(UUID) 미상이라 redshift-data 액션은 계정/리전 스코프로 제한(base 의 runtime ARN
+    //    패턴과 동일 사상). GetCredentials 는 workgroup/* 로 제한(계정 내 사실상 이 1개).
+    this.sqlMcpRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'RedshiftDataApi',
+        actions: [
+          'redshift-data:ExecuteStatement',
+          'redshift-data:DescribeStatement',
+          'redshift-data:GetStatementResult',
+          'redshift-data:CancelStatement',
+        ],
+        resources: ['*'],
+      }),
+    );
+    this.sqlMcpRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'RedshiftServerlessGetCredentials',
+        actions: ['redshift-serverless:GetCredentials'],
+        resources: [this.redshiftWorkgroupArn],
+      }),
+    );
+    this.redshiftRoSecret.grantRead(this.sqlMcpRole);
 
     // semantic-retrieval-mcp: OpenSearch es:ESHttpGet/Post(해당 도메인) + Titan embed 호출만
     this.semanticMcpRole = new iam.Role(this, 'SemanticMcpRole', {
@@ -283,6 +387,27 @@ export class AgenticT2SqlBaseStack extends Stack {
     // Memory 접근. M1 은 STM 만이므로 event 쓰기 + STM 읽기 액션만 부여(LTM record 액션 제외).
     this.memory.grantWrite(this.orchestratorRole);
     this.memory.grantReadShortTermMemory(this.orchestratorRole);
+
+    // M3 gateway 모드: 서비스 계정(Cognito M2M) 비밀번호 시크릿 read + Gateway MCP 호출.
+    // (cognito-idp initiate_auth 는 클라이언트 API 라 IAM 권한 불필요.)
+    this.orchestratorRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'GatewayModeServiceAccountSecret',
+        actions: ['secretsmanager:GetSecretValue'],
+        resources: [
+          `arn:${this.partition}:secretsmanager:${this.region}:${this.account}:secret:${prefix}/e2e/user-password-*`,
+        ],
+      }),
+    );
+    this.orchestratorRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'InvokeGateway',
+        actions: ['bedrock-agentcore:InvokeGateway'],
+        resources: [
+          `arn:${this.partition}:bedrock-agentcore:${this.region}:${this.account}:gateway/${config.gatewayName}*`,
+        ],
+      }),
+    );
 
     // ui: ECS task role. orchestrator runtime 호출만.
     // 순환 의존을 피하려 runtime 스택의 출력(ARN 토큰)을 참조하지 않고,
@@ -353,5 +478,22 @@ export class AgenticT2SqlBaseStack extends Stack {
     new CfnOutput(this, 'EcrUiUri', { value: this.ecrUi.repositoryUri });
     new CfnOutput(this, 'CognitoUserPoolId', { value: this.userPool.userPoolId });
     new CfnOutput(this, 'CognitoUserPoolClientId', { value: this.userPoolClient.userPoolClientId });
+    new CfnOutput(this, 'CognitoM2mClientId', {
+      value: this.m2mClient.userPoolClientId,
+      description: 'M2M(USER_PASSWORD_AUTH) 테스트 클라이언트 ID (E2E·orchestrator gateway 모드)',
+      exportName: `${prefix}-m2m-client-id`,
+    });
+
+    // ── M3: Redshift Serverless outputs ──
+    new CfnOutput(this, 'RedshiftWorkgroupName', {
+      value: config.redshiftWorkgroupName,
+      description: 'Redshift Serverless workgroup 이름 (Redshift Data API workgroupName)',
+      exportName: `${prefix}-redshift-workgroup`,
+    });
+    new CfnOutput(this, 'RedshiftRoSecretArn', {
+      value: this.redshiftRoSecret.secretArn,
+      description: 'Redshift read-only(agent_ro) 시크릿 ARN (sql-mcp Data API)',
+      exportName: `${prefix}-redshift-secret-arn`,
+    });
   }
 }

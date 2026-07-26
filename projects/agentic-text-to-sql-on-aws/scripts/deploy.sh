@@ -7,13 +7,15 @@
 #   3) [이미지 빌드·푸시: scripts/build-and-push.sh]  ← Base 완료 후, Runtime 전에 필수
 #   4) [seed: scripts/seed.sh]                        ← Runtime 전에 데이터 적재
 #   5) AgenticT2SqlRuntimeStack → runtime-outputs.json (AgentCore Runtime 3개)
-#   6) [UI 이미지 빌드·푸시]
-#   7) AgenticT2SqlUiStack      → ui-outputs.json     (ECS Fargate + ALB)
+#   6) AgenticT2SqlGatewayStack → gateway-outputs.json (Gateway·Cedar·Identity, Runtime 이후)
+#   7) [UI 이미지 빌드·푸시]
+#   8) AgenticT2SqlUiStack      → ui-outputs.json     (ECS Fargate + ALB)
 #
 # 사용:
 #   scripts/deploy.sh base       # Base 스택만
 #   scripts/deploy.sh semantic   # Semantic 스택만 (Base 이후)
 #   scripts/deploy.sh runtime    # Runtime 스택만
+#   scripts/deploy.sh gateway    # Gateway 스택만 (Runtime 이후)
 #   scripts/deploy.sh ui         # UI 스택만
 #
 # 주의: --require-approval never 는 IAM/보안그룹 변경 확인 프롬프트를 생략한다.
@@ -39,9 +41,10 @@ case "$TARGET" in
   base)     deploy_stack AgenticT2SqlBaseStack     base-outputs.json ;;
   semantic) deploy_stack AgenticT2SqlSemanticStack semantic-outputs.json ;;
   runtime)  deploy_stack AgenticT2SqlRuntimeStack  runtime-outputs.json ;;
+  gateway)  deploy_stack AgenticT2SqlGatewayStack  gateway-outputs.json ;;
   ui)       deploy_stack AgenticT2SqlUiStack       ui-outputs.json ;;
   *)
-    echo "사용법: $0 {base|semantic|runtime|ui}" >&2
+    echo "사용법: $0 {base|semantic|runtime|gateway|ui}" >&2
     echo "  전체 흐름은 README/스크립트 헤더의 배포 순서를 따를 것." >&2
     exit 2
     ;;

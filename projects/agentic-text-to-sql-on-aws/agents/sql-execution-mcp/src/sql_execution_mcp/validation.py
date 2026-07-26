@@ -1,6 +1,8 @@
 """SQL 검증기 — SQLGlot AST allow-list (READ-ONLY 4중 방어의 "LLM 밖 SQL AST validator").
 
-문자열 매칭이 아니라 SQLGlot이 파싱한 AST 노드 타입을 검사한다. dialect="postgres" 고정.
+문자열 매칭이 아니라 SQLGlot이 파싱한 AST 노드 타입을 검사한다. dialect는 파이프라인
+생성 시 지정(기본 ``postgres``, Redshift 소스는 ``redshift``). 규칙 자체는 AST 노드 타입만
+검사하므로 dialect 비의존적이며, dialect는 파싱·직렬화 단계에만 쓰인다.
 추상 base class ``SqlValidationRule`` + 구현체들을 ``SqlValidationPipeline``이 순차 적용한다.
 """
 
@@ -12,6 +14,8 @@ from dataclasses import dataclass, field
 import sqlglot
 from sqlglot import exp
 
+# 기본 dialect. Aurora PostgreSQL 및 Redshift(포스트그레 계열) 모두 파서를 공유하되,
+# Redshift 전용 구문(UNLOAD 등)을 정확히 파싱하려면 파이프라인에 dialect="redshift"를 준다.
 DIALECT = "postgres"
 
 # 기본 LIMIT / 상한. 결과 폭주·과다 스캔 방어(§4.5 다층 안전장치 2).
@@ -254,14 +258,23 @@ class ValidationResult:
 
 
 class SqlValidationPipeline:
-    """규칙들을 순차 적용하는 검증 파이프라인. 첫 위반에서 거부한다."""
+    """규칙들을 순차 적용하는 검증 파이프라인. 첫 위반에서 거부한다.
 
-    def __init__(self, rules: list[SqlValidationRule] | None = None) -> None:
+    ``dialect``는 SQLGlot 파싱·직렬화에 쓰인다(기본 ``postgres``). datasource별로
+    별도 인스턴스를 두어 Aurora=postgres, Redshift=redshift dialect로 파싱한다.
+    """
+
+    def __init__(
+        self,
+        rules: list[SqlValidationRule] | None = None,
+        dialect: str = DIALECT,
+    ) -> None:
+        self.dialect = dialect
         self.rules: list[SqlValidationRule] = rules if rules is not None else default_rules()
 
     def validate(self, sql: str) -> ValidationResult:
         try:
-            parsed = [s for s in sqlglot.parse(sql, dialect=DIALECT) if s is not None]
+            parsed = [s for s in sqlglot.parse(sql, dialect=self.dialect) if s is not None]
         except Exception as exc:  # noqa: BLE001 — 파싱 실패는 거부로 정규화
             return ValidationResult(
                 ok=False,
@@ -279,7 +292,7 @@ class SqlValidationPipeline:
 
         root = context.root
         assert root is not None
-        return ValidationResult(ok=True, sql=root.sql(dialect=DIALECT))
+        return ValidationResult(ok=True, sql=root.sql(dialect=self.dialect))
 
 
 def default_rules(

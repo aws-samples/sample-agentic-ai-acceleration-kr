@@ -10,7 +10,7 @@
 
 | 순위 | 항목 | 관련 BP | 마일스톤 |
 |---|---|---|---|
-| 1 | **READ-ONLY 4중 심층방어**: Cedar default-deny + SQL AST validator + read-only IAM + DB SELECT-only grant | AGENTSEC02/03 | M1~M3 |
+| 1 | **READ-ONLY 4중 심층방어**: Cedar default-deny + SQL AST validator + read-only IAM + DB SELECT-only grant | AGENTSEC02/03 | M1~M3 ✅ |
 | 2 | **컴포넌트별 최소권한 IAM + permission boundary**: executor 역할만 Data API 실행 권한(특정 ARN 한정) | AGENTSEC03 | M1 |
 | 3 | **결정론적 SQL AST validator를 LLM 밖 툴 핸들러에** + Data API 에러 정규화(스키마 누출 방지) | AGENTSEC02-BP02 | M1 |
 | 4 | **계층적 HITL**: autonomous(저비용 SELECT) / notify(고비용 스캔) / approve(PII·admin 변경), Step Functions task-token + timeout | AGENTREL02-BP05, AGENTSEC04-BP02 | M3~M4 |
@@ -28,7 +28,7 @@
 - [ ] **AGENTOPS01-BP01/02** — 각 Strands 에이전트에 "job description" 정의: supervisor(intent 라우팅), specialist(schema-linking / SQL-generation / SQL-validation / result-explanation). autonomy 경계(예: SQL agent는 SELECT만) + 측정 가능한 성공 기준(SQL 실행 성공률, gold set 정확도, query cost 상한)
 - [ ] **AGENTOPS02** — 프롬프트/설정 lifecycle: 프롬프트를 코드에서 분리(Configuration Bundle), 버전/롤백, drift 감지
 - [ ] **AGENTOPS03** — AgentOps CI/CD: CodePipeline에 Evaluations promotion gate, 회귀 시 배포 차단·자동 롤백
-- [ ] **AGENTOPS04** — AgentCore Gateway = 권위 있는 tool catalog: 각 MCP 서버를 owner/version/param schema와 함께 등록, semantic discovery, 툴 fallback 정의
+- [x] **AGENTOPS04** — AgentCore Gateway = 권위 있는 tool catalog: 각 MCP 서버를 owner/version/param schema와 함께 등록, semantic discovery, 툴 fallback 정의 ✅ M3: Gateway 가 유일한 도구 평면(MCP target 2개 + semantic tool search 기본 활성). orchestrator 는 TOOL_PLANE_MODE=gateway 로 전환됨(direct 는 폴백)
 - [ ] **AGENTOPS05** — NL→schema-linking→SQL-gen→validation→실행→설명 전 구간 OTel span + W3C Trace Context 전파(UI가 inbound에서 trace header 주입), 구조화 JSON audit 로깅
 - [ ] **AGENTOPS06** — 다층 테스트 + 지속 평가(LLM-as-judge) + Manager 승인 워크플로우(admin panel)
 - [ ] **AGENTOPS07** — 소비 상한: 세션 token cap, SQL 재시도 max, Data API scan 상한 → 초과 시 loop 중단. break-glass 런북(분석가 직접 read-only 접근 경로)을 시스템 밖에 문서화
@@ -36,8 +36,8 @@
 
 ## 2. 보안 (AGENTSEC)
 
-- [ ] **AGENTSEC03** — 컴포넌트별 IAM role 분리: supervisor / SQL-gen / SQL-executor / semantic-reader / MCP 서버 / ECS web / ECS admin. **executor만** `rds-data:ExecuteStatement`·`redshift-data:ExecuteStatement`를 특정 cluster/workgroup ARN에 한정 보유
-- [ ] **AGENTSEC02** — READ-ONLY 4중 방어: ① Cedar default-deny ② 툴 핸들러 내 결정론적 SQL AST validator(non-SELECT/DDL/DML/multi-statement/시스템 카탈로그/COPY·UNLOAD 거부 — LLM 밖에서) ③ read-only IAM ④ DB SELECT-only grant
+- [x] **AGENTSEC03** — 컴포넌트별 IAM role 분리: orchestrator / sql-mcp / semantic-mcp / ui / gateway / OSIS / graph-sync Lambda 각각 별도 role. **sql-mcp만** rds-data(클러스터 ARN 한정)·redshift-data 실행 권한 보유 ✅ M3 (redshift-data 액션은 리소스 조건 제약상 계정 스코프 — 알려진 완화)
+- [x] **AGENTSEC02** — READ-ONLY 4중 방어: ① Cedar default-deny ② 툴 핸들러 내 결정론적 SQL AST validator(non-SELECT/DDL/DML/multi-statement/시스템 카탈로그/COPY·UNLOAD 거부 — LLM 밖에서) ③ read-only IAM ④ DB SELECT-only grant ✅ M3 완성: PolicyEngine ENFORCE(default-deny+forbid-wins) + postgres/redshift dialect AST validator(UNLOAD/COPY 차단 테스트) + Aurora·Redshift 각 agent_ro SELECT-only. E2E: Denied 그룹 차단·DELETE rejected 확인
 - [ ] **AGENTSEC08** — prompt injection 방어: 직접(NL 질문) + **간접(semantic layer 콘텐츠, DB 결과 row)** injection surface 모두에 ApplyGuardrail(prompt-attack block). 출력에 sensitive-info 필터로 PII 마스킹
 - [ ] **AGENTSEC03-BP02** — 사용자 위임: Cognito 인증 → `GetWorkloadAccessTokenForJWT`로 user context를 서명 JWT claim으로 전파 → downstream row/table 수준 authz. 에이전트가 사용자 역할 assume 금지
 - [ ] **AGENTSEC06** — trust zone 분리: data-access 컴포넌트를 상위 trust zone subnet/SG로 분리
@@ -50,7 +50,7 @@
 
 - [ ] **AGENTREL02-BP05** — 계층적 HITL: LIMIT+저비용 SELECT=autonomous / 대규모·고비용 스캔=notify / PII·admin 변경=approve. Step Functions `.waitForTaskToken` + timeout→safe-default(무한 대기 금지), reviewer·rationale·timestamp 감사
 - [ ] **AGENTREL06-BP04** — query 실행 idempotency: key = hash(최종 SQL + params + data-source + user scope), DynamoDB conditional write + TTL result cache
-- [ ] **AGENTREL07-BP02** — Data API retry 분류: Throttling/transient/Redshift resume = retryable(exp backoff + full jitter) / syntax·AccessDenied·relation-not-found = non-retryable(즉시 fallback). Redshift Data API는 async polling. 2단계 retry budget(호출당 cap + 세션 간 circuit breaker)
+- [~] **AGENTREL07-BP02** — Data API retry 분류 — 🔶 M3 부분: Redshift Data API async polling(0.5s 간격·60s 타임아웃·초과 시 cancel) 구현. self-correction 루프가 오류를 SQL 재생성으로 되먹임(MAX_SQL_CORRECTIONS 예산). 세분화된 retryable/non-retryable 분류·circuit breaker 는 후속
 - [ ] **AGENTREL04-BP03** — fallback chain: SQL-gen 주 모델 → 저가 모델 → 캐시/템플릿 쿼리 → graceful 응답("스키마/유사 템플릿 제시"). DB 에러를 SQL-gen에 되먹여 bounded self-repair(1회)
 - [x] **AGENTREL05-BP03** — grounding: SQL 생성기는 semantic layer/`information_schema`에서 검색한 실제 스키마에 grounding. semantic store 다운 시 degrade + 사용자 고지 ✅ M2: schema hybrid + 용어/fewshot 검색(Composite) grounding, term 검색·Neptune 순회 실패 시 graceful degrade 구현. (실행 전 컬럼 존재 검증 stage 는 M3+)
 - [ ] **AGENTREL08** — query timeout·LIMIT·max-scanned-bytes를 AppConfig로 외부화(핫스왑), 초과 시 truncated 결과 + 범위 축소 안내

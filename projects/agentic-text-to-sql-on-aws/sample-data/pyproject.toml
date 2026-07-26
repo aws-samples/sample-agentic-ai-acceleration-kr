@@ -22,6 +22,7 @@ dev = [
 
 [project.scripts]
 seed-aurora = "sample_data.seed_aurora:main"
+seed-redshift = "sample_data.seed_redshift:main"
 index-schema-docs = "sample_data.index_schema_docs:main"
 
 [tool.hatch.build.targets.wheel]

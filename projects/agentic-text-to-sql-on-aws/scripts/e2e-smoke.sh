@@ -5,6 +5,8 @@
 #  레벨2 (에이전트): scripts/e2e_verify.py --level 2
 #  레벨3 (UI): ALB URL 200 확인 + /api/health 확인
 #  레벨4 (M2): clarification interrupt E2E + semantic 검색 확장(용어/fewshot)
+#  레벨5 (M3): Gateway 집약 + Cedar 허용/거부 + Redshift datasource
+#             (E2E_USER_PASSWORD env 필요 — Cognito 테스트 사용자)
 #
 # 전제: Runtime 스택 배포 완료(runtime-outputs.json). UI 레벨은 ui-outputs.json 필요.
 #
@@ -50,9 +52,10 @@ case "$LEVEL" in
   2) run_py_levels 2 ;;
   3) verify_ui ;;
   4) run_py_levels 4 ;;
+  5) run_py_levels 5 ;;
   all)
     run_py_levels all
     verify_ui
     ;;
-  *) echo "사용법: $0 {1|2|3|4|all}" >&2; exit 2 ;;
+  *) echo "사용법: $0 {1|2|3|4|5|all}" >&2; exit 2 ;;
 esac

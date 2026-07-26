@@ -4,6 +4,7 @@ import { loadConfig } from '../lib/config';
 import { AgenticT2SqlBaseStack } from '../lib/base-stack';
 import { AgenticT2SqlSemanticStack } from '../lib/semantic-stack';
 import { AgenticT2SqlRuntimeStack } from '../lib/runtime-stack';
+import { AgenticT2SqlGatewayStack } from '../lib/gateway-stack';
 import { AgenticT2SqlUiStack } from '../lib/ui-stack';
 
 const app = new App();
@@ -40,6 +41,7 @@ const runtime = new AgenticT2SqlRuntimeStack(app, 'AgenticT2SqlRuntimeStack', {
   config,
   auroraCluster: base.auroraCluster,
   agentRoSecret: base.agentRoSecret,
+  redshiftRoSecret: base.redshiftRoSecret,
   openSearchDomain: base.openSearchDomain,
   memory: base.memory,
   ecrOrchestrator: base.ecrOrchestrator,
@@ -54,6 +56,21 @@ const runtime = new AgenticT2SqlRuntimeStack(app, 'AgenticT2SqlRuntimeStack', {
   description: 'Agentic Text-to-SQL — AgentCore Runtimes (orchestrator + 2 MCP servers)',
 });
 runtime.addStackDependency(semantic);
+
+// 3.5) Gateway 스택: Gateway·Cedar·Identity (M3). base(Cognito)·runtime(MCP ARN) 참조.
+//      runtime 이후 배포(runtime→gateway 역참조 없음 → 사이클 없음). UI 와 무관.
+const gateway = new AgenticT2SqlGatewayStack(app, 'AgenticT2SqlGatewayStack', {
+  env,
+  config,
+  userPool: base.userPool,
+  userPoolClient: base.userPoolClient,
+  m2mClient: base.m2mClient,
+  sqlMcpRole: base.sqlMcpRole,
+  sqlMcpRuntime: runtime.sqlMcpRuntime,
+  semanticMcpRuntime: runtime.semanticMcpRuntime,
+  description: 'Agentic Text-to-SQL — Gateway·Cedar·Identity (M3 tool plane)',
+});
+gateway.addStackDependency(runtime);
 
 // 4) UI 스택: ECS Fargate + ALB (orchestrator runtime 호출)
 const ui = new AgenticT2SqlUiStack(app, 'AgenticT2SqlUiStack', {

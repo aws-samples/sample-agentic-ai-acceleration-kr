@@ -18,6 +18,8 @@ export interface RuntimeStackProps extends StackProps {
   // base 스택에서 전달받는 참조들(props 로 명시 전달 — cross-stack export 자동 생성)
   readonly auroraCluster: rds.DatabaseCluster;
   readonly agentRoSecret: secretsmanager.ISecret;
+  // M3: Redshift 2번째 소스. base 가 소유하므로 object 참조로 전달(결정적 cross-stack export).
+  readonly redshiftRoSecret: secretsmanager.ISecret;
   readonly openSearchDomain: opensearch.IDomain;
   readonly memory: agentcore.Memory;
   readonly ecrOrchestrator: ecr.IRepository;
@@ -70,6 +72,10 @@ export class AgenticT2SqlRuntimeStack extends Stack {
         AURORA_CLUSTER_ARN: props.auroraCluster.clusterArn,
         AURORA_SECRET_ARN: props.agentRoSecret.secretArn,
         DB_NAME: config.dbName,
+        // M3: 2번째 데이터 소스(datasource="redshift"). base 가 결정적으로 전달(순환 없음).
+        REDSHIFT_WORKGROUP: config.redshiftWorkgroupName,
+        REDSHIFT_DB: config.dbName,
+        REDSHIFT_SECRET_ARN: props.redshiftRoSecret.secretArn,
       },
     });
 
@@ -150,6 +156,14 @@ export class AgenticT2SqlRuntimeStack extends Stack {
         SEMANTIC_MCP_ARN: this.semanticMcpRuntime.agentRuntimeArn,
         MEMORY_ID: props.memory.memoryId,
         MODEL_ID: config.modelId,
+        // ───────── M3: 도구 평면(tool plane) 모드 ─────────
+        // 기본 "direct"(Runtime MCP 직접 SigV4). Gateway 배포는 이 스택 '이후'이므로 runtime→gateway
+        // 참조는 순환이다. 따라서 GATEWAY_URL 은 결정적으로 알 수 없어 placeholder(빈 문자열/컨텍스트)로
+        // 두고, gateway 배포 후 `aws bedrock-agentcore update-agent-runtime` 로 두 env 를 주입해
+        // "gateway" 로 전환한다(CLAUDE.md M2 학습: 이미지/env 갱신은 update-agent-runtime). gateway
+        // 모드의 Cognito M2M env(COGNITO_*)도 그 시점에 함께 주입한다.
+        TOOL_PLANE_MODE: config.toolPlaneMode,
+        GATEWAY_URL: config.gatewayUrl,
       },
     });
 

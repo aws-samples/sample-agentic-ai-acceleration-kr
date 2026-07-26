@@ -39,7 +39,7 @@ from .agent_builder import OrchestratorBuilder
 from .clarification import build_resume_task
 from .config import Settings
 from .ids import SequentialIdFactory
-from .mcp_client import create_mcp_client
+from .mcp_client import create_tool_clients
 from .memory import create_session_manager
 from .request import ParsedRequest, parse_run_input
 from .session_cache import SessionCache
@@ -144,22 +144,21 @@ async def _fresh_orchestration(
 ) -> AsyncIterator[dict[str, Any]]:
     """신규 질의 처리. interrupt 발생 시 실행 세션을 캐시에 살려둔다."""
     translator = StreamTranslator(SequentialIdFactory(req.run_id))
-    sql_client = create_mcp_client(settings.sql_mcp_arn, settings.region)
-    semantic_client = create_mcp_client(settings.semantic_mcp_arn, settings.region)
+    # 도구 평면 모드(direct/gateway)를 추상화한 클라이언트 묶음.
+    tool_clients = create_tool_clients(settings)
     session_manager = create_session_manager(
         settings.memory_id, req.actor_id, req.session_id, settings.region
     )
 
     # interrupt 재개를 위해 클라이언트를 컨텍스트 매니저가 아닌 명시적 start/stop 으로 관리.
     session = RunnerSession(
-        runner=None, clients=[sql_client, semantic_client], session_manager=session_manager
+        runner=None, clients=tool_clients.clients, session_manager=session_manager
     )
     try:
-        sql_client.start()
-        semantic_client.start()
+        tool_clients.start()
 
-        sql_tools = sql_client.list_tools_sync()
-        semantic_tools = semantic_client.list_tools_sync()
+        sql_tools = tool_clients.sql_tools()
+        semantic_tools = tool_clients.semantic_tools()
         builder = OrchestratorBuilder(
             settings=settings,
             sql_tools=sql_tools,
