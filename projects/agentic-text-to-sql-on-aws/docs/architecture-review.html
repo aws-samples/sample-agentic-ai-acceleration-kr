@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>agentic-text-to-sql-on-aws — 아키텍처 다이어그램</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #141b26;
+    --border: #2b3850;
+    --text: #e6ebf5;
+    --muted: #8b9bb8;
+    --c-query: #5b9cff;   /* 질의 흐름 */
+    --c-clarify: #f5b84d; /* 재요청 흐름 */
+    --c-admin: #b78cf7;   /* 관리 흐름 */
+    --c-eval: #3ecf8e;    /* 개선 흐름 */
+    --l1: #5b9cff; --l2: #b78cf7; --l3: #f5b84d; --l4: #4dd0c4; --l5: #3ecf8e;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: "Pretendard","Apple SD Gothic Neo","Noto Sans KR",-apple-system,sans-serif;
+    padding: 24px; min-width: 1420px;
+  }
+  h1 { font-size: 21px; margin-bottom: 2px; }
+  h1 code { color: var(--c-query); }
+  .sub { color: var(--muted); font-size: 12.5px; margin-bottom: 14px; }
+
+  /* ─── flow toggle ─── */
+  .toolbar { display: flex; gap: 8px; margin-bottom: 14px; align-items: center; flex-wrap: wrap; }
+  .toolbar .hint { color: var(--muted); font-size: 12px; margin-left: 8px; }
+  .btn {
+    background: var(--panel); color: var(--muted); border: 1px solid var(--border);
+    border-radius: 999px; padding: 7px 16px; font-size: 13px; cursor: pointer; font-weight: 600;
+  }
+  .btn .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 7px; }
+  .btn[data-flow="all"].active     { color: var(--text); border-color: #4a5a7d; background: #1b2333; }
+  .btn[data-flow="query"].active   { color: var(--c-query);   border-color: var(--c-query);   background: rgba(91,156,255,.1); }
+  .btn[data-flow="clarify"].active { color: var(--c-clarify); border-color: var(--c-clarify); background: rgba(245,184,77,.1); }
+  .btn[data-flow="admin"].active   { color: var(--c-admin);   border-color: var(--c-admin);   background: rgba(183,140,247,.1); }
+  .btn[data-flow="eval"].active    { color: var(--c-eval);    border-color: var(--c-eval);    background: rgba(62,207,142,.1); }
+
+  /* ─── diagram canvas ─── */
+  #diagram { position: relative; width: 1380px; }
+  #edges, #labels { position: absolute; inset: 0; pointer-events: none; }
+  #edges { z-index: 5; } #labels { z-index: 6; }
+  #nodes { position: relative; z-index: 1; }
+
+  /* part frames */
+  .part {
+    position: absolute; border: 1.5px dashed #33415e; border-radius: 14px;
+  }
+  .part .ptitle {
+    position: absolute; top: -11px; left: 16px; background: var(--bg);
+    padding: 0 10px; font-size: 12.5px; font-weight: 700; color: var(--muted); letter-spacing: .4px;
+  }
+
+  /* layer bands */
+  .band {
+    position: absolute; border-radius: 10px; border: 1px solid var(--border);
+    background: rgba(20,27,38,.55);
+  }
+  .band .btitle {
+    position: absolute; left: 14px; top: 10px; font-size: 11.5px; font-weight: 700;
+    letter-spacing: .5px; text-transform: uppercase;
+  }
+  .band .bdesc { position: absolute; left: 14px; top: 27px; font-size: 10.5px; color: var(--muted); width: 130px; line-height: 1.45; }
+
+  /* nodes */
+  .node {
+    position: absolute; background: var(--panel); border: 1.5px solid var(--border);
+    border-radius: 10px; padding: 9px 12px; font-size: 12.5px; line-height: 1.35;
+    box-shadow: 0 2px 10px rgba(0,0,0,.35); z-index: 2;
+  }
+  .node b { display: block; font-size: 12.5px; }
+  .node span { display: block; color: var(--muted); font-size: 10.5px; margin-top: 2px; }
+  .node .chip {
+    display: inline-block; font-size: 9.5px; font-weight: 700; border-radius: 5px;
+    padding: 1px 6px; margin: 4px 4px 0 0; color: #0d1117;
+  }
+  .node.aws { border-left: 4px solid #ff9900; }
+  .node.agentcore { border-left: 4px solid #7c5cff; }
+  .node.persona {
+    border-radius: 999px; text-align: center; padding: 12px 10px;
+    background: #1a2233; z-index: 3;
+  }
+  .node.persona b { font-size: 13.5px; }
+  .node.small { padding: 7px 10px; }
+
+  /* edges */
+  path.edge { fill: none; stroke-width: 2; opacity: .85; transition: opacity .25s, stroke-width .25s; }
+  path.edge.query   { stroke: var(--c-query); }
+  path.edge.clarify { stroke: var(--c-clarify); stroke-dasharray: 7 5; }
+  path.edge.admin   { stroke: var(--c-admin); }
+  path.edge.eval    { stroke: var(--c-eval); stroke-dasharray: 2 4; stroke-linecap: round; }
+  /* dim non-active flows */
+  #diagram[data-flow="query"]   path.edge:not(.query),
+  #diagram[data-flow="clarify"] path.edge:not(.clarify),
+  #diagram[data-flow="admin"]   path.edge:not(.admin),
+  #diagram[data-flow="eval"]    path.edge:not(.eval) { opacity: .07; }
+  #diagram[data-flow="query"]   path.edge.query,
+  #diagram[data-flow="clarify"] path.edge.clarify,
+  #diagram[data-flow="admin"]   path.edge.admin,
+  #diagram[data-flow="eval"]    path.edge.eval { opacity: 1; stroke-width: 2.6; }
+
+  /* edge labels */
+  .elabel {
+    position: absolute; transform: translate(-50%,-50%);
+    font-size: 10.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+    background: #0d1117; border: 1px solid; white-space: nowrap;
+    opacity: 0; transition: opacity .25s;
+  }
+  .elabel.query   { color: var(--c-query);   border-color: rgba(91,156,255,.55); }
+  .elabel.clarify { color: var(--c-clarify); border-color: rgba(245,184,77,.55); }
+  .elabel.admin   { color: var(--c-admin);   border-color: rgba(183,140,247,.55); }
+  .elabel.eval    { color: var(--c-eval);    border-color: rgba(62,207,142,.55); }
+  #diagram[data-flow="query"]   .elabel.query,
+  #diagram[data-flow="clarify"] .elabel.clarify,
+  #diagram[data-flow="admin"]   .elabel.admin,
+  #diagram[data-flow="eval"]    .elabel.eval { opacity: 1; }
+  .elabel .n {
+    display: inline-block; width: 15px; height: 15px; border-radius: 50%;
+    font-size: 10px; text-align: center; line-height: 15px; margin-right: 4px;
+    color: #0d1117; font-weight: 800;
+  }
+  .elabel.query .n { background: var(--c-query); }
+  .elabel.clarify .n { background: var(--c-clarify); }
+  .elabel.admin .n { background: var(--c-admin); }
+  .elabel.eval .n { background: var(--c-eval); }
+
+  /* legend */
+  .legend { display: flex; gap: 18px; margin-top: 14px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
+  .legend .k { display: flex; align-items: center; gap: 7px; }
+  .legend .bar { width: 26px; height: 0; border-top: 2.5px solid; }
+  .legend .bar.dash { border-top-style: dashed; }
+  .legend .bar.dot { border-top-style: dotted; }
+  .legend .sq { width: 11px; height: 11px; border-radius: 3px; }
+
+  .agree {
+    margin-top: 20px; width: 1380px; background: rgba(91,156,255,.07);
+    border: 1px solid rgba(91,156,255,.3); border-radius: 10px; padding: 14px 18px; font-size: 13.5px;
+  }
+  .agree b { color: var(--c-query); }
+</style>
+</head>
+<body>
+
+<h1><code>agentic-text-to-sql-on-aws</code> — 아키텍처 다이어그램 (최종 합의 확인)</h1>
+<div class="sub">2026-07-26 · us-west-2 · feature/agentic-text-to-sql · 3 Parts / 5 Layers / 3 Personas — 아래 버튼으로 데이터 흐름을 전환해서 확인하세요</div>
+
+<div class="toolbar">
+  <button class="btn active" data-flow="all"><span class="dot" style="background:#8b9bb8"></span>전체 보기</button>
+  <button class="btn" data-flow="query"><span class="dot" style="background:var(--c-query)"></span>① 질의 흐름</button>
+  <button class="btn" data-flow="clarify"><span class="dot" style="background:var(--c-clarify)"></span>② 재요청(clarification)</button>
+  <button class="btn" data-flow="admin"><span class="dot" style="background:var(--c-admin)"></span>③ 관리·큐레이션</button>
+  <button class="btn" data-flow="eval"><span class="dot" style="background:var(--c-eval)"></span>④ 평가·개선 루프</button>
+  <span class="hint">흐름을 선택하면 해당 경로가 강조되고 단계 라벨이 표시됩니다</span>
+</div>
+
+<div id="diagram" data-flow="all" style="height:1120px">
+  <div id="nodes">
+
+    <!-- ══════════ Part 1 frame ══════════ -->
+    <div class="part" style="left:170px; top:20px; width:850px; height:860px">
+      <span class="ptitle">PART 1 · CORE SYSTEM (5 LAYERS)</span>
+    </div>
+    <!-- ══════════ Part 2 frame ══════════ -->
+    <div class="part" style="left:1050px; top:20px; width:320px; height:940px">
+      <span class="ptitle">PART 2 · 개선 파이프라인</span>
+    </div>
+    <!-- ══════════ Part 3 frame ══════════ -->
+    <div class="part" style="left:170px; top:910px; width:850px; height:190px">
+      <span class="ptitle">PART 3 · ADMIN PANEL</span>
+    </div>
+
+    <!-- ══════════ Layer bands (Part1 내부) ══════════ -->
+    <div class="band" style="left:185px; top:45px;  width:820px; height:130px; border-left:4px solid var(--l1)">
+      <span class="btitle" style="color:var(--l1)">1 · UI Layer</span>
+      <span class="bdesc">스트리밍 UI<br>AG-UI protocol</span>
+    </div>
+    <div class="band" style="left:185px; top:195px; width:820px; height:160px; border-left:4px solid var(--l2)">
+      <span class="btitle" style="color:var(--l2)">2 · Orchestration Layer</span>
+      <span class="bdesc">Strands Graph<br>멀티 에이전트</span>
+    </div>
+    <div class="band" style="left:185px; top:375px; width:820px; height:160px; border-left:4px solid var(--l3)">
+      <span class="btitle" style="color:var(--l3)">3 · Tool Layer</span>
+      <span class="bdesc">Gateway 단일<br>도구 평면<br>(Lambda 미사용)</span>
+    </div>
+    <div class="band" style="left:185px; top:555px; width:820px; height:150px; border-left:4px solid var(--l4)">
+      <span class="btitle" style="color:var(--l4)">4 · Semantic Layer</span>
+      <span class="bdesc">비즈니스 컨텍스트<br>GraphRAG</span>
+    </div>
+    <div class="band" style="left:185px; top:725px; width:820px; height:135px; border-left:4px solid var(--l5)">
+      <span class="btitle" style="color:var(--l5)">5 · Data Layer</span>
+      <span class="bdesc">read-only<br>Data API</span>
+    </div>
+
+    <!-- ══════════ Personas ══════════ -->
+    <div class="node persona" id="p-user" style="left:18px; top:75px; width:130px">
+      <b>💬 User</b><span>자연어 질의<br>재요청 응답</span>
+    </div>
+    <div class="node persona" id="p-manager" style="left:18px; top:930px; width:130px">
+      <b>📖 Manager</b><span>용어 큐레이션<br>개선 승인</span>
+    </div>
+    <div class="node persona" id="p-admin" style="left:18px; top:1020px; width:130px">
+      <b>🛠️ Admin</b><span>배포·운영<br>권한 관리</span>
+    </div>
+
+    <!-- ══════════ L1: UI ══════════ -->
+    <div class="node aws" id="n-alb" style="left:350px; top:85px; width:110px">
+      <b>ALB</b><span>HTTPS</span>
+    </div>
+    <div class="node aws" id="n-web" style="left:530px; top:70px; width:250px">
+      <b>웹 앱 (ECS Fargate)</b>
+      <span>Next.js + CopilotKit Runtime<br>Cognito 토큰 검증 · AgentCore 프록시</span>
+      <span class="chip" style="background:var(--c-query)">AG-UI SSE</span>
+      <span class="chip" style="background:var(--c-clarify)">interrupt 폼 렌더링</span>
+    </div>
+
+    <!-- ══════════ L2: Orchestration ══════════ -->
+    <div class="node agentcore" id="n-runtime" style="left:390px; top:225px; width:290px">
+      <b>AgentCore Runtime — 오케스트레이터</b>
+      <span>Strands Agents SDK · Graph 패턴<br>intent → schema link → SQL 생성 → AST 검증<br>→ 실행 → 분석 (self-correction 루프)</span>
+      <span class="chip" style="background:#7c5cff; color:#fff">microVM 세션 격리</span>
+    </div>
+    <div class="node agentcore" id="n-memory" style="left:740px; top:215px; width:220px">
+      <b>AgentCore Memory</b>
+      <span>short-term: 멀티턴 대화<br>long-term: 사용자 선호·용어 패턴<br>(actor별 namespace 격리)</span>
+    </div>
+    <div class="node agentcore small" id="n-codeint" style="left:740px; top:300px; width:220px">
+      <b>AgentCore Code Interpreter</b>
+      <span>결과 pandas 집계·차트 생성</span>
+    </div>
+
+    <!-- ══════════ L3: Tool ══════════ -->
+    <div class="node agentcore" id="n-gateway" style="left:230px; top:415px; width:250px">
+      <b>AgentCore Gateway</b>
+      <span>MCP 도구 집약 · semantic tool search</span>
+      <span class="chip" style="background:#f0716e; color:#fff">Identity: JWT 인바운드</span>
+      <span class="chip" style="background:#f0716e; color:#fff">Policy: Cedar default-deny</span>
+    </div>
+    <div class="node agentcore small" id="n-mcp-sql" style="left:530px; top:400px; width:200px">
+      <b>sql-execution-mcp</b>
+      <span>AgentCore Runtime 호스팅 (MCP :8000)<br>AST allow-list 검증 → Data API 실행</span>
+    </div>
+    <div class="node agentcore small" id="n-mcp-sem" style="left:530px; top:470px; width:200px">
+      <b>semantic-retrieval-mcp</b>
+      <span>Runtime 호스팅 · 스키마/용어/예시 검색</span>
+    </div>
+    <div class="node agentcore small" id="n-mcp-admin" style="left:770px; top:435px; width:200px">
+      <b>datasource-admin-mcp</b>
+      <span>Runtime 호스팅 · 관리 도구<br>(Manager/Admin 전용 — Cedar 제한)</span>
+    </div>
+
+    <!-- ══════════ L4: Semantic ══════════ -->
+    <div class="node aws" id="n-ddb" style="left:270px; top:595px; width:200px">
+      <b>DynamoDB</b>
+      <span>system-of-record<br>용어·동의어·메트릭·few-shot CRUD</span>
+    </div>
+    <div class="node aws" id="n-os" style="left:530px; top:595px; width:200px">
+      <b>OpenSearch</b>
+      <span>hybrid 검색 (vector+BM25)<br>스키마·동의어·예시 인덱스</span>
+    </div>
+    <div class="node aws" id="n-neptune" style="left:780px; top:595px; width:190px">
+      <b>Neptune</b>
+      <span>용어 관계·join path 그래프<br>multi-hop 순회 (GraphRAG)</span>
+    </div>
+
+    <!-- ══════════ L5: Data ══════════ -->
+    <div class="node aws" id="n-aurora" style="left:270px; top:765px; width:200px">
+      <b>Aurora PostgreSQL</b>
+      <span>RDS Data API · read-only 사용자</span>
+    </div>
+    <div class="node aws" id="n-redshift" style="left:530px; top:765px; width:200px">
+      <b>Redshift Serverless</b>
+      <span>Redshift Data API · read-only</span>
+    </div>
+    <div class="node aws small" id="n-secrets" style="left:780px; top:770px; width:190px">
+      <b>Secrets Manager</b>
+      <span>DB 자격증명 (LLM 컨텍스트 비노출)</span>
+    </div>
+
+    <!-- ══════════ Part 2: 개선 파이프라인 ══════════ -->
+    <div class="node aws small" id="n-otel" style="left:1075px; top:60px; width:270px">
+      <b>CloudWatch GenAI Observability</b>
+      <span>OTEL 트레이스 · 대시보드 · 알람</span>
+    </div>
+    <div class="node agentcore" id="n-eval" style="left:1075px; top:150px; width:270px">
+      <b>AgentCore Evaluations</b>
+      <span>• code-based: Execution Accuracy<br>• trajectory: 도구 시퀀스 준수<br>• LLM-judge: 내러티브 품질<br>• online eval: 라이브 샘플링</span>
+    </div>
+    <div class="node agentcore small" id="n-insights" style="left:1075px; top:295px; width:270px">
+      <b>Insights</b>
+      <span>failure/intent/trajectory 패턴 · silent failure 탐지</span>
+    </div>
+    <div class="node small" id="n-miner" style="left:1075px; top:855px; width:270px; border-left:4px solid var(--l4)">
+      <b>Semantic 후보 채굴 (Track B)</b>
+      <span>실패 클러스터→동의어·join-path 후보<br>고득점 트레이스→few-shot 수확<br>clarification 선택→용어 기본값<br>→ DynamoDB에 status: candidate</span>
+    </div>
+    <div class="node agentcore small" id="n-reco" style="left:1075px; top:385px; width:270px">
+      <b>Recommendations</b>
+      <span>prompt·tool description 개선안 자동 생성</span>
+    </div>
+    <div class="node agentcore small" id="n-bundle" style="left:1075px; top:475px; width:270px">
+      <b>Configuration Bundle</b>
+      <span>불변 버전 스냅샷 (branch/diff)<br>재배포 없이 에이전트에 적용</span>
+    </div>
+    <div class="node agentcore small" id="n-ab" style="left:1075px; top:575px; width:270px">
+      <b>A/B Testing</b>
+      <span>Gateway 트래픽 분할 · 통계적 유의성</span>
+    </div>
+    <div class="node small" id="n-registry" style="left:1075px; top:665px; width:270px; opacity:.75">
+      <b>AgentCore Registry <span style="color:var(--c-clarify)">(Preview·선택)</span></b>
+      <span>에이전트·도구 조직 카탈로그</span>
+    </div>
+    <div class="node small" id="n-wa" style="left:1075px; top:760px; width:270px; opacity:.75">
+      <b>Well-Architected Agentic AI Lens</b>
+      <span>설계·구현 체크리스트 (docs/)로 전 계층 점검</span>
+    </div>
+
+    <!-- ══════════ Part 3: Admin Panel ══════════ -->
+    <div class="node aws" id="n-adminweb" style="left:230px; top:955px; width:290px">
+      <b>Admin Panel (ECS Fargate)</b>
+      <span>Web + API Server</span>
+      <span class="chip" style="background:var(--c-admin); color:#0d1117">데이터소스 등록</span>
+      <span class="chip" style="background:var(--c-admin); color:#0d1117">semantic 큐레이션</span>
+      <span class="chip" style="background:var(--c-admin); color:#0d1117">권한 관리</span>
+      <span class="chip" style="background:var(--c-eval); color:#0d1117">평가 리뷰·bundle 승인</span>
+      <span class="chip" style="background:#8b9bb8; color:#0d1117">트레이스 디버깅</span>
+    </div>
+    <div class="node aws small" id="n-cognito" style="left:590px; top:965px; width:190px">
+      <b>Cognito</b>
+      <span>User Pool · 그룹(페르소나)<br>JWT 발급</span>
+    </div>
+    <div class="node small" id="n-cw" style="left:830px; top:965px; width:160px">
+      <b>CloudWatch</b>
+      <span>상태 대시보드<br>OTEL 트레이스 탐색</span>
+    </div>
+
+  </div>
+
+  <svg id="edges"></svg>
+  <div id="labels"></div>
+</div>
+
+<div class="legend">
+  <span class="k"><span class="bar" style="border-color:var(--c-query)"></span>① 질의: User → UI → 오케스트레이터 → Gateway(MCP) → Semantic/Data → 분석·응답</span>
+  <span class="k"><span class="bar dash" style="border-color:var(--c-clarify)"></span>② 재요청: interrupt → 폼 → 동일 세션 재개</span>
+  <span class="k"><span class="bar" style="border-color:var(--c-admin)"></span>③ 관리: Admin/Manager → Admin Panel → 메타데이터·권한·자격증명</span>
+  <span class="k"><span class="bar dot" style="border-color:var(--c-eval)"></span>④ 개선 Track A: 트레이스→평가→개선안→승인→Runtime/Gateway 적용 · Track B: 지식 채굴→승인 큐→Semantic layer 보강</span>
+  <span class="k"><span class="sq" style="background:#7c5cff"></span>Bedrock AgentCore</span>
+  <span class="k"><span class="sq" style="background:#ff9900"></span>기타 AWS 서비스</span>
+</div>
+
+<div class="agree">
+  <b>✋ 최종 합의 확인</b> — 이 다이어그램이 의도한 구조(3 파트 · 5 계층 · 도구는 Runtime 호스팅 MCP만 · Manager 승인 거버넌스)와 일치하면 구현(M1)을 시작합니다. 수정이 필요하면 노드/흐름 이름으로 알려주세요.
+</div>
+
+<script>
+// ─── edge 정의: [flow, from, to, label(선택), step번호(선택)] ───
+const EDGES = [
+  // ① 질의 흐름
+  ["query","p-user","n-alb","자연어 질의",1],
+  ["query","n-alb","n-web","",null],
+  ["query","n-web","n-runtime","AG-UI (SSE 스트리밍)",2],
+  ["query","n-runtime","n-memory","대화 기억 저장/조회",3],
+  ["query","n-runtime","n-gateway","MCP 도구 호출",4],
+  ["query","n-gateway","n-mcp-sem","semantic 검색",5],
+  ["query","n-mcp-sem","n-os","hybrid 검색",null],
+  ["query","n-mcp-sem","n-neptune","그래프 순회",null],
+  ["query","n-gateway","n-mcp-sql","검증된 SQL 실행",6],
+  ["query","n-mcp-sql","n-aurora","Data API (read-only)",null],
+  ["query","n-mcp-sql","n-redshift","Data API (read-only)",null],
+  ["query","n-runtime","n-codeint","결과 분석·차트",7],
+  // ② 재요청 흐름
+  ["clarify","n-runtime","n-web","interrupt 이벤트 (폼 스펙)",1],
+  ["clarify","n-web","p-user","재요청 폼 렌더링 (예: 날짜 범위)",2],
+  ["clarify","p-user","n-runtime","응답 제출 → 동일 세션·상태 복원 후 재개",3],
+  // ③ 관리·큐레이션 흐름
+  ["admin","p-admin","n-adminweb","운영·권한·데이터소스",null],
+  ["admin","p-manager","n-adminweb","용어 큐레이션·승인",null],
+  ["admin","n-adminweb","n-ddb","용어/동의어/few-shot CRUD",1],
+  ["admin","n-ddb","n-os","Streams 동기화",2],
+  ["admin","n-ddb","n-neptune","Streams 동기화",2],
+  ["admin","n-adminweb","n-secrets","데이터소스 자격증명 등록",null],
+  ["admin","n-adminweb","n-cognito","사용자·그룹 관리",null],
+  ["admin","n-cognito","n-gateway","JWT → Cedar policy 평가",3],
+  ["admin","n-adminweb","n-mcp-admin","관리 도구 호출",null],
+  ["admin","n-cw","n-adminweb","트레이스·메트릭 조회",null],
+  // ④ 평가·개선 루프
+  ["eval","n-runtime","n-otel","OTEL 트레이스",1],
+  ["eval","n-otel","n-eval","online eval 샘플링",2],
+  ["eval","n-eval","n-insights","",3],
+  ["eval","n-insights","n-reco","",4],
+  ["eval","n-reco","n-bundle","개선안 → 새 버전",5],
+  ["eval","n-adminweb","n-bundle","Manager 승격 승인",6],
+  ["eval","n-bundle","n-ab","버전 비교",7],
+  ["eval","n-ab","n-gateway","트래픽 분할",8],
+  ["eval","n-bundle","n-runtime","승인된 설정 무중단 적용",9],
+  // ④-B 평가·개선 루프 Track B: semantic layer 보강
+  ["eval","n-insights","n-miner","Track B: 실패 클러스터·고득점 트레이스",10],
+  ["eval","n-miner","n-ddb","동의어·join-path·few-shot 후보 (candidate, 에이전트 미노출)",11],
+  ["eval","n-adminweb","n-miner","Manager 승인 큐 검토·승인 → published",12],
+  ["eval","n-ddb","n-os","승인 후 동기화",13],
+  ["eval","n-ddb","n-neptune","",13],
+];
+
+const dia = document.getElementById("diagram");
+const svg = document.getElementById("edges");
+const labelsDiv = document.getElementById("labels");
+
+function rectOf(id) {
+  const el = document.getElementById(id);
+  const r = el.getBoundingClientRect();
+  const d = dia.getBoundingClientRect();
+  return { x: r.left-d.left, y: r.top-d.top, w: r.width, h: r.height,
+           cx: r.left-d.left+r.width/2, cy: r.top-d.top+r.height/2 };
+}
+// 노드 상대 위치에 따라 출발/도착 변과 제어점 방향 결정
+function anchor(a, b) {
+  const dx = b.cx-a.cx, dy = b.cy-a.cy;
+  if (Math.abs(dx) > Math.abs(dy)) {
+    return dx > 0 ? {x:a.x+a.w, y:a.cy, nx:1, ny:0} : {x:a.x, y:a.cy, nx:-1, ny:0};
+  }
+  return dy > 0 ? {x:a.cx, y:a.y+a.h, nx:0, ny:1} : {x:a.cx, y:a.y, nx:0, ny:-1};
+}
+
+function draw() {
+  const W = dia.scrollWidth, H = dia.scrollHeight;
+  svg.setAttribute("width", W); svg.setAttribute("height", H);
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const colors = { query:"#5b9cff", clarify:"#f5b84d", admin:"#b78cf7", eval:"#3ecf8e" };
+  let defs = "<defs>";
+  for (const [k,c] of Object.entries(colors)) {
+    defs += `<marker id="arr-${k}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="${c}"/></marker>`;
+  }
+  defs += "</defs>";
+  let paths = "";
+  labelsDiv.innerHTML = "";
+  for (const [flow, from, to, label, step] of EDGES) {
+    const A = rectOf(from), B = rectOf(to);
+    const s = anchor(A,B), e = anchor(B,A);
+    const dist = Math.hypot(e.x-s.x, e.y-s.y);
+    const k = Math.min(90, Math.max(35, dist*0.38));
+    const c1x = s.x+s.nx*k, c1y = s.y+s.ny*k;
+    const c2x = e.x+e.nx*k, c2y = e.y+e.ny*k;
+    paths += `<path class="edge ${flow}" d="M${s.x} ${s.y} C${c1x} ${c1y}, ${c2x} ${c2y}, ${e.x} ${e.y}" marker-end="url(#arr-${flow})"/>`;
+    if (label || step) {
+      // bezier 중점 t=0.5
+      const mx = (s.x + 3*c1x + 3*c2x + e.x)/8;
+      const my = (s.y + 3*c1y + 3*c2y + e.y)/8;
+      const el = document.createElement("div");
+      el.className = `elabel ${flow}`;
+      el.style.left = mx+"px"; el.style.top = my+"px";
+      el.innerHTML = (step ? `<span class="n">${step}</span>` : "") + (label||"");
+      labelsDiv.appendChild(el);
+    }
+  }
+  svg.innerHTML = defs + paths;
+}
+
+document.querySelectorAll(".btn").forEach(b => b.addEventListener("click", () => {
+  document.querySelectorAll(".btn").forEach(x => x.classList.remove("active"));
+  b.classList.add("active");
+  dia.dataset.flow = b.dataset.flow;
+}));
+
+window.addEventListener("resize", draw);
+requestAnimationFrame(() => { draw(); setTimeout(draw, 300); });
+</script>
+</body>
+</html>
