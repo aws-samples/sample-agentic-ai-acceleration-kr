@@ -232,9 +232,10 @@ def deploy():
         "--env", f"ECOMMERCE_GW_URL={gw_info['gateway_url']}",
         "--env", f"ECOMMERCE_GW_CLIENT={json.dumps(gw_info['client_info'])}",
         "--env", f"WEB_SEARCH_GW_URL={WEB_SEARCH_GW_URL}",
-        # 호출별 입력/출력 프롬프트 로깅(GENAI_INVOCATION) 옵트인. 원문에 PII가
-        # 포함될 수 있으므로 프로덕션에서는 필요할 때만 켜세요.
+        # 호출별 입력/출력 프롬프트 로깅(GENAI_INVOCATION) + gen_ai 스팬 content 옵트인.
+        # 원문에 PII가 포함될 수 있으므로 프로덕션에서는 필요할 때만 켜세요.
         "--env", "GENAI_LOG_PAYLOADS=1",
+        "--env", "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true",
     ]
     print(">> deploy (CodeBuild ARM64)")
     subprocess.run([ac, "deploy", "--auto-update-on-conflict", *envs],

@@ -12,12 +12,17 @@ AgentCore Runtime은 배포만 하면 ADOT(`opentelemetry-instrument`) 자동 �
      `genai.*` 로 기록 — 이상탐지 알람(observability/setup_anomaly_alarms.py) 대상.
   2) 호출별 입력/출력 프롬프트 전문을 구조화 JSON 로그(GENAI_INVOCATION)로 기록 —
      런타임 로그 그룹에서 CloudWatch Logs Insights로 session_id별 조회 가능.
+  3) OTel gen_ai 스팬 발행 — Strands 등이 자동으로 하는 것을 Claude Agent SDK에
+     맞게 수동 발행. ADOT가 이미 설정한 전역 tracer를 재사용하므로 기존 트레이스
+     (POST /invocations 하위)에 끼어 들어가고, GenAI Observability 콘솔의 트레이스
+     상세에서 스팬을 클릭하면 프롬프트·응답·토큰이 속성으로 보입니다.
 
 기록 실패는 에이전트 응답에 영향을 주지 않습니다 (로그만 남김).
 """
 import json
 import logging
 import os
+import time
 
 log = logging.getLogger("observability")
 
@@ -47,12 +52,45 @@ def observe_invocation(*, prompt: str, response: str, model: str,
                        latency_ms: int, usage: dict, cost_usd: float,
                        session_id: str | None = None, num_turns: int | None = None,
                        tools_used: list[str] | None = None, error: str | None = None):
-    """호출 1건의 메트릭을 기록. 스트리밍 종료(finally) 시점에 호출."""
+    """호출 1건의 메트릭·gen_ai 스팬·페이로드 로그를 기록. 스트리밍 종료(finally) 시점에 호출."""
     tools_used = tools_used or []
     input_tokens = (usage.get("input_tokens", 0)
                     + usage.get("cache_creation_input_tokens", 0)
                     + usage.get("cache_read_input_tokens", 0))
     output_tokens = usage.get("output_tokens", 0)
+
+    # GenAI Observability 콘솔의 트레이스 상세에서 입출력을 보여주는 gen_ai 스팬.
+    try:
+        from opentelemetry import trace as otel_trace
+        end_ns = time.time_ns()
+        span = otel_trace.get_tracer("observability").start_span(
+            "claude_agent_sdk.invoke_agent",
+            start_time=end_ns - int(latency_ms * 1_000_000),
+            attributes={
+                "gen_ai.system": "claude-agent-sdk",
+                "gen_ai.operation.name": "invoke_agent",
+                "gen_ai.agent.name": AGENT_NAME,
+                "gen_ai.request.model": model,
+                "gen_ai.usage.input_tokens": input_tokens,
+                "gen_ai.usage.output_tokens": output_tokens,
+                "gen_ai.conversation.id": session_id or "",
+                "gen_ai.tool.names": ",".join(tools_used),
+                "cost_usd": cost_usd,
+            })
+        if LOG_PAYLOADS:
+            # 컨테이너에 OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true 가
+            # 있어야 ADOT가 content 속성을 제거하지 않고 내보냅니다 (deploy()가 주입).
+            span.set_attribute("gen_ai.input.messages", json.dumps(
+                [{"role": "user", "parts": [{"type": "text", "content": prompt}]}],
+                ensure_ascii=False))
+            span.set_attribute("gen_ai.output.messages", json.dumps(
+                [{"role": "assistant", "parts": [{"type": "text", "content": response}]}],
+                ensure_ascii=False))
+        if error:
+            span.set_status(otel_trace.StatusCode.ERROR, error)
+        span.end(end_time=end_ns)
+    except Exception as e:  # noqa: BLE001
+        log.warning("gen_ai 스팬 발행 실패: %s", e)
 
     dims = [{"Name": "Agent", "Value": AGENT_NAME}]
     data = [
