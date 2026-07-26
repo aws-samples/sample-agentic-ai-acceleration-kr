@@ -17,20 +17,31 @@ Part 1의 로컬 `local_agent/agent.py` 와 **에이전트 로직은 동일**합
     python ecommerce_runtime.py deploy        # configure + deploy (컨테이너, CodeBuild)
     python ecommerce_runtime.py invoke "..."  # 배포된 런타임 호출
     python ecommerce_runtime.py               # 로컬 :8080 (컨테이너 진입점)
+
+관측성 (AgentCore Observability 기준):
+    트레이스·스팬·로그는 ADOT 자동 계측이 CloudWatch GenAI Observability로 전송(기본 제공).
+    토큰·비용 등 LLM 수치는 observability.py가 호출마다 genai.* 메트릭으로 보완 기록.
+    python ../observability/setup_anomaly_alarms.py  # 이상탐지 알람 구성 (선택)
+    전체 가이드: ../observability/guide.md
 """
 import json
 import os
 import shutil
 import subprocess
 import sys
+import time
 
 from bedrock_agentcore import BedrockAgentCoreApp
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKClient,
+    ResultMessage,
     TextBlock,
+    ToolUseBlock,
 )
+
+import observability
 
 REGION = "us-east-1"
 MODEL_ID = "us.anthropic.claude-sonnet-4-6"
@@ -108,13 +119,47 @@ app = BedrockAgentCoreApp()
 
 @app.entrypoint
 async def invoke(payload: dict):
-    async with ClaudeSDKClient(options=build_options()) as client:
-        await client.query(payload["prompt"])
-        async for msg in client.receive_response():
-            if isinstance(msg, AssistantMessage):
-                for block in msg.content:
-                    if isinstance(block, TextBlock):
-                        yield block.text
+    # 관측성: 스트리밍하는 동안 응답 텍스트/도구 호출을 모으고, 스트림 마지막의
+    # ResultMessage(토큰·비용·레이턴시)를 받아 CloudWatch genai.* 메트릭으로 기록합니다.
+    # 트레이스·스팬은 ADOT 자동 계측이 GenAI Observability로 전송 (observability.py 참고).
+    prompt = payload["prompt"]
+    t0 = time.monotonic()
+    chunks: list[str] = []
+    tools_used: list[str] = []
+    result: ResultMessage | None = None
+    error: str | None = None
+    try:
+        async with ClaudeSDKClient(options=build_options()) as client:
+            await client.query(prompt)
+            async for msg in client.receive_response():
+                if isinstance(msg, AssistantMessage):
+                    for block in msg.content:
+                        if isinstance(block, TextBlock):
+                            chunks.append(block.text)
+                            yield block.text
+                        elif isinstance(block, ToolUseBlock):
+                            tools_used.append(block.name)
+                elif isinstance(msg, ResultMessage):
+                    result = msg
+                    if msg.is_error and not error:
+                        error = f"result.subtype={msg.subtype}"
+    except Exception as e:
+        error = repr(e)
+        raise
+    finally:
+        observability.observe_invocation(
+            prompt=prompt,
+            response="".join(chunks),
+            model=MODEL_ID,
+            latency_ms=(result.duration_ms if result
+                        else int((time.monotonic() - t0) * 1000)),
+            usage=(result.usage if result else None) or {},
+            cost_usd=(result.total_cost_usd if result else None) or 0.0,
+            session_id=result.session_id if result else None,
+            num_turns=result.num_turns if result else None,
+            tools_used=tools_used,
+            error=error,
+        )
 
 
 # ───────────────────────── Configure + Deploy ───────────────────────────────
@@ -164,6 +209,7 @@ def deploy():
     os.makedirs(build, exist_ok=True)
     entry = os.path.basename(__file__)
     shutil.copy(os.path.abspath(__file__), os.path.join(build, entry))
+    shutil.copy(os.path.join(here, "observability.py"), os.path.join(build, "observability.py"))
     with open(os.path.join(build, "requirements.txt"), "w") as f:
         f.write(REQUIREMENTS)
     for stale in (".bedrock_agentcore.yaml",):
