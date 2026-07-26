@@ -26,9 +26,10 @@ log = logging.getLogger("observability")
 # 별도 네임스페이스를 쓰려면 실행 역할에 해당 네임스페이스 권한을 추가하세요.
 METRICS_NAMESPACE = os.environ.get("GENAI_METRICS_NAMESPACE", "bedrock-agentcore")
 AGENT_NAME = os.environ.get("GENAI_AGENT_NAME", "anycompany_ecommerce")
-# 프롬프트/응답 원문 로깅 여부. 원문에는 고객 데이터·PII가 포함될 수 있으므로
-# 로그 보존 기간·접근 권한을 함께 관리하고, 불필요하면 GENAI_LOG_PAYLOADS=0 으로 끄세요.
-LOG_PAYLOADS = os.environ.get("GENAI_LOG_PAYLOADS", "1") != "0"
+# 프롬프트/응답 원문 로깅 여부 — 기본 비활성(옵트인). 원문에는 고객 데이터·PII가
+# 포함될 수 있으므로, 켤 때는(GENAI_LOG_PAYLOADS=1) 로그 보존 기간·접근 권한을
+# 함께 관리하세요. 이 프로젝트의 deploy()는 실습을 위해 명시적으로 켭니다.
+LOG_PAYLOADS = os.environ.get("GENAI_LOG_PAYLOADS", "0") == "1"
 
 _cloudwatch = None
 
