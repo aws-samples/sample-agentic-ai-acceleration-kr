@@ -591,11 +591,23 @@ export class AgenticT2SqlBaseStack extends Stack {
         resources: ['*'],
       }),
     );
+    // ⚠️ logs:DescribeLogGroups 는 계정 수준 액션이라 특정 로그 그룹 프리픽스 ARN 으로
+    //    스코프할 수 없다(요청 리소스가 `log-group::log-stream:` 로 평가됨 — M4 운영 실측,
+    //    AccessDenied). 목록 조회만 계정 내 log-group:* 로 허용하고, 실제 내용 읽기
+    //    (스트림·이벤트)는 runtime 프리픽스로 계속 제한한다.
+    this.adminWebTaskRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'LogGroupsList',
+        actions: ['logs:DescribeLogGroups'],
+        resources: [
+          `arn:${this.partition}:logs:${this.region}:${this.account}:log-group:*`,
+        ],
+      }),
+    );
     this.adminWebTaskRole.addToPolicy(
       new iam.PolicyStatement({
         sid: 'RuntimeLogsRead',
         actions: [
-          'logs:DescribeLogGroups',
           'logs:DescribeLogStreams',
           'logs:FilterLogEvents',
           'logs:GetLogEvents',
