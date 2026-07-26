@@ -1,0 +1,46 @@
+{
+  "app": "npx ts-node --prefer-ts-exts bin/agentic-t2sql.ts",
+  "watch": {
+    "include": ["**"],
+    "exclude": [
+      "README.md",
+      "cdk*.json",
+      "**/*.d.ts",
+      "**/*.js",
+      "tsconfig.json",
+      "package*.json",
+      "node_modules",
+      "dist"
+    ]
+  },
+  "context": {
+    "appPrefix": "agentic-t2sql",
+    "region": "us-west-2",
+    "dbName": "ecommerce",
+    "readOnlyDbUser": "agent_ro",
+    "openSearchIndex": "t2sql-schema-docs",
+    "embeddingModelId": "amazon.titan-embed-text-v2:0",
+    "modelId": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "ecrRepos": {
+      "orchestrator": "agentic-t2sql/orchestrator",
+      "sqlExecutionMcp": "agentic-t2sql/sql-execution-mcp",
+      "semanticRetrievalMcp": "agentic-t2sql/semantic-retrieval-mcp",
+      "ui": "agentic-t2sql/ui"
+    },
+    "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
+    "@aws-cdk/core:checkSecretUsage": true,
+    "@aws-cdk/core:target-partitions": ["aws", "aws-cn"],
+    "@aws-cdk-containers/ecs-service-extensions:enableDefaultLogDriver": true,
+    "@aws-cdk/aws-ec2:uniqueImdsv2TemplateName": true,
+    "@aws-cdk/aws-iam:minimizePolicies": true,
+    "@aws-cdk/core:validateSnapshotRemovalPolicy": true,
+    "@aws-cdk/aws-codepipeline:crossAccountKeyAliasStackSafeResourceName": true,
+    "@aws-cdk/aws-s3:createDefaultLoggingPolicy": true,
+    "@aws-cdk/aws-ec2:restrictDefaultSecurityGroup": true,
+    "@aws-cdk/aws-rds:databaseProxyUniqueResourceName": true,
+    "@aws-cdk/core:enablePartitionLiterals": true,
+    "@aws-cdk/aws-ecs:disableExplicitDeploymentControllerForCircuitBreaker": true,
+    "@aws-cdk/aws-ecs:removeDefaultDeploymentAlarm": true,
+    "@aws-cdk/aws-opensearchservice:enableOpensearchMultiAzWithStandby": false
+  }
+}

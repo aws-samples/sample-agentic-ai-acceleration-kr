@@ -1,0 +1,24 @@
+{
+  "name": "agentic-t2sql-infra",
+  "version": "0.1.0",
+  "description": "CDK infrastructure for the agentic Text-to-SQL on AWS solution",
+  "bin": {
+    "agentic-t2sql-infra": "bin/agentic-t2sql.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "synth": "cdk synth \"**\"",
+    "cdk": "cdk"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "~5.6.3",
+    "ts-node": "^10.9.2",
+    "aws-cdk": "^2.1022.0"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.262.1",
+    "constructs": "^10.4.2"
+  }
+}

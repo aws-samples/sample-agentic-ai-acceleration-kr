@@ -1,0 +1,1 @@
+# Next.js public/ 정적 자산 디렉터리. 현재 비어 있으나 Dockerfile 이 COPY 하므로 존재해야 함.

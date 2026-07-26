@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sample-data"
+version = "0.1.0"
+description = "agentic Text-to-SQL 샘플 데이터: e-커머스 스키마/결정적 생성기/Aurora seed/OpenSearch 스키마 문서 인덱싱"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "boto3>=1.34.0",
+    "opensearch-py>=2.4.0",
+    "sqlglot>=23.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.5.0",
+]
+
+[project.scripts]
+seed-aurora = "sample_data.seed_aurora:main"
+index-schema-docs = "sample_data.index_schema_docs:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sample_data"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

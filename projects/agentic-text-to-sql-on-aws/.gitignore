@@ -1,0 +1,38 @@
+# ── Node / CDK ──
+node_modules/
+cdk.out/
+# cdk deploy --outputs-file 산출물 (배포 계정별 ARN 포함 — 커밋 금지)
+*-outputs.json
+*.js.map
+dist/
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# ── AgentCore 로컬 산출물 ──
+.bedrock_agentcore.yaml
+.bedrock_agentcore/
+
+# ── 환경 변수 / 시크릿 (실물은 커밋 금지, .example만 커밋) ──
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+
+# ── 생성 데이터 / 빌드 로그 ──
+*.log
+build.log
+sample-data/*.csv
+sample-data/*.db
+
+# ── OS / 에디터 ──
+.DS_Store
+.idea/
+.vscode/
