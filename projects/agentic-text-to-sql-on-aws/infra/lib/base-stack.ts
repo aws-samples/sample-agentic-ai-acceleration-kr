@@ -42,11 +42,19 @@ export class AgenticT2SqlBaseStack extends Stack {
   public readonly ecrSqlMcp: ecr.IRepository;
   public readonly ecrSemanticMcp: ecr.IRepository;
   public readonly ecrUi: ecr.IRepository;
+  /** M4: datasource-admin-mcp 이미지 리포 */
+  public readonly ecrAdminMcp: ecr.IRepository;
+  /** M4: admin web(Next.js) 이미지 리포 */
+  public readonly ecrAdminWeb: ecr.IRepository;
 
   public readonly orchestratorRole: iam.Role;
   public readonly sqlMcpRole: iam.Role;
   public readonly semanticMcpRole: iam.Role;
   public readonly uiTaskRole: iam.Role;
+  /** M4: datasource-admin-mcp Runtime 실행 role */
+  public readonly adminMcpRole: iam.Role;
+  /** M4: admin web ECS task role (관리 평면 AWS SDK 직접 호출) */
+  public readonly adminWebTaskRole: iam.Role;
 
   public readonly userPool: cognito.UserPool;
   public readonly userPoolClient: cognito.UserPoolClient;
@@ -208,7 +216,7 @@ export class AgenticT2SqlBaseStack extends Stack {
       removalPolicy: RemovalPolicy.DESTROY,
     });
 
-    // ───────────────────────── ECR 리포 4개 ─────────────────────────
+    // ───────────────────────── ECR 리포 (M1 4개 + M4 2개) ─────────────────────────
     const makeRepo = (idSuffix: string, repoName: string): ecr.Repository =>
       new ecr.Repository(this, `Ecr${idSuffix}`, {
         repositoryName: repoName,
@@ -222,6 +230,9 @@ export class AgenticT2SqlBaseStack extends Stack {
     this.ecrSqlMcp = makeRepo('SqlMcp', config.ecrRepos.sqlExecutionMcp);
     this.ecrSemanticMcp = makeRepo('SemanticMcp', config.ecrRepos.semanticRetrievalMcp);
     this.ecrUi = makeRepo('Ui', config.ecrRepos.ui);
+    // M4: admin panel 2종(관리 도구 MCP + admin web)
+    this.ecrAdminMcp = makeRepo('AdminMcp', config.ecrRepos.datasourceAdminMcp);
+    this.ecrAdminWeb = makeRepo('AdminWeb', config.ecrRepos.adminWeb);
 
     // ───────────────────────── Cognito user pool + client + groups ─────────────────────────
     // M1 은 프로비저닝만. Admin/Manager 그룹은 admin panel 페르소나 분리를 위한 골격.
@@ -429,6 +440,172 @@ export class AgenticT2SqlBaseStack extends Stack {
       }),
     );
 
+    // ───────────────────────── M4: datasource-admin-mcp 실행 role ─────────────────────────
+    // 관리 도구 평면(큐레이션·승인·데이터소스 등록/테스트·스키마 크롤). semantic 쓰기의 단일
+    // 지점이므로 DynamoDB RW 를 갖는다.
+    //
+    // ⚠️ 순환 회피: semantic 테이블은 semantic 스택 소유이고 base→semantic 역참조는 사이클이므로,
+    //    ARN 은 토큰이 아니라 리터럴 테이블명으로 구성한다(semantic-stack 의 semanticTableArnLiteral
+    //    패턴과 동일 사상).
+    const semanticTableArnLiteral = `arn:${this.partition}:dynamodb:${this.region}:${this.account}:table/${config.semanticTableName}`;
+    this.adminMcpRole = new iam.Role(this, 'AdminMcpRole', {
+      roleName: `${prefix}-admin-mcp-role`,
+      assumedBy: agentCorePrincipal,
+      // ⚠️ IAM role description 은 Latin-1 문자만 허용 — 한국어 불가(배포 실측).
+      description: 'Execution role for the datasource-admin-mcp runtime (semantic curation / datasource admin)',
+    });
+    this.adminMcpRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'SemanticTableReadWrite',
+        actions: [
+          'dynamodb:GetItem',
+          'dynamodb:Query',
+          'dynamodb:Scan',
+          'dynamodb:BatchGetItem',
+          'dynamodb:PutItem',
+          'dynamodb:UpdateItem',
+          'dynamodb:DeleteItem',
+          'dynamodb:BatchWriteItem',
+        ],
+        resources: [semanticTableArnLiteral, `${semanticTableArnLiteral}/index/*`],
+      }),
+    );
+    // 엔티티 저장 시 임베딩 생성(published 문서가 OSIS 로 전파될 때 kNN 필드 필요).
+    this.adminMcpRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'BedrockTitanEmbed',
+        actions: ['bedrock:InvokeModel'],
+        resources: [
+          `arn:${this.partition}:bedrock:${this.region}::foundation-model/${config.embeddingModelId}`,
+        ],
+      }),
+    );
+    // 스키마 크롤(information_schema) — Aurora Data API + agent_ro 시크릿(read-only 사용자).
+    this.adminMcpRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'AuroraDataApiForCrawl',
+        actions: ['rds-data:ExecuteStatement', 'rds-data:BatchExecuteStatement'],
+        resources: [this.auroraCluster.clusterArn],
+      }),
+    );
+    this.agentRoSecret.grantRead(this.adminMcpRole);
+    // Redshift 크롤 — sql-mcp 와 동일 사상(workgroup id 미상 → redshift-data 는 계정/리전 스코프).
+    this.adminMcpRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'RedshiftDataApiForCrawl',
+        actions: [
+          'redshift-data:ExecuteStatement',
+          'redshift-data:DescribeStatement',
+          'redshift-data:GetStatementResult',
+          'redshift-data:CancelStatement',
+        ],
+        resources: ['*'],
+      }),
+    );
+    this.adminMcpRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'RedshiftServerlessGetCredentials',
+        actions: ['redshift-serverless:GetCredentials'],
+        resources: [this.redshiftWorkgroupArn],
+      }),
+    );
+    this.redshiftRoSecret.grantRead(this.adminMcpRole);
+    // 데이터소스 등록: 연결 자격증명을 `agentic-t2sql/datasource/<id>` 프리픽스에만 쓸 수 있다.
+    this.adminMcpRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'DatasourceSecrets',
+        actions: [
+          'secretsmanager:CreateSecret',
+          'secretsmanager:PutSecretValue',
+          'secretsmanager:GetSecretValue',
+          'secretsmanager:DescribeSecret',
+          'secretsmanager:TagResource',
+        ],
+        resources: [
+          `arn:${this.partition}:secretsmanager:${this.region}:${this.account}:secret:${prefix}/datasource/*`,
+        ],
+      }),
+    );
+
+    // ───────────────────────── M4: admin web ECS task role ─────────────────────────
+    // admin panel 의 "관리 평면" 직접 호출용(도구 평면과 무관): Cognito 사용자·그룹 관리,
+    // Cedar 정책 read-only 조회, CloudWatch·X-Ray 관측 조회. 큐레이션/데이터소스 작업은
+    // 사용자 JWT → Gateway MCP 경로이므로 여기에 DynamoDB 권한을 두지 않는다(§8.0).
+    this.adminWebTaskRole = new iam.Role(this, 'AdminWebTaskRole', {
+      roleName: `${prefix}-admin-web-task-role`,
+      assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
+      // ⚠️ IAM role description 은 Latin-1 문자만 허용 — 한국어 불가(배포 실측).
+      description: 'Task role for the admin panel Fargate service (management-plane read / IAM admin)',
+    });
+    this.adminWebTaskRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'CognitoUserGroupAdmin',
+        actions: [
+          'cognito-idp:ListUsers',
+          'cognito-idp:ListGroups',
+          'cognito-idp:AdminGetUser',
+          'cognito-idp:AdminCreateUser',
+          'cognito-idp:AdminDeleteUser',
+          'cognito-idp:AdminSetUserPassword',
+          'cognito-idp:AdminAddUserToGroup',
+          'cognito-idp:AdminRemoveUserFromGroup',
+          'cognito-idp:AdminListGroupsForUser',
+          'cognito-idp:ListUsersInGroup',
+        ],
+        // 이 user pool 한정(계정 내 다른 pool 접근 불가).
+        resources: [this.userPool.userPoolArn],
+      }),
+    );
+    // Cedar 정책 조회(read-only). policy-engine 은 gateway 스택 소유이므로 순환 회피를 위해
+    // 이름 규칙 와일드카드 ARN 을 사용한다(gateway-stack 의 gateway ARN 패턴과 동일 사상).
+    this.adminWebTaskRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'CedarPolicyReadOnly',
+        // ListPolicyEngines(계정 단위 목록)은 부여하지 않는다 — admin web 은 env
+        // POLICY_ENGINE_ID 로 대상 엔진을 알고 있어 목록 조회가 불필요하다.
+        actions: [
+          'bedrock-agentcore:GetPolicyEngine',
+          'bedrock-agentcore:ListPolicies',
+          'bedrock-agentcore:GetPolicy',
+        ],
+        resources: [
+          `arn:${this.partition}:bedrock-agentcore:${this.region}:${this.account}:policy-engine/${config.policyEngineName}*`,
+          `arn:${this.partition}:bedrock-agentcore:${this.region}:${this.account}:policy-engine/${config.policyEngineName}*/*`,
+        ],
+      }),
+    );
+    // 관측: CloudWatch 메트릭·로그·X-Ray 트레이스 조회. 메트릭/트레이스 API 는 리소스 수준
+    // 권한을 지원하지 않아 '*' 가 유일한 표현(read-only 액션만 부여).
+    this.adminWebTaskRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'ObservabilityRead',
+        actions: [
+          'cloudwatch:GetMetricData',
+          'cloudwatch:GetMetricStatistics',
+          'cloudwatch:ListMetrics',
+          'xray:GetTraceSummaries',
+          'xray:BatchGetTraces',
+          'xray:GetServiceGraph',
+          'xray:GetTraceGraph',
+        ],
+        resources: ['*'],
+      }),
+    );
+    this.adminWebTaskRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'RuntimeLogsRead',
+        actions: [
+          'logs:DescribeLogGroups',
+          'logs:DescribeLogStreams',
+          'logs:FilterLogEvents',
+          'logs:GetLogEvents',
+        ],
+        resources: [
+          `arn:${this.partition}:logs:${this.region}:${this.account}:log-group:/aws/bedrock-agentcore/runtimes/*`,
+        ],
+      }),
+    );
+
     // OpenSearch 접근 정책: semantic-mcp role + 계정 principal(seed 스크립트용)만 허용.
     // 계정 root principal 은 "이 계정 안에서 IAM 권한을 가진 principal 에게 위임"을 의미하며
     // OpenSearch 도메인 접근 제어의 표준 패턴. seed 스크립트는 배포자 자격증명으로 인덱싱.
@@ -476,6 +653,15 @@ export class AgenticT2SqlBaseStack extends Stack {
     new CfnOutput(this, 'EcrSqlMcpUri', { value: this.ecrSqlMcp.repositoryUri });
     new CfnOutput(this, 'EcrSemanticMcpUri', { value: this.ecrSemanticMcp.repositoryUri });
     new CfnOutput(this, 'EcrUiUri', { value: this.ecrUi.repositoryUri });
+    // ── M4: admin panel 이미지 리포 ──
+    new CfnOutput(this, 'EcrAdminMcpUri', {
+      value: this.ecrAdminMcp.repositoryUri,
+      description: 'datasource-admin-mcp ECR 리포 URI',
+    });
+    new CfnOutput(this, 'EcrAdminWebUri', {
+      value: this.ecrAdminWeb.repositoryUri,
+      description: 'admin web(Next.js) ECR 리포 URI',
+    });
     new CfnOutput(this, 'CognitoUserPoolId', { value: this.userPool.userPoolId });
     new CfnOutput(this, 'CognitoUserPoolClientId', { value: this.userPoolClient.userPoolClientId });
     new CfnOutput(this, 'CognitoM2mClientId', {

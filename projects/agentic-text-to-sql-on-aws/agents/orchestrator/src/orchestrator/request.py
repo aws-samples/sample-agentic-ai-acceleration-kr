@@ -8,6 +8,9 @@ actorId/sessionId 규격:
 - sessionId: AG-UI `threadId` (대화 스레드 = STM 세션 단위)
 - actorId: forwardedProps.actorId 또는 state.actorId, 없으면 "anonymous"
   (M3 에서 Cognito JWT sub 로 대체 예정)
+
+M4 additive: forwardedProps.userAccessToken (Cognito AccessToken) 이 오면 gateway 모드에서
+사용자 위임(On-Behalf-Of) Bearer 로 쓰인다. **토큰 값은 절대 로깅하지 않는다.**
 """
 
 from __future__ import annotations
@@ -24,6 +27,10 @@ class ParsedRequest:
 
     clarification_response 가 있으면 이번 요청은 앞선 clarification interrupt 에 대한 재개다.
     형태: {"interruptId": str, "values": {<field name>: <값>, ...}}.
+
+    user_access_token (M4 additive) 은 호출자가 전달한 Cognito AccessToken 이다.
+    gateway 모드에서 M2M 서비스 토큰 대신 이 토큰으로 Gateway MCP 를 호출(OBO)한다.
+    민감값이므로 로그·이벤트·LLM 컨텍스트에 노출하지 않는다.
     """
 
     question: str
@@ -32,6 +39,7 @@ class ParsedRequest:
     session_id: str
     actor_id: str
     clarification_response: dict[str, Any] | None = None
+    user_access_token: str | None = None
 
 
 def parse_run_input(payload: dict[str, Any]) -> ParsedRequest:
@@ -58,6 +66,7 @@ def parse_run_input(payload: dict[str, Any]) -> ParsedRequest:
         or thread_id
     )
     clarification_response = _parse_clarification_response(forwarded, state)
+    user_access_token = _parse_user_access_token(forwarded, state)
     return ParsedRequest(
         question=question,
         thread_id=thread_id,
@@ -65,7 +74,23 @@ def parse_run_input(payload: dict[str, Any]) -> ParsedRequest:
         session_id=session_id,
         actor_id=actor_id,
         clarification_response=clarification_response,
+        user_access_token=user_access_token,
     )
+
+
+def _parse_user_access_token(forwarded: Any, state: Any) -> str | None:
+    """사용자 위임(OBO) Cognito AccessToken 을 추출 (M4 additive).
+
+    `forwardedProps.userAccessToken` 우선, snake_case(`user_access_token`)와
+    `state` 경유도 수용한다. 문자열이 아니거나 공백이면 None(= 기존 서비스 계정 위임 유지).
+    **토큰 값은 로깅 금지** — 여기서도 값에 대한 어떤 로그도 남기지 않는다.
+    """
+    candidates: list[Any] = []
+    for source in (forwarded, state):
+        if isinstance(source, dict):
+            candidates.append(source.get("userAccessToken"))
+            candidates.append(source.get("user_access_token"))
+    return _first_str(*candidates)
 
 
 def _parse_clarification_response(forwarded: Any, state: Any) -> dict[str, Any] | None:

@@ -10,6 +10,11 @@ export interface EcrRepoNames {
   readonly sqlExecutionMcp: string;
   readonly semanticRetrievalMcp: string;
   readonly ui: string;
+  // ── M4: admin panel ──
+  /** datasource-admin-mcp 이미지 리포 (agentic-t2sql/datasource-admin-mcp) */
+  readonly datasourceAdminMcp: string;
+  /** admin web(Next.js) 이미지 리포 (agentic-t2sql/admin-web) */
+  readonly adminWeb: string;
 }
 
 export interface AppConfig {
@@ -71,6 +76,19 @@ export interface AppConfig {
   readonly redshiftBaseCapacity: number;
   /** Redshift read-only 사용자(agent_ro) 시크릿 이름. */
   readonly redshiftRoSecretName: string;
+
+  // ───────────── M4: Admin panel / datasource-admin-mcp ─────────────
+  /** Gateway MCP target 이름 (도구명 prefix `datasource-admin-mcp___<tool>`). */
+  readonly adminMcpTargetName: string;
+  /**
+   * Cedar action 스코프 2-phase 스위치 (기본 false).
+   *
+   * M3 학습: `action in [AgentCore::Action::"<Target>___<tool>"]` 스코프는 target 의 도구
+   * 동기화가 끝나기 전에 정책이 검증되어 "unable to find an applicable action" 으로 실패한다.
+   * 따라서 (phase 1) false 로 admin target 을 포함한 gateway 를 먼저 배포하고,
+   * (phase 2) `-c cedarActionScoping=true` 로 재배포해 정책 statement 만 좁힌다.
+   */
+  readonly cedarActionScoping: boolean;
 }
 
 const DEFAULTS = {
@@ -86,6 +104,9 @@ const DEFAULTS = {
     sqlExecutionMcp: 'agentic-t2sql/sql-execution-mcp',
     semanticRetrievalMcp: 'agentic-t2sql/semantic-retrieval-mcp',
     ui: 'agentic-t2sql/ui',
+    // M4 admin panel
+    datasourceAdminMcp: 'agentic-t2sql/datasource-admin-mcp',
+    adminWeb: 'agentic-t2sql/admin-web',
   },
   // M2 semantic layer
   semanticTableName: 'agentic-t2sql-semantic',
@@ -105,6 +126,9 @@ const DEFAULTS = {
   redshiftWorkgroupName: 'agentic-t2sql-rs-wg',
   redshiftBaseCapacity: 4,
   redshiftRoSecretName: 'agentic-t2sql/redshift/agent_ro',
+  // M4 admin panel
+  adminMcpTargetName: 'datasource-admin-mcp',
+  cedarActionScoping: false,
 } as const;
 
 /**
@@ -128,6 +152,8 @@ export function loadConfig(scope: Construct): AppConfig {
       semanticRetrievalMcp:
         ecr.semanticRetrievalMcp ?? DEFAULTS.ecrRepos.semanticRetrievalMcp,
       ui: ecr.ui ?? DEFAULTS.ecrRepos.ui,
+      datasourceAdminMcp: ecr.datasourceAdminMcp ?? DEFAULTS.ecrRepos.datasourceAdminMcp,
+      adminWeb: ecr.adminWeb ?? DEFAULTS.ecrRepos.adminWeb,
     },
     semanticTableName: ctx('semanticTableName') ?? DEFAULTS.semanticTableName,
     semanticIndex: ctx('semanticIndex') ?? DEFAULTS.semanticIndex,
@@ -146,5 +172,17 @@ export function loadConfig(scope: Construct): AppConfig {
     redshiftBaseCapacity:
       (ctx('redshiftBaseCapacity') as number | undefined) ?? DEFAULTS.redshiftBaseCapacity,
     redshiftRoSecretName: ctx('redshiftRoSecretName') ?? DEFAULTS.redshiftRoSecretName,
+    // M4 admin panel
+    adminMcpTargetName: ctx('adminMcpTargetName') ?? DEFAULTS.adminMcpTargetName,
+    // CLI `-c cedarActionScoping=true` 는 문자열로 전달되므로 'true' 도 받아들인다
+    // (cdk.json context 에 boolean 으로 두는 경우도 지원).
+    cedarActionScoping: parseBool(ctx('cedarActionScoping'), DEFAULTS.cedarActionScoping),
   };
+}
+
+/** context 값을 boolean 으로 정규화한다(문자열 'true'/'1' 도 true 로 취급). */
+function parseBool(value: unknown, fallback: boolean): boolean {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value === 'boolean') return value;
+  return ['true', '1', 'yes'].includes(String(value).toLowerCase());
 }

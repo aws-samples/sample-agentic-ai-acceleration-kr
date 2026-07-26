@@ -233,6 +233,63 @@ def test_create_tool_clients_gateway(monkeypatch):
     assert captured["token"] == "tok-123"
 
 
+def test_create_tool_clients_gateway_uses_user_token_for_obo(monkeypatch):
+    """M4 OBO: user_access_token 이 오면 M2M 토큰 대신 그 토큰을 Bearer 로 쓴다."""
+    import orchestrator.mcp_client as mc
+
+    captured = {"m2m_called": False}
+
+    def fake_token(settings, cache=None):
+        captured["m2m_called"] = True
+        return "tok-m2m"
+
+    def fake_gateway_client(url, token):
+        captured["token"] = token
+        return FakeClient([])
+
+    monkeypatch.setattr(mc, "fetch_cognito_token", fake_token)
+    monkeypatch.setattr(mc, "create_gateway_mcp_client", fake_gateway_client)
+    tc = mc.create_tool_clients(_gateway_settings(), user_access_token="jwt-user")
+    assert tc.gateway is True
+    assert captured["token"] == "jwt-user"
+    # 사용자 토큰이 있으면 M2M 인증(시크릿 조회·initiate_auth)을 아예 하지 않는다.
+    assert captured["m2m_called"] is False
+
+
+def test_create_tool_clients_gateway_falls_back_to_m2m_when_no_user_token(monkeypatch):
+    """토큰이 None/빈 문자열이면 기존 서비스 계정 위임 경로를 유지한다."""
+    import orchestrator.mcp_client as mc
+
+    captured = {}
+
+    monkeypatch.setattr(mc, "fetch_cognito_token", lambda settings, cache=None: "tok-m2m")
+    monkeypatch.setattr(
+        mc,
+        "create_gateway_mcp_client",
+        lambda url, token: captured.__setitem__("token", token) or FakeClient([]),
+    )
+    mc.create_tool_clients(_gateway_settings(), user_access_token=None)
+    assert captured["token"] == "tok-m2m"
+    mc.create_tool_clients(_gateway_settings(), user_access_token="")
+    assert captured["token"] == "tok-m2m"
+
+
+def test_create_tool_clients_direct_ignores_user_token(monkeypatch):
+    """direct 모드(SigV4)에서는 사용자 토큰이 무시된다."""
+    import orchestrator.mcp_client as mc
+
+    monkeypatch.setattr(mc, "create_mcp_client", lambda arn, region: FakeClient([]))
+
+    def boom(*args, **kwargs):  # pragma: no cover - 호출되면 실패
+        raise AssertionError("direct 모드에서 gateway 클라이언트를 만들면 안 된다")
+
+    monkeypatch.setattr(mc, "create_gateway_mcp_client", boom)
+    s = Settings.from_env({"SQL_MCP_ARN": "arn:sql", "SEMANTIC_MCP_ARN": "arn:sem"})
+    tc = mc.create_tool_clients(s, user_access_token="jwt-user")
+    assert tc.gateway is False
+    assert len(tc.clients) == 2
+
+
 # ---------------------------------------------------------------------------
 # Cognito 토큰 캐시 (시계 주입)
 # ---------------------------------------------------------------------------

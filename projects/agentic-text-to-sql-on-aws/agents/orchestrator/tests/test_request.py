@@ -123,3 +123,88 @@ def test_clarification_response_invalid_missing_id():
     }
     req = parse_run_input(payload)
     assert req.clarification_response is None
+
+
+# ---------------------------------------------------------------------------
+# M4 additive: forwardedProps.userAccessToken (OBO)
+# ---------------------------------------------------------------------------
+
+
+def test_user_access_token_default_none():
+    req = parse_run_input({"messages": [{"role": "user", "content": "q"}]})
+    assert req.user_access_token is None
+
+
+def test_user_access_token_from_forwarded_props():
+    payload = {
+        "threadId": "t1",
+        "messages": [{"role": "user", "content": "q"}],
+        "forwardedProps": {"userAccessToken": "jwt-abc"},
+    }
+    req = parse_run_input(payload)
+    assert req.user_access_token == "jwt-abc"
+
+
+def test_user_access_token_snake_case_accepted():
+    payload = {
+        "messages": [{"role": "user", "content": "q"}],
+        "forwardedProps": {"user_access_token": "jwt-snake"},
+    }
+    assert parse_run_input(payload).user_access_token == "jwt-snake"
+
+
+def test_user_access_token_from_state_fallback():
+    payload = {
+        "messages": [{"role": "user", "content": "q"}],
+        "state": {"userAccessToken": "jwt-state"},
+    }
+    assert parse_run_input(payload).user_access_token == "jwt-state"
+
+
+def test_forwarded_props_wins_over_state_for_user_access_token():
+    payload = {
+        "messages": [{"role": "user", "content": "q"}],
+        "forwardedProps": {"userAccessToken": "jwt-fwd"},
+        "state": {"userAccessToken": "jwt-state"},
+    }
+    assert parse_run_input(payload).user_access_token == "jwt-fwd"
+
+
+def test_user_access_token_non_string_ignored():
+    payload = {
+        "messages": [{"role": "user", "content": "q"}],
+        "forwardedProps": {"userAccessToken": {"token": "x"}},
+    }
+    assert parse_run_input(payload).user_access_token is None
+
+
+def test_user_access_token_blank_ignored():
+    payload = {
+        "messages": [{"role": "user", "content": "q"}],
+        "forwardedProps": {"userAccessToken": "   "},
+    }
+    assert parse_run_input(payload).user_access_token is None
+
+
+def test_user_access_token_does_not_affect_other_fields():
+    """additive 보장 — 토큰 유무가 기존 파싱 결과를 바꾸지 않는다."""
+    base = {
+        "threadId": "t1",
+        "runId": "r1",
+        "messages": [{"role": "user", "content": "질문"}],
+        "forwardedProps": {"actorId": "u-1", "sessionId": "s-1"},
+    }
+    with_token = {
+        **base,
+        "forwardedProps": {**base["forwardedProps"], "userAccessToken": "jwt"},
+    }
+    a, b = parse_run_input(base), parse_run_input(with_token)
+    assert (a.question, a.thread_id, a.run_id, a.session_id, a.actor_id) == (
+        b.question,
+        b.thread_id,
+        b.run_id,
+        b.session_id,
+        b.actor_id,
+    )
+    assert a.user_access_token is None
+    assert b.user_access_token == "jwt"

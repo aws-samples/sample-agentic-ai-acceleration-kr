@@ -145,7 +145,8 @@ async def _fresh_orchestration(
     """신규 질의 처리. interrupt 발생 시 실행 세션을 캐시에 살려둔다."""
     translator = StreamTranslator(SequentialIdFactory(req.run_id))
     # 도구 평면 모드(direct/gateway)를 추상화한 클라이언트 묶음.
-    tool_clients = create_tool_clients(settings)
+    # 사용자 AccessToken 이 전달되면 gateway 모드에서 OBO(사용자 위임)로 호출한다.
+    tool_clients = create_tool_clients(settings, user_access_token=req.user_access_token)
     session_manager = create_session_manager(
         settings.memory_id, req.actor_id, req.session_id, settings.region
     )

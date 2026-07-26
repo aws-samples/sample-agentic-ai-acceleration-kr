@@ -10,8 +10,10 @@
   (USER_PASSWORD_AUTH)으로 AccessToken 을 받아 `Authorization: Bearer` 헤더로 전달한다.
   클라이언트 1개에서 도구를 받아 이름 suffix 로 sql/semantic 을 분류한다.
 
-  ⚠️ gateway 모드 인증은 orchestrator 의 **서비스 계정 위임**(M3 범위)이다. 사용자별 JWT
-  전파(On-Behalf-Of)는 M4+ 로 미룬다.
+  gateway 모드 인증은 기본적으로 orchestrator 의 **서비스 계정 위임**(M3 범위)이다.
+  M4 additive: 호출자가 사용자 AccessToken(`forwardedProps.userAccessToken`)을 넘기면
+  그 토큰을 Bearer 로 사용해 **사용자 위임(On-Behalf-Of)** 으로 동작한다 — Cedar 가
+  실제 사용자 그룹으로 인가를 평가한다. 토큰 값은 로깅하지 않는다.
 
 순수 로직(URL 조립·도구 분류·토큰 캐시)은 단위 테스트로 커버하고, 실제 SDK/AWS 호출은
 통합 시점에만 수행한다. SDK/boto3 의존성은 함수 내부에서 지연 임포트한다.
@@ -214,13 +216,18 @@ class ToolClients:
         return _filter_by_suffix(tools, "search_schema") if self._gateway else tools
 
 
-def create_tool_clients(settings: Any) -> ToolClients:
+def create_tool_clients(settings: Any, user_access_token: str | None = None) -> ToolClients:
     """설정에 따라 direct 2-클라이언트 또는 gateway 1-클라이언트 묶음을 생성한다.
 
     require_mcp_arns() 로 필수 env 가 검증된 뒤 호출되는 것을 전제로 한다.
+
+    `user_access_token` (M4 additive): gateway 모드에서 값이 있으면 M2M 서비스 토큰 대신
+    이 사용자 토큰을 Bearer 로 사용한다(On-Behalf-Of). 없으면 기존 서비스 계정 위임 그대로.
+    direct 모드에서는 무시된다(SigV4 경로).
     """
     if settings.is_gateway_mode():
-        token = fetch_cognito_token(settings)
+        # 사용자 토큰이 오면 OBO, 아니면 서비스 계정(M2M) 위임 — 토큰 값은 로깅하지 않는다.
+        token = user_access_token or fetch_cognito_token(settings)
         client = create_gateway_mcp_client(settings.gateway_url, token)
         return ToolClients(sql_client=client, semantic_client=client, gateway=True)
 

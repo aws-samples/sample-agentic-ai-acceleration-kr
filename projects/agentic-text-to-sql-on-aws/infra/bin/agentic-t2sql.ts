@@ -6,6 +6,7 @@ import { AgenticT2SqlSemanticStack } from '../lib/semantic-stack';
 import { AgenticT2SqlRuntimeStack } from '../lib/runtime-stack';
 import { AgenticT2SqlGatewayStack } from '../lib/gateway-stack';
 import { AgenticT2SqlUiStack } from '../lib/ui-stack';
+import { AgenticT2SqlAdminStack } from '../lib/admin-stack';
 
 const app = new App();
 const config = loadConfig(app);
@@ -47,13 +48,15 @@ const runtime = new AgenticT2SqlRuntimeStack(app, 'AgenticT2SqlRuntimeStack', {
   ecrOrchestrator: base.ecrOrchestrator,
   ecrSqlMcp: base.ecrSqlMcp,
   ecrSemanticMcp: base.ecrSemanticMcp,
+  ecrAdminMcp: base.ecrAdminMcp,
   orchestratorRole: base.orchestratorRole,
   sqlMcpRole: base.sqlMcpRole,
   semanticMcpRole: base.semanticMcpRole,
+  adminMcpRole: base.adminMcpRole,
   vpc: base.vpc,
   graphSecurityGroup: semantic.graphSecurityGroup,
   graphEndpoint: semantic.graphEndpoint,
-  description: 'Agentic Text-to-SQL — AgentCore Runtimes (orchestrator + 2 MCP servers)',
+  description: 'Agentic Text-to-SQL — AgentCore Runtimes (orchestrator + 3 MCP servers)',
 });
 runtime.addStackDependency(semantic);
 
@@ -68,7 +71,8 @@ const gateway = new AgenticT2SqlGatewayStack(app, 'AgenticT2SqlGatewayStack', {
   sqlMcpRole: base.sqlMcpRole,
   sqlMcpRuntime: runtime.sqlMcpRuntime,
   semanticMcpRuntime: runtime.semanticMcpRuntime,
-  description: 'Agentic Text-to-SQL — Gateway·Cedar·Identity (M3 tool plane)',
+  adminMcpRuntime: runtime.adminMcpRuntime,
+  description: 'Agentic Text-to-SQL — Gateway·Cedar·Identity (M3 tool plane + M4 admin target)',
 });
 gateway.addStackDependency(runtime);
 
@@ -83,5 +87,22 @@ const ui = new AgenticT2SqlUiStack(app, 'AgenticT2SqlUiStack', {
   description: 'Agentic Text-to-SQL — UI (ECS Fargate + public ALB)',
 });
 ui.addStackDependency(runtime);
+
+// 5) Admin 스택: admin panel(Next.js) ECS Fargate + 전용 ALB (M4).
+//    base(VPC·ECR·Cognito·task role) + gateway(gatewayUrl·policyEngineId) 참조 →
+//    gateway 이후 배포(admin→gateway 단방향, 역참조 없음 → 사이클 없음).
+const admin = new AgenticT2SqlAdminStack(app, 'AgenticT2SqlAdminStack', {
+  env,
+  config,
+  vpc: base.vpc,
+  ecrAdminWeb: base.ecrAdminWeb,
+  adminWebTaskRole: base.adminWebTaskRole,
+  userPool: base.userPool,
+  m2mClient: base.m2mClient,
+  gateway: gateway.gateway,
+  policyEngine: gateway.policyEngine,
+  description: 'Agentic Text-to-SQL — Admin panel (ECS Fargate + public ALB, M4)',
+});
+admin.addStackDependency(gateway);
 
 app.synth();

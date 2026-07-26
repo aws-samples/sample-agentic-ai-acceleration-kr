@@ -6,17 +6,23 @@ Amazon Bedrock AgentCore 기반의 agentic Text-to-SQL 솔루션입니다. 사�
 
 > ⚠️ **데모/샘플 목적 전용입니다.** 이 코드는 학습과 참조를 위한 것으로, 프로덕션 사용 전에는 인증 강제(현재 미강제), HTTPS/TLS, 최소 권한 재점검, 비용·용량 재산정이 필요합니다. 실제 데이터·자격증명으로 실행할 때 유의하세요.
 
-## 구현 범위 (M3)
+## 구현 범위 (M4)
 
-이 저장소의 현재 상태는 **M3 — Tool/보안 완성**입니다. AgentCore Gateway가 유일한 도구 평면이고(Cognito JWT 인바운드 + Cedar 정책 ENFORCE), 데이터 소스는 Aurora PostgreSQL + Redshift Serverless 2종이며, READ-ONLY 4중 방어가 완성돼 있습니다. M4~M5는 로드맵입니다.
+이 저장소의 현재 상태는 **M4 — Admin panel**입니다. Manager/Admin 페르소나가 admin panel에서 semantic 지식을 큐레이션·승인하고, 그 쓰기 경로가 **사용자 JWT On-Behalf-Of → Gateway MCP → datasource-admin-mcp**로 흐르며 Cedar가 도구 단위로 인가합니다. M5는 로드맵입니다.
 
 | 마일스톤 | 범위 | 상태 |
 |---|---|---|
 | **M1** | 코어 파이프라인 E2E (CDK 인프라 · Aurora 샘플 데이터 · OpenSearch 최소형 · AG-UI 통합) | ✅ 구현 |
 | **M2** | Semantic layer 완성(Neptune·DynamoDB·Streams 동기화) + clarification(interrupt 재요청) | ✅ 구현 |
 | **M3** | Tool/보안 완성 (Gateway · Identity · Cedar policy · Redshift 소스 · 가드레일) | ✅ 구현 |
-| M4 | Admin panel (데이터소스 등록 · semantic 큐레이션 · 권한 · 디버깅) | 🗺️ 로드맵 |
+| **M4** | Admin panel (데이터소스 등록 · semantic 큐레이션·승인 큐 · 권한 · 디버깅 · 사용자 JWT OBO) | ✅ 구현 |
 | M5 | 개선 파이프라인 (Track A: 평가→insight→bundle→A/B, Track B: semantic 지식 채굴) | 🗺️ 로드맵 |
+
+**M4에서 추가된 것**
+- **Admin panel** (`admin/`, ECS Fargate + 전용 ALB): Cognito 로그인(USER_PASSWORD_AUTH) → `aws-jwt-verify` 검증 → `cognito:groups`로 화면·API 인가(Manager/Admin 분리, `iam/*`는 Admin 전용). 화면: semantic 큐레이션 · **승인 큐(candidate → publish)** · 데이터소스 등록/테스트/스키마 크롤 · Cognito 사용자·그룹 관리 + Cedar 정책 read-only 뷰 · 메트릭 요약/세션 트레이스 탐색기.
+- **datasource-admin-mcp** (`agents/datasource-admin-mcp/`, Runtime 호스팅 → Gateway 3번째 MCP target): semantic CRUD·publish/unpublish(`SemanticRepository` 재사용 — DynamoDB 단일 쓰기 유지), 데이터소스 등록(Secrets Manager `agentic-t2sql/datasource/*`)·연결 테스트·`information_schema` 크롤(candidate 적재).
+- **사용자별 JWT On-Behalf-Of (M3 이월 부채 해소)**: admin panel API가 사용자의 AccessToken을 **그대로** Gateway MCP에 전달해 Cedar가 실제 사용자 그룹으로 인가합니다. orchestrator도 `forwardedProps.userAccessToken`(additive)이 오면 gateway 모드에서 서비스 계정 대신 사용자 토큰으로 도구를 호출합니다(없으면 기존 서비스 계정 위임 — 현 UI는 로그인 미구현이라 이 경로가 기본).
+- **Cedar action 스코프 2-phase**: 광역 permit으로 gateway를 먼저 배포(phase 1, target 도구 동기화 게이트 통과) 후 `scripts/deploy.sh gateway-scoped`(phase 2)로 일반 사용자를 `run_sql`/`search_schema`만 허용하도록 좁힙니다 — admin 도구는 default-deny로 차단되고(Cedar가 tools/list에서 제외) Manager/Admin만 사용할 수 있습니다.
 
 **M3에서 추가된 것**
 - **AgentCore Gateway 단일 도구 평면**: 두 MCP 서버(Runtime 호스팅)를 Gateway MCP target으로 등록(아웃바운드 SigV4). semantic tool search 기본 활성. orchestrator는 `TOOL_PLANE_MODE=gateway`로 Gateway를 경유합니다(직접 연결 `direct`는 폴백).
@@ -72,21 +78,24 @@ Amazon Bedrock AgentCore 기반의 agentic Text-to-SQL 솔루션입니다. 사�
 
 ```
 agentic-text-to-sql-on-aws/
-├── infra/                         # CDK (TypeScript) — 5개 스택
-│   ├── bin/agentic-t2sql.ts       # 앱 진입점 (base → semantic → runtime → gateway → ui)
+├── infra/                         # CDK (TypeScript) — 6개 스택
+│   ├── bin/agentic-t2sql.ts       # 앱 진입점 (base → semantic → runtime → gateway → ui/admin)
 │   └── lib/
 │       ├── base-stack.ts          # VPC/Aurora/Redshift Serverless/OpenSearch/ECR/Cognito/Memory/IAM
 │       ├── semantic-stack.ts      # DynamoDB/Neptune Serverless/OSIS/graph-sync Lambda (M2)
-│       ├── runtime-stack.ts       # AgentCore Runtime × 3 (orchestrator + MCP 2)
-│       ├── gateway-stack.ts       # AgentCore Gateway + MCP target 2 + Cedar PolicyEngine (M3)
+│       ├── runtime-stack.ts       # AgentCore Runtime × 4 (orchestrator + MCP 3)
+│       ├── gateway-stack.ts       # AgentCore Gateway + MCP target 3 + Cedar PolicyEngine (M3·M4)
 │       ├── ui-stack.ts            # ECS Fargate + 퍼블릭 ALB
+│       ├── admin-stack.ts         # admin panel — ECS Fargate + 전용 ALB (M4)
 │       └── config.ts              # cdk.json context 기반 공통 설정
 ├── agents/
 │   ├── orchestrator/              # Strands Graph 오케스트레이터 (AG-UI, 포트 8080, clarification 포함)
 │   ├── sql-execution-mcp/         # SQL 검증(SQLGlot AST)·실행(Data API) MCP (포트 8000)
-│   └── semantic-retrieval-mcp/    # 스키마+용어+few-shot hybrid 검색 · Neptune join-path MCP (포트 8000)
+│   ├── semantic-retrieval-mcp/    # 스키마+용어+few-shot hybrid 검색 · Neptune join-path MCP (포트 8000)
+│   └── datasource-admin-mcp/      # semantic 큐레이션·승인 + 데이터소스 관리 MCP (M4, Manager/Admin 전용)
 ├── semantic-layer/                # DynamoDB CRUD·버전 관리 · seed · Streams→Neptune Lambda (M2, uv)
 ├── ui/                            # Next.js + CopilotKit (AG-UI 프록시 · clarification 폼)
+├── admin/                         # admin panel — Next.js web + API (M4, Cognito 인증·JWT OBO)
 ├── sample-data/                   # 결정적 샘플 데이터 생성기 + seed/인덱싱 스크립트 (uv)
 ├── scripts/                       # 배포·seed·E2E·cleanup 스크립트
 ├── docs/                          # 아키텍처 리뷰 다이어그램 · WA 체크리스트 · 인터페이스 기록
@@ -145,16 +154,31 @@ scripts/build-and-push.sh ui
 scripts/deploy.sh ui
 #    → infra/ui-outputs.json 생성 (AlbUrl 출력)
 
-# 8) E2E 스모크 테스트 (레벨1~5: MCP · orchestrator SSE · UI · clarification · Gateway/Cedar/Redshift)
-#    레벨5는 Cognito 테스트 사용자(e2e-user/e2e-denied + Denied 그룹)와
-#    agentic-t2sql/e2e/user-password 시크릿이 필요합니다.
+# 8) [M4] datasource-admin-mcp 이미지 push → runtime 재배포(admin runtime 추가) →
+#    gateway 재배포(admin target 추가) → Cedar phase 2(action 스코프) → admin panel 배포
+scripts/build-and-push.sh datasource-admin-mcp
+scripts/deploy.sh runtime
+scripts/deploy.sh gateway          # phase 1: admin target 등록 (광역 permit 유지)
+scripts/deploy.sh gateway-scoped   # phase 2: 일반 사용자 run_sql/search_schema 만 허용
+scripts/build-and-push.sh admin-web
+scripts/deploy.sh admin
+#    → infra/admin-outputs.json 생성 (AdminAlbUrl 출력)
+
+# 9) E2E 스모크 테스트 (레벨1~6: MCP · orchestrator SSE · UI · clarification ·
+#    Gateway/Cedar/Redshift · admin panel 큐레이션·승인·OBO)
+#    레벨5~6은 Cognito 테스트 사용자가 필요합니다 — 아래 스크립트가 멱등 생성합니다
+#    (e2e-user / e2e-denied(Denied) / e2e-manager(Manager), 비밀번호는
+#     agentic-t2sql/e2e/user-password 시크릿).
+scripts/create-e2e-users.sh
 scripts/e2e-smoke.sh
 ```
 
 > ⚠️ **Aurora 엔진 버전 주의**: us-west-2는 특정 시점에 `aurora-postgresql` 16.6을 제공하지 않을 수 있습니다(가용 버전 예: 16.8/16.9/16.10/16.11/16.13/17.x). 배포 실패 시 `aws rds describe-db-engine-versions --engine aurora-postgresql --region us-west-2`로 가용 버전을 확인하고 `infra/lib/base-stack.ts`의 `AuroraPostgresEngineVersion`을 조정하세요.
 
 각 컴포넌트의 로컬 개발·테스트 방법은 해당 디렉토리 README를 참고하세요
-([orchestrator](./agents/orchestrator/README.md) · [sql-execution-mcp](./agents/sql-execution-mcp/README.md) · [semantic-retrieval-mcp](./agents/semantic-retrieval-mcp/README.md) · [sample-data](./sample-data/README.md) · [ui](./ui/README.md)).
+([orchestrator](./agents/orchestrator/README.md) · [sql-execution-mcp](./agents/sql-execution-mcp/README.md) · [semantic-retrieval-mcp](./agents/semantic-retrieval-mcp/README.md) · [datasource-admin-mcp](./agents/datasource-admin-mcp/README.md) · [sample-data](./sample-data/README.md) · [ui](./ui/README.md) · [admin](./admin/README.md)).
+
+**admin panel 사용**: `infra/admin-outputs.json`의 `AdminAlbUrl`로 접속해 Manager 또는 Admin 그룹 사용자로 로그인합니다(데모용 계정은 `scripts/create-e2e-users.sh`가 만드는 `e2e-manager@example.com`). 용어를 candidate로 등록 → 승인 큐에서 publish → 수 초 내 OpenSearch/Neptune에 전파되어 에이전트 질의에 반영됩니다.
 
 ## 보안 참고 사항
 
@@ -167,22 +191,23 @@ scripts/e2e-smoke.sh
 - **시크릿 관리**: DB 자격증명은 AWS Secrets Manager에만 저장하고 LLM 컨텍스트에 노출하지 않습니다. 저장소에는 `.env.example`(placeholder)만 커밋하며 실물 `.env`는 `.gitignore`로 제외됩니다.
 - **거부 쿼리 감사 로깅**: AST validator가 거부한 SQL은 전수 로깅됩니다.
 - **M1의 한계 (프로덕션 전 보완 필요)**:
-  - ALB가 **HTTP**로 노출됩니다. 프로덕션은 ACM 인증서 + HTTPS(TLS) 리스너로 전환하세요.
-  - **인증이 강제되지 않습니다.** UI 프록시(`/api/copilotkit`)에 Cognito JWT 검증 훅 자리만 마련돼 있으며, 사용자 신원 전파·row-level 정책은 M3 범위입니다.
-  - Cognito user pool·그룹(Admin/Manager)은 프로비저닝만 되어 있고 admin panel(M4)에서 활용됩니다.
+  - ALB가 **HTTP**로 노출됩니다(UI·admin panel 모두). 프로덕션은 ACM 인증서 + HTTPS(TLS) 리스너로 전환하세요.
+  - **채팅 UI는 인증이 강제되지 않습니다.** UI 프록시(`/api/copilotkit`)에 Cognito JWT 검증 훅 자리만 마련돼 있습니다. admin panel(M4)은 Cognito 로그인 + JWT 검증 + 그룹 인가가 강제되며, 사용자 토큰이 Gateway MCP까지 OBO로 전파됩니다. orchestrator 경로의 사용자 토큰 전파는 additive로 구현돼 있으나(`forwardedProps.userAccessToken`) UI 로그인이 없어 기본은 서비스 계정 위임입니다.
+  - 승인 큐는 반려(reject) 시 별도 상태 없이 candidate로 유지됩니다(Track B 수확 파이프라인은 M5 범위).
 
 ## 리소스 정리 (cleanup)
 
 배포된 리소스(Aurora·OpenSearch·NAT GW·ALB·ECR·Runtime 등)는 시간당 과금됩니다. 사용 후 정리하세요.
 
 ```bash
-# 전체 스택 삭제 (역순: UI → Runtime → Base). 확인 프롬프트 후 진행.
+# 전체 스택 삭제 (역순: Admin → UI → Gateway → Runtime → Semantic → Base). 확인 프롬프트 후 진행.
 scripts/cleanup.sh
 #    CI 등 비대화형에서는: scripts/cleanup.sh --yes
 ```
 
 - ECR 리포지토리는 `emptyOnDelete`로 이미지째 삭제됩니다.
-- **CloudWatch 로그 그룹은 수동 삭제가 필요합니다**: `/aws/bedrock-agentcore/runtimes/agentic_t2sql_*`, ECS 태스크 로그 그룹(`AgenticT2SqlUiStack-TaskDef*`). 보존 정책에 따라 남을 수 있으니 필요 시 콘솔/CLI로 삭제하세요.
+- 스택 밖에서 생성된 시크릿(E2E 비밀번호, admin panel이 등록한 `agentic-t2sql/datasource/*`)도 cleanup 스크립트가 함께 삭제합니다.
+- **CloudWatch 로그 그룹은 수동 삭제가 필요합니다**: `/aws/bedrock-agentcore/runtimes/agentic_t2sql_*`, ECS 태스크 로그 그룹(`AgenticT2SqlUiStack-TaskDef*`, `AgenticT2SqlAdminStack-TaskDef*`). 보존 정책에 따라 남을 수 있으니 필요 시 콘솔/CLI로 삭제하세요.
 - 삭제 후 `aws cloudformation list-stacks --region us-west-2`로 `AgenticT2Sql*` 스택이 모두 `DELETE_COMPLETE`인지 확인하세요.
 
 ## 월 예상 비용
@@ -194,10 +219,13 @@ us-west-2 기준, 상시 가동 가정의 대략적 추정입니다(실제는 �
 | NAT Gateway | 1개 | ~$32 + 데이터 처리 |
 | OpenSearch (관리형) | t3.small.search × 1 + 10GB gp3 | ~$27 |
 | Aurora Serverless v2 | 0.5~2 ACU (유휴 시 스케일다운) | ~$43 (최소 상시) |
-| ECS Fargate (UI) | 0.25 vCPU / 0.5GB × 1 | ~$9 |
-| Application Load Balancer | 1개 | ~$16 + LCU |
-| AgentCore Runtime × 3 | consumption 기반 (호출량 비례) | 유휴 시 거의 $0 |
-| **합계** | | **~$130–150/월** (유휴 최적화 시 더 낮음) |
+| Redshift Serverless | 4 RPU (사용량 기반) | 유휴 시 거의 $0 |
+| Neptune Serverless | 1~2.5 NCU | ~$90 (최소 상시) |
+| OSIS 파이프라인 | 1 OCU | ~$175 |
+| ECS Fargate (UI + admin) | 0.25/0.5 vCPU × 2 서비스 | ~$27 |
+| Application Load Balancer | 2개 (UI·admin) | ~$32 + LCU |
+| AgentCore Runtime × 4 | consumption 기반 (호출량 비례) | 유휴 시 거의 $0 |
+| **합계** | | **~$430–470/월** (유휴 최적화 시 더 낮음) |
 
 > 비용을 최소화하려면 사용하지 않을 때 `scripts/cleanup.sh`로 정리하세요. Aurora Serverless v2와 AgentCore Runtime은 유휴 시 비용이 크게 낮아집니다.
 

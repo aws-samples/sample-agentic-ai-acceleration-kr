@@ -42,7 +42,9 @@ META_FIELDS = frozenset(
     {"pk", "sk", "entity_type", "entity_id", "status", "version", "updated_at", "updated_by"}
 )
 
-VALID_ENTITY_TYPES = frozenset({"term", "fewshot", "table", "column", "join"})
+# M4 additive: "datasource" — admin panel 이 등록한 데이터소스 연결 메타(자격증명 제외).
+# graph_sync 는 미지원 타입에 빈 statement 를 반환하므로 그래프 동기화에 영향이 없다.
+VALID_ENTITY_TYPES = frozenset({"term", "fewshot", "table", "column", "join", "datasource"})
 VALID_STATUSES = frozenset({"candidate", "published"})
 
 

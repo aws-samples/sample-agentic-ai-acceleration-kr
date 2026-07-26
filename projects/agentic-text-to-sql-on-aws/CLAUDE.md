@@ -37,7 +37,13 @@ Amazon Bedrock AgentCore 기반 agentic Text-to-SQL 솔루션. **설계는 합�
       Gateway 스택(Gateway+MCP target 2+Cedar PolicyEngine ENFORCE), Redshift Serverless(Base),
       orchestrator 는 TOOL_PLANE_MODE=gateway 전환(Cognito M2M 서비스 계정 위임).
       사용자별 JWT On-Behalf-Of 전파는 M4+ 로 이월.
-- [ ] M4: Admin panel
+- [x] M4: Admin panel — **배포·E2E 35체크(레벨1~6) 검증 완료** (2026-07-27).
+      admin/(Next.js, Cognito 인증·그룹 인가) + agents/datasource-admin-mcp(도구 8종, Gateway
+      3번째 target) + Admin 스택(Fargate+전용 ALB). semantic 쓰기는 사용자 JWT OBO → Gateway
+      MCP → admin-mcp 단일 경로(Cedar 인가·DynamoDB 단일 쓰기). Cedar 2-phase
+      (`deploy.sh gateway` → `gateway-scoped`)로 일반 User 는 run_sql/search_schema 만 허용.
+      orchestrator 는 forwardedProps.userAccessToken additive OBO(기본은 서비스 계정 —
+      채팅 UI 에 로그인 없음, 알려진 한계). 접점 계약: docs/m2-m3-interface-contract.md §8
 - [ ] M5: 개선 파이프라인 (Track A + Track B)
 - 향후: `demo/` Jupyter notebook 실습 구조 (ARCHITECTURE.md §10)
 
@@ -105,6 +111,24 @@ Amazon Bedrock AgentCore 기반 agentic Text-to-SQL 솔루션. **설계는 합�
   Data API 만 쓰면 NAT 없는 전용 isolated VPC 로 충분.
 - Gateway 도구명은 `<TargetName>___<tool>` 프리픽스 — 클라이언트는 suffix 매칭으로 분류.
 - docker keychain 오류(`already exists in the keychain`) 시 `docker logout <registry>` 후 재로그인.
+
+## M4 실전 학습 사항 (M5 작업 시 참고)
+
+- **IAM role `description` 은 Latin-1 만 허용** — 한국어 넣으면 배포 실패
+  ("Member must satisfy regular expression pattern"). Cognito 그룹·CfnOutput·AgentCore
+  Runtime/GatewayTarget description 은 한국어 OK (IAM 만 제약).
+- **GatewayTarget 생성은 Gateway 서비스가 그 자리에서 MCP 서버에 접속해 도구를 fetch** —
+  gateway role 의 InvokeAgentRuntime 정책이 target 보다 먼저 적용돼야 한다.
+  `addToPrincipalPolicy(...).policyDependable` 에 target 의존을 걸 것
+  (안 걸면 "Authorization error when sending message" NotStabilized — 배포 실측).
+- **Cedar 는 미인가 도구를 tools/list 에서 아예 제외한다** — E2E 거부 검증은 "미노출"이
+  1차 증거. 도구 호출 응답 텍스트 키워드 매칭("denied" 등)으로 판정할 때는 테스트 페이로드에
+  판정 키워드를 넣지 말 것(에코백 오탐 PASS — M4 실측). `status=="ok"` 면 무조건 거부 실패로
+  우선 판정해야 한다.
+- Cedar 2-phase 는 config context(`cedarActionScoping`) 분기 + **정책 논리 ID 동일 유지**
+  (statement 만 CFN update)로 깔끔하게 동작 확인. phase 2 는 admin target 도구 동기화 후에만.
+- semantic-layer 를 경로 의존성으로 쓰는 이미지는 빌드 컨텍스트가 레포 루트 —
+  Dockerfile 에서 builder/runtime **동일 경로 유지**(venv 절대경로) + 루트 `.dockerignore` 필수.
 
 ## 에이전트 팀 운영 규칙
 

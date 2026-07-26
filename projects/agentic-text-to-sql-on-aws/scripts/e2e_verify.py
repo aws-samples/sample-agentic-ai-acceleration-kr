@@ -16,12 +16,23 @@
   - run_sql(datasource="redshift") 정상 실행 + DELETE 거부
   전제: gateway-outputs.json + Cognito 테스트 사용자(E2E_USER/E2E_DENIED_USER env 또는
   기본 e2e-user@example.com / e2e-denied@example.com, 비밀번호는 E2E_USER_PASSWORD env).
+레벨 6 (M4 admin panel / 큐레이션·승인 / 사용자 JWT OBO):
+  - admin ALB `/` 200/3xx + `/api/health` 200
+  - POST /api/auth/login(e2e-manager) → accessToken, 미인증 401, 일반 사용자 403
+  - Manager 토큰으로 Gateway MCP: datasource-admin-mcp 도구 노출 → put_entity(term,
+    candidate) → list_entities(status=candidate) 포함 → publish_entity → published
+  - published term 이 search_schema 에 전파(OSIS 지연 감안 최대 90초 폴링)
+  - Cedar: 일반 사용자 admin 도구 거부 + run_sql/search_schema 는 여전히 허용(회귀)
+  - 정리: 생성한 e2e term 을 unpublish (실패 시 경고만)
+  전제: admin-outputs.json(AgenticT2SqlAdminStack.AdminAlbUrl) + gateway/base outputs +
+  E2E 사용자(scripts/create-e2e-users.sh 로 생성, e2e-manager@example.com 포함).
 
 실행:
   python scripts/e2e_verify.py --level 1        # MCP 레벨만
   python scripts/e2e_verify.py --level 2        # 에이전트 레벨만
   python scripts/e2e_verify.py --level 4        # M2 clarification/semantic 만
   python scripts/e2e_verify.py --level 5        # M3 Gateway/Cedar/Redshift 만
+  python scripts/e2e_verify.py --level 6        # M4 admin panel/큐레이션/OBO 만
   python scripts/e2e_verify.py --level all      # 전부(기본)
 
 ARN 은 runtime-outputs.json(AgenticT2SqlRuntimeStack) 에서 읽거나 인자로 준다.
@@ -494,6 +505,28 @@ def _find_tool(names: list[str], suffix: str) -> str | None:
     return None
 
 
+def _e2e_password(level_label: str) -> str:
+    """E2E 테스트 사용자 공용 비밀번호를 확보(평문 미출력).
+
+    env `E2E_USER_PASSWORD` 우선, 없으면 Secrets Manager 시크릿에서 읽는다.
+    실패 시 빈 문자열을 반환하고 skip 안내만 출력한다.
+    """
+    password = os.environ.get("E2E_USER_PASSWORD", "")
+    if password:
+        return password
+    # 권장 경로: 시크릿 ARN/이름만 받아 스크립트 내부에서 해석(플레인텍스트 비노출).
+    secret_id = os.environ.get("E2E_USER_PASSWORD_SECRET", "agentic-t2sql/e2e/user-password")
+    try:
+        import boto3
+
+        return boto3.client("secretsmanager", region_name=REGION).get_secret_value(
+            SecretId=secret_id
+        )["SecretString"]
+    except Exception as exc:  # noqa: BLE001
+        print(_red(f"E2E 비밀번호 시크릿({secret_id}) 로드 실패({exc}) — {level_label} skip"))
+        return ""
+
+
 async def verify_gateway(ctx: dict[str, str], checks: Checks) -> None:
     """Gateway 집약 + Cedar 허용/거부 + Redshift datasource E2E."""
     print("\n[레벨5] Gateway / Cedar / Redshift")
@@ -505,21 +538,9 @@ async def verify_gateway(ctx: dict[str, str], checks: Checks) -> None:
 
     user = os.environ.get("E2E_USER", "e2e-user@example.com")
     denied_user = os.environ.get("E2E_DENIED_USER", "e2e-denied@example.com")
-    password = os.environ.get("E2E_USER_PASSWORD", "")
+    password = _e2e_password("레벨5")
     if not password:
-        # 권장 경로: 시크릿 ARN/이름만 받아 스크립트 내부에서 해석(플레인텍스트 비노출).
-        secret_id = os.environ.get(
-            "E2E_USER_PASSWORD_SECRET", "agentic-t2sql/e2e/user-password"
-        )
-        try:
-            import boto3
-
-            password = boto3.client("secretsmanager", region_name=REGION).get_secret_value(
-                SecretId=secret_id
-            )["SecretString"]
-        except Exception as exc:  # noqa: BLE001
-            print(_red(f"E2E 비밀번호 시크릿({secret_id}) 로드 실패({exc}) — 레벨5 skip"))
-            return
+        return
 
     # ── 일반 사용자: tools/list 집약 + run_sql(aurora/redshift) + DELETE 거부 ──
     token = _cognito_token(client_id, user, password)
@@ -596,10 +617,374 @@ async def verify_gateway(ctx: dict[str, str], checks: Checks) -> None:
     await _with_gateway_session(gateway_url, denied_token, work_denied)
 
 
+# ───────────────────── 레벨 6: M4 admin panel / 큐레이션 / OBO ─────────────────────
+ADMIN_OUTPUTS = ROOT / "infra" / "admin-outputs.json"
+
+# OSIS(DynamoDB Streams → OpenSearch) 전파 지연을 감안한 폴링 상한(초)과 간격(초).
+PROPAGATION_TIMEOUT_SECONDS = 90
+PROPAGATION_INTERVAL_SECONDS = 5
+
+
+def _load_admin_ctx() -> dict[str, str]:
+    """admin/gateway/base outputs 에서 레벨6 검증에 필요한 값을 읽는다."""
+    ctx: dict[str, str] = {}
+    if ADMIN_OUTPUTS.exists():
+        admin = json.loads(ADMIN_OUTPUTS.read_text()).get("AgenticT2SqlAdminStack", {})
+        ctx["admin_url"] = (admin.get("AdminAlbUrl", "") or "").rstrip("/")
+    ctx.update(_load_gateway_ctx())
+    return ctx
+
+
+def _http_request(
+    url: str,
+    method: str = "GET",
+    token: str | None = None,
+    body: dict | None = None,
+    timeout: int = 30,
+) -> tuple[int, Any]:
+    """표준 라이브러리로 HTTP 호출 → (status_code, 파싱된 JSON 또는 원문).
+
+    4xx/5xx 도 예외 없이 상태 코드로 반환한다(401/403 검증에 필요).
+    연결 자체가 실패하면 (0, 오류문자열).
+    """
+    import urllib.error
+    import urllib.request
+
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method)
+    req.add_header("Accept", "application/json")
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — 내부 ALB URL
+            raw = resp.read().decode("utf-8", errors="replace")
+            status = resp.status
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        status = exc.code
+    except Exception as exc:  # noqa: BLE001 — 네트워크 실패도 체크 결과로 표현
+        return 0, str(exc)
+    try:
+        return status, json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return status, raw
+
+
+def _find_admin_tool(names: list[str], tool: str) -> str | None:
+    """admin target 프리픽스를 감안해 도구명을 정확히 찾는다.
+
+    `_find_tool` 의 단순 suffix 매칭은 `publish_entity` 가 `unpublish_entity` 에도
+    걸리므로, 여기서는 완전일치 또는 `___<tool>` 경계 일치만 인정한다.
+    """
+    for n in names:
+        if n == tool or n.endswith(f"___{tool}"):
+            return n
+    return None
+
+
+async def verify_admin_panel(ctx: dict[str, str], checks: Checks, password: str) -> None:
+    """M4: admin ALB 헬스 · 인증/인가 · Manager 큐레이션→승인→전파 · Cedar 회귀."""
+    print("\n[레벨6] admin panel / 큐레이션·승인 / Cedar OBO")
+    import uuid
+
+    admin_url = ctx.get("admin_url", "")
+    gateway_url = ctx.get("gateway_url", "")
+    client_id = ctx.get("m2m_client_id", "")
+    manager_user = os.environ.get("E2E_MANAGER_USER", "e2e-manager@example.com")
+    user = os.environ.get("E2E_USER", "e2e-user@example.com")
+
+    # ── (1) admin ALB 헬스 ──
+    if not admin_url:
+        print("    admin-outputs.json 의 AdminAlbUrl 없음 — ALB/API 체크 skip")
+    else:
+        code, _ = _http_request(f"{admin_url}/")
+        checks.check("admin ALB GET / → 200/3xx", 200 <= code < 400, f"HTTP {code}")
+        hcode, hbody = _http_request(f"{admin_url}/api/health")
+        checks.check(
+            "admin /api/health → 200", hcode == 200, f"HTTP {hcode}, body={str(hbody)[:80]}"
+        )
+
+    # ── (2) 로그인 · 미인증 401 · 일반 사용자 403 ──
+    manager_token = ""
+    if admin_url:
+        lcode, lbody = _http_request(
+            f"{admin_url}/api/auth/login",
+            method="POST",
+            body={"username": manager_user, "password": password},
+        )
+        if isinstance(lbody, dict):
+            manager_token = (
+                lbody.get("accessToken") or lbody.get("access_token") or ""
+            )
+        checks.check(
+            "POST /api/auth/login (e2e-manager) → accessToken 발급",
+            lcode == 200 and bool(manager_token),
+            f"HTTP {lcode}",  # 토큰 값은 출력하지 않는다.
+        )
+
+        acode, _ = _http_request(f"{admin_url}/api/semantic/entities")
+        checks.check("미인증 GET /api/semantic/entities → 401", acode == 401, f"HTTP {acode}")
+
+    # Manager 토큰을 admin API 에서 못 얻었으면 Cognito 직접 인증으로 폴백(MCP 체크 계속).
+    if not manager_token and client_id:
+        try:
+            manager_token = _cognito_token(client_id, manager_user, password)
+            print("    (admin API 로그인 대신 Cognito 직접 인증으로 Manager 토큰 확보)")
+        except Exception as exc:  # noqa: BLE001
+            print(_red(f"    Manager 토큰 확보 실패({exc}) — 레벨6 이후 체크 skip"))
+            return
+
+    user_token = ""
+    if client_id:
+        try:
+            user_token = _cognito_token(client_id, user, password)
+        except Exception as exc:  # noqa: BLE001
+            print(_red(f"    일반 사용자 토큰 실패({exc}) — 403/Cedar 체크 skip"))
+
+    if admin_url and user_token:
+        ucode, _ = _http_request(f"{admin_url}/api/semantic/entities", token=user_token)
+        checks.check(
+            "일반 사용자 토큰 GET /api/semantic/entities → 403",
+            ucode == 403,
+            f"HTTP {ucode}",
+        )
+
+    if not gateway_url or not manager_token:
+        print("    gateway URL/Manager 토큰 없음 — MCP 큐레이션 체크 skip")
+        return
+
+    # ── (3) Manager 토큰 Gateway MCP: put_entity(candidate) → list → publish ──
+    # 실행마다 고유 term (warm microVM·잔여 데이터로 인한 착시 방지).
+    term = f"e2e-term-{uuid.uuid4().hex[:8]}"
+    state: dict[str, Any] = {"published": False}
+
+    async def work_manager(session):
+        tools = await session.list_tools()
+        names = [t.name for t in tools.tools]
+        put_tool = _find_admin_tool(names, "put_entity")
+        list_tool = _find_admin_tool(names, "list_entities")
+        publish_tool = _find_admin_tool(names, "publish_entity")
+        checks.check(
+            "Manager tools/list 에 datasource-admin-mcp 도구 노출",
+            any("datasource-admin-mcp___" in n for n in names),
+            f"admin_tools={[n for n in names if 'datasource-admin-mcp___' in n]}",
+        )
+        if not (put_tool and list_tool and publish_tool):
+            checks.check(
+                "admin 도구(put/list/publish_entity) 확보",
+                False,
+                f"tools={names}",
+            )
+            return
+
+        payload = {
+            "term": term,
+            "definition": f"E2E 검증용 임시 용어({term}) — 최근 90일 순매출 합계",
+            "synonyms": ["E2E 순매출", "e2e net revenue"],
+            "sql_fragment": "SUM(o.amount) - SUM(COALESCE(o.refund_amount, 0))",
+        }
+        r = await session.call_tool(
+            put_tool,
+            {
+                "entity_type": "term",
+                "entity_id": term,
+                "payload": payload,
+                "status": "candidate",
+                "actor": "e2e-manager",
+            },
+        )
+        obj = _tool_payload_to_obj(r)
+        ok = isinstance(obj, dict) and obj.get("status") == "ok"
+        checks.check(
+            f"put_entity(term={term}, candidate) 성공 (사용자 JWT OBO)",
+            ok,
+            f"resp={str(obj)[:160]}",
+        )
+        if not ok:
+            return
+
+        r2 = await session.call_tool(list_tool, {"entity_type": "term", "status": "candidate"})
+        obj2 = _tool_payload_to_obj(r2)
+        entities = obj2.get("entities") if isinstance(obj2, dict) else []
+        ids = [e.get("entity_id") for e in entities or [] if isinstance(e, dict)]
+        checks.check(
+            "list_entities(status=candidate) 에 신규 term 포함",
+            term in ids,
+            f"n_candidates={len(ids)}",
+        )
+
+        r3 = await session.call_tool(
+            publish_tool, {"entity_type": "term", "entity_id": term, "actor": "e2e-manager"}
+        )
+        obj3 = _tool_payload_to_obj(r3)
+        entity = obj3.get("entity") if isinstance(obj3, dict) else None
+        published = isinstance(entity, dict) and entity.get("status") == "published"
+        state["published"] = published
+        checks.check(
+            "publish_entity → status=published",
+            published,
+            f"resp={str(obj3)[:160]}",
+        )
+
+    await _with_gateway_session(gateway_url, manager_token, work_manager)
+
+    # ── (4) OpenSearch 전파 폴링 → search_schema 히트 ──
+    if state["published"]:
+        await _verify_term_propagation(gateway_url, manager_token, term, checks)
+
+    # ── (5) Cedar: 일반 사용자는 admin 도구 거부, run_sql/search_schema 는 허용 ──
+    if user_token:
+        await _verify_cedar_admin_scope(gateway_url, user_token, checks)
+
+    # ── (6) 정리: 생성한 term unpublish (실패해도 경고만) ──
+    async def work_cleanup(session):
+        tools = await session.list_tools()
+        names = [t.name for t in tools.tools]
+        unpublish_tool = _find_admin_tool(names, "unpublish_entity")
+        if not unpublish_tool:
+            print("    (정리) unpublish_entity 도구 없음 — skip")
+            return
+        r = await session.call_tool(
+            unpublish_tool, {"entity_type": "term", "entity_id": term, "actor": "e2e-manager"}
+        )
+        print(f"    (정리) unpublish_entity({term}) → {str(_tool_payload_to_obj(r))[:100]}")
+
+    try:
+        await _with_gateway_session(gateway_url, manager_token, work_cleanup)
+    except Exception as exc:  # noqa: BLE001 — 정리는 실패해도 검증 결과에 영향 없음
+        print(_red(f"    (정리) unpublish 실패(경고): {str(exc)[:120]}"))
+
+
+async def _verify_term_propagation(
+    gateway_url: str, manager_token: str, term: str, checks: Checks
+) -> None:
+    """published term 이 OpenSearch 로 전파돼 search_schema 에 히트하는지 폴링 확인."""
+    deadline_attempts = max(1, PROPAGATION_TIMEOUT_SECONDS // PROPAGATION_INTERVAL_SECONDS)
+    hit = False
+    for attempt in range(deadline_attempts):
+
+        async def work(session):
+            tools = await session.list_tools()
+            names = [t.name for t in tools.tools]
+            search = _find_tool(names, "search_schema")
+            if not search:
+                return False
+            r = await session.call_tool(search, {"query": term, "top_k": 5})
+            obj = _tool_payload_to_obj(r)
+            results = obj.get("results") if isinstance(obj, dict) else []
+            for item in results or []:
+                if not isinstance(item, dict):
+                    continue
+                blob = json.dumps(item, ensure_ascii=False)
+                if term in blob:
+                    return True
+            return False
+
+        try:
+            hit = await _with_gateway_session(gateway_url, manager_token, work, attempts=1)
+        except Exception as exc:  # noqa: BLE001 — 폴링 중 일시 실패는 재시도
+            hit = False
+            if attempt == deadline_attempts - 1:
+                print(_red(f"    전파 폴링 마지막 시도 실패: {str(exc)[:120]}"))
+        if hit:
+            elapsed = attempt * PROPAGATION_INTERVAL_SECONDS
+            checks.check(
+                f"published term 이 search_schema 에 전파(≤{PROPAGATION_TIMEOUT_SECONDS}s)",
+                True,
+                f"약 {elapsed}s 후 히트",
+            )
+            return
+        if attempt < deadline_attempts - 1:
+            await asyncio.sleep(PROPAGATION_INTERVAL_SECONDS)
+    checks.check(
+        f"published term 이 search_schema 에 전파(≤{PROPAGATION_TIMEOUT_SECONDS}s)",
+        False,
+        f"term={term} 미히트 (OSIS 지연 또는 인덱싱 실패)",
+    )
+
+
+async def _verify_cedar_admin_scope(gateway_url: str, user_token: str, checks: Checks) -> None:
+    """일반 사용자: admin 도구는 거부, run_sql/search_schema 는 계속 허용(action 스코프 회귀)."""
+
+    async def work(session):
+        tools = await session.list_tools()
+        names = [t.name for t in tools.tools]
+        put_tool = _find_admin_tool(names, "put_entity")
+        if put_tool is None:
+            # 정책이 tools/list 에서 걸러내면 그 자체가 deny 증거(M3 Denied 패턴 재사용).
+            checks.check("Cedar: 일반 사용자에게 admin 도구 미노출/거부", True, "tools/list 미노출")
+        else:
+            try:
+                r = await session.call_tool(
+                    put_tool,
+                    {
+                        "entity_type": "term",
+                        "entity_id": "e2e-should-be-blocked",
+                        # ⚠️ payload 에 "denied"/"forbid" 같은 판정 키워드를 넣으면 에코백된
+                        #    응답 텍스트 매칭이 오탐 PASS 를 낸다(M4 배포 실측). 중립 값 사용.
+                        "payload": {"term": "e2e-blocked", "definition": "must not be written"},
+                        "status": "candidate",
+                    },
+                )
+                obj = _tool_payload_to_obj(r)
+                text = str(obj)
+                # 성공 응답(status=ok)은 무조건 거부 실패다 — 키워드 매칭보다 우선한다.
+                succeeded = isinstance(obj, dict) and obj.get("status") == "ok"
+                denied = not succeeded and (
+                    (isinstance(obj, dict) and obj.get("isError"))
+                    or getattr(r, "isError", False)
+                    or "denied" in text.lower()
+                    or "authoriz" in text.lower()
+                    or "forbid" in text.lower()
+                )
+                checks.check(
+                    "Cedar: 일반 사용자 admin 도구(put_entity) 거부",
+                    bool(denied),
+                    f"resp={text[:160]}",
+                )
+            except Exception as exc:  # noqa: BLE001 — 예외 거부도 PASS
+                checks.check(
+                    "Cedar: 일반 사용자 admin 도구(put_entity) 거부",
+                    True,
+                    f"예외={str(exc)[:120]}",
+                )
+
+        # action 스코프 회귀: 기존 허용 도구는 그대로 동작해야 한다.
+        run_sql = _find_tool(names, "run_sql")
+        if run_sql:
+            r2 = await session.call_tool(run_sql, {"sql": "SELECT 1"})
+            obj2 = _tool_payload_to_obj(r2)
+            checks.check(
+                "Cedar 회귀: 일반 사용자 run_sql(SELECT 1) 허용",
+                isinstance(obj2, dict) and obj2.get("status") == "ok",
+                f"resp={str(obj2)[:120]}",
+            )
+        else:
+            checks.check("Cedar 회귀: 일반 사용자 run_sql 허용", False, "run_sql 미노출")
+
+        search = _find_tool(names, "search_schema")
+        if search:
+            r3 = await session.call_tool(search, {"query": "지역별 매출", "top_k": 3})
+            obj3 = _tool_payload_to_obj(r3)
+            checks.check(
+                "Cedar 회귀: 일반 사용자 search_schema 허용",
+                isinstance(obj3, dict) and obj3.get("results") is not None,
+                f"resp={str(obj3)[:120]}",
+            )
+        else:
+            checks.check(
+                "Cedar 회귀: 일반 사용자 search_schema 허용", False, "search_schema 미노출"
+            )
+
+    await _with_gateway_session(gateway_url, user_token, work)
+
+
 # ─────────────────────────────── main ───────────────────────────────
 def main() -> int:
     parser = argparse.ArgumentParser(description="agentic Text-to-SQL E2E 검증기")
-    parser.add_argument("--level", choices=["1", "2", "4", "5", "all"], default="all")
+    parser.add_argument("--level", choices=["1", "2", "4", "5", "6", "all"], default="all")
     parser.add_argument("--orchestrator-arn")
     parser.add_argument("--sql-arn")
     parser.add_argument("--semantic-arn")
@@ -637,6 +1022,17 @@ def main() -> int:
             print("[레벨5] gateway-outputs.json 없음 — Gateway 미배포. skip.")
         else:
             asyncio.run(verify_gateway(ctx, checks))
+
+    if args.level in ("6", "all"):
+        actx = _load_admin_ctx()
+        if not ADMIN_OUTPUTS.exists() and not actx.get("gateway_url"):
+            print("[레벨6] admin-outputs.json / gateway-outputs.json 없음 — M4 미배포. skip.")
+        elif not ADMIN_OUTPUTS.exists():
+            print("[레벨6] admin-outputs.json 없음 — Admin 스택 미배포. skip.")
+        else:
+            password = _e2e_password("레벨6")
+            if password:
+                asyncio.run(verify_admin_panel(actx, checks, password))
 
     return checks.summary()
 

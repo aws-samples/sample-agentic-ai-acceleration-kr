@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from semantic_layer.repository import (
+    VALID_ENTITY_TYPES,
     SemanticRepository,
     from_attribute_value,
     item_to_dict,
@@ -221,3 +222,50 @@ def test_invalid_status_rejected():
 def test_get_missing_returns_none():
     repo, _ = make_repo()
     assert repo.get_entity("table", "nope") is None
+
+
+# --- M4 additive: datasource entity_type -------------------------------------
+
+
+def test_datasource_entity_type_is_valid():
+    """admin panel 이 등록하는 데이터소스 연결 메타(자격증명 제외)를 저장할 수 있다."""
+    repo, _ = make_repo()
+    entity = repo.put_entity(
+        "datasource",
+        "warehouse",
+        {"engine": "redshift-serverless", "host": "wh.example.com"},
+        actor="admin-panel",
+    )
+    assert entity["entity_type"] == "datasource"
+    assert entity["status"] == "candidate"
+    assert entity["pk"] == "datasource#warehouse"
+    assert repo.get_entity("datasource", "warehouse")["engine"] == "redshift-serverless"
+
+
+def test_datasource_entity_needs_no_embedding():
+    """datasource 는 EMBED_ENTITIES 가 아니므로 embedder 없이도 쓸 수 있다."""
+    client = FakeDynamoClient()
+    repo = SemanticRepository("agentic-t2sql-semantic", client=client, embedder=None)
+    entity = repo.put_entity("datasource", "wh", {"engine": "aurora-postgresql"})
+    assert "embedding" not in entity
+
+
+def test_datasource_entity_publish_roundtrip():
+    repo, _ = make_repo()
+    repo.put_entity("datasource", "warehouse", {"engine": "aurora-postgresql"})
+    assert repo.publish("datasource", "warehouse")["status"] == "published"
+    assert repo.unpublish("datasource", "warehouse")["status"] == "candidate"
+
+
+def test_datasource_addition_is_additive_only():
+    """기존 5종 타입은 그대로 유효해야 한다(additive only 계약)."""
+    assert VALID_ENTITY_TYPES == {"term", "fewshot", "table", "column", "join", "datasource"}
+
+
+def test_graph_sync_ignores_datasource_entities():
+    """graph_sync 는 미지원 타입에 빈 statement 를 반환 → 그래프 동기화에 영향 없음."""
+    from semantic_layer.graph_sync import _delete_statements, _upsert_statements
+
+    data = {"entity_type": "datasource", "entity_id": "warehouse", "engine": "redshift-serverless"}
+    assert _upsert_statements("datasource", data) == []
+    assert _delete_statements("datasource", data) == []

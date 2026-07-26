@@ -25,9 +25,13 @@ export interface RuntimeStackProps extends StackProps {
   readonly ecrOrchestrator: ecr.IRepository;
   readonly ecrSqlMcp: ecr.IRepository;
   readonly ecrSemanticMcp: ecr.IRepository;
+  /** M4: datasource-admin-mcp 이미지 리포 */
+  readonly ecrAdminMcp: ecr.IRepository;
   readonly orchestratorRole: iam.Role;
   readonly sqlMcpRole: iam.Role;
   readonly semanticMcpRole: iam.Role;
+  /** M4: datasource-admin-mcp Runtime 실행 role (base 소유) */
+  readonly adminMcpRole: iam.Role;
   // M2: semantic 스택에서 전달받는 참조들 (Neptune VPC 접근)
   readonly vpc: ec2.IVpc;
   /** Neptune 전용 SG — semantic MCP runtime 로부터 8182 인바운드를 여기서 허용 */
@@ -37,10 +41,11 @@ export interface RuntimeStackProps extends StackProps {
 }
 
 /**
- * AgenticT2SqlRuntimeStack — AgentCore Runtime 3개.
+ * AgenticT2SqlRuntimeStack — AgentCore Runtime 4개.
  *
  *  - sql-execution-mcp   : protocol MCP  (port 8000, /mcp)
  *  - semantic-retrieval-mcp: protocol MCP (port 8000, /mcp)
+ *  - datasource-admin-mcp: protocol MCP (port 8000, /mcp) — M4 관리 도구 평면
  *  - orchestrator        : protocol HTTP (port 8080, /invocations, /ping)
  *
  * 모두 fromEcrRepository(repo, 'latest') 로 이미지 참조(D9: direct code upload 금지).
@@ -50,6 +55,8 @@ export class AgenticT2SqlRuntimeStack extends Stack {
   public readonly orchestratorRuntime: agentcore.Runtime;
   public readonly sqlMcpRuntime: agentcore.Runtime;
   public readonly semanticMcpRuntime: agentcore.Runtime;
+  /** M4: 관리 도구(큐레이션·승인·데이터소스) MCP runtime */
+  public readonly adminMcpRuntime: agentcore.Runtime;
 
   constructor(scope: Construct, id: string, props: RuntimeStackProps) {
     super(scope, id, props);
@@ -132,6 +139,37 @@ export class AgenticT2SqlRuntimeStack extends Stack {
       },
     });
 
+    // ───────────────── Datasource admin MCP runtime (MCP protocol, M4) ─────────────────
+    // semantic 큐레이션(CRUD·publish)·데이터소스 등록/테스트·스키마 크롤 도구를 제공한다.
+    // DynamoDB(semantic)·Data API·Secrets Manager 는 모두 AWS API 평면이라 VPC 불필요 →
+    // PUBLIC 네트워크(sql-mcp 와 동형). 인가는 Gateway 앞단의 Cedar 가 담당한다(§8.0).
+    this.adminMcpRuntime = new agentcore.Runtime(this, 'AdminMcpRuntime', {
+      runtimeName: `${nameBase}_datasource_admin_mcp`,
+      description: 'Semantic 큐레이션·승인 + 데이터소스 등록/테스트/스키마 크롤 MCP (admin panel 도구 평면)',
+      agentRuntimeArtifact: agentcore.AgentRuntimeArtifact.fromEcrRepository(
+        props.ecrAdminMcp,
+        'latest',
+      ),
+      protocolConfiguration: agentcore.ProtocolType.MCP,
+      executionRole: props.adminMcpRole,
+      networkConfiguration: agentcore.RuntimeNetworkConfiguration.usingPublicNetwork(),
+      tracingEnabled: true,
+      environmentVariables: {
+        // semantic 쓰기 단일 지점(DynamoDB). 테이블명은 config 리터럴 — base role 의 ARN 과 정합.
+        SEMANTIC_TABLE_NAME: config.semanticTableName,
+        EMBEDDING_MODEL_ID: config.embeddingModelId,
+        // 스키마 크롤용 데이터 소스 접속 정보(read-only 자격증명).
+        AURORA_CLUSTER_ARN: props.auroraCluster.clusterArn,
+        AURORA_SECRET_ARN: props.agentRoSecret.secretArn,
+        DB_NAME: config.dbName,
+        REDSHIFT_WORKGROUP: config.redshiftWorkgroupName,
+        REDSHIFT_DB: config.dbName,
+        REDSHIFT_SECRET_ARN: props.redshiftRoSecret.secretArn,
+        // 등록 데이터소스 자격증명 시크릿 프리픽스(role 정책의 리소스 제한과 반드시 일치).
+        DATASOURCE_SECRET_PREFIX: `${config.appPrefix}/datasource/`,
+      },
+    });
+
     // ───────────────── Orchestrator runtime (AG-UI protocol) ─────────────────
     // orchestrator 는 ag_ui_strands + BedrockAgentCoreApp 로 AG-UI SSE 를 서빙한다.
     // AG-UI 는 HTTP 와 동일한 포트 8080 / POST /invocations(SSE), GET /ping 를 쓰지만
@@ -180,6 +218,10 @@ export class AgenticT2SqlRuntimeStack extends Stack {
     new CfnOutput(this, 'SemanticMcpRuntimeArn', {
       value: this.semanticMcpRuntime.agentRuntimeArn,
       description: 'Semantic retrieval MCP runtime ARN',
+    });
+    new CfnOutput(this, 'AdminMcpRuntimeArn', {
+      value: this.adminMcpRuntime.agentRuntimeArn,
+      description: 'Datasource admin MCP runtime ARN (M4 — gateway target)',
     });
   }
 }

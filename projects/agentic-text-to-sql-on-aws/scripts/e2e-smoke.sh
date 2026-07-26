@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# e2e-smoke.sh — E2E 3레벨 스모크 테스트 실행 래퍼.
+# e2e-smoke.sh — E2E 스모크 테스트 실행 래퍼(레벨 1~6).
 #
 #  레벨1 (MCP): scripts/e2e_verify.py --level 1  (orchestrator venv 에서 실행)
 #  레벨2 (에이전트): scripts/e2e_verify.py --level 2
@@ -7,12 +7,17 @@
 #  레벨4 (M2): clarification interrupt E2E + semantic 검색 확장(용어/fewshot)
 #  레벨5 (M3): Gateway 집약 + Cedar 허용/거부 + Redshift datasource
 #             (E2E_USER_PASSWORD env 필요 — Cognito 테스트 사용자)
+#  레벨6 (M4): admin panel ALB·인증/인가 + Manager 큐레이션→승인→전파
+#             + Cedar admin 도구 접근 제어(사용자 JWT OBO)
+#             (admin-outputs.json 필요, 테스트 사용자는 scripts/create-e2e-users.sh 로 생성)
 #
-# 전제: Runtime 스택 배포 완료(runtime-outputs.json). UI 레벨은 ui-outputs.json 필요.
+# 전제: Runtime 스택 배포 완료(runtime-outputs.json). UI 레벨은 ui-outputs.json,
+#       레벨6 은 admin-outputs.json + gateway/base outputs 필요(없으면 skip).
 #
 # 사용:
 #   scripts/e2e-smoke.sh          # 가능한 레벨 전부
 #   scripts/e2e-smoke.sh 1        # MCP 레벨만
+#   scripts/e2e-smoke.sh 6        # M4 admin/큐레이션/OBO 만
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -53,9 +58,10 @@ case "$LEVEL" in
   3) verify_ui ;;
   4) run_py_levels 4 ;;
   5) run_py_levels 5 ;;
+  6) run_py_levels 6 ;;
   all)
     run_py_levels all
     verify_ui
     ;;
-  *) echo "사용법: $0 {1|2|3|4|5|all}" >&2; exit 2 ;;
+  *) echo "사용법: $0 {1|2|3|4|5|6|all}" >&2; exit 2 ;;
 esac

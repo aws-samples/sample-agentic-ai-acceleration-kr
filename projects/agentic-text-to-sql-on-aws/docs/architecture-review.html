@@ -250,7 +250,7 @@
     </div>
     <div class="node agentcore small" id="n-mcp-admin" style="left:770px; top:435px; width:200px">
       <b>datasource-admin-mcp</b>
-      <span>Runtime 호스팅 · 관리 도구<br>(Manager/Admin 전용 — Cedar 제한)</span>
+      <span>Runtime 호스팅 · 관리 도구 (M4 ✅)<br>큐레이션 CRUD·승인·데이터소스 등록/크롤<br>(Manager/Admin 전용 — Cedar action 스코프)</span>
     </div>
 
     <!-- ══════════ L4: Semantic ══════════ -->
@@ -321,12 +321,13 @@
 
     <!-- ══════════ Part 3: Admin Panel ══════════ -->
     <div class="node aws" id="n-adminweb" style="left:230px; top:955px; width:290px">
-      <b>Admin Panel (ECS Fargate)</b>
-      <span>Web + API Server</span>
+      <b>Admin Panel (ECS Fargate) — M4 ✅</b>
+      <span>Next.js web + API · Cognito 로그인(JWT 검증·그룹 인가)<br>쓰기는 사용자 JWT OBO → Gateway MCP 경유(DynamoDB 직접 쓰기 없음)</span>
       <span class="chip" style="background:var(--c-admin); color:#0d1117">데이터소스 등록</span>
       <span class="chip" style="background:var(--c-admin); color:#0d1117">semantic 큐레이션</span>
-      <span class="chip" style="background:var(--c-admin); color:#0d1117">권한 관리</span>
-      <span class="chip" style="background:var(--c-eval); color:#0d1117">평가 리뷰·bundle 승인</span>
+      <span class="chip" style="background:var(--c-admin); color:#0d1117">승인 큐 (candidate→published)</span>
+      <span class="chip" style="background:var(--c-admin); color:#0d1117">권한 관리 + Cedar 뷰</span>
+      <span class="chip" style="background:var(--c-eval); color:#0d1117">평가 리뷰·bundle 승인 (M5)</span>
       <span class="chip" style="background:#8b9bb8; color:#0d1117">트레이스 디버깅</span>
     </div>
     <div class="node aws small" id="n-cognito" style="left:590px; top:965px; width:190px">
@@ -380,13 +381,14 @@ const EDGES = [
   // ③ 관리·큐레이션 흐름
   ["admin","p-admin","n-adminweb","운영·권한·데이터소스",null],
   ["admin","p-manager","n-adminweb","용어 큐레이션·승인",null],
-  ["admin","n-adminweb","n-ddb","용어/동의어/few-shot CRUD",1],
+  ["admin","n-adminweb","n-gateway","사용자 JWT OBO (MCP)",1],
+  ["admin","n-gateway","n-mcp-admin","Cedar 인가 후 관리 도구 호출",null],
+  ["admin","n-mcp-admin","n-ddb","용어/동의어/few-shot CRUD·publish",null],
   ["admin","n-ddb","n-os","Streams 동기화",2],
   ["admin","n-ddb","n-neptune","Streams 동기화",2],
-  ["admin","n-adminweb","n-secrets","데이터소스 자격증명 등록",null],
-  ["admin","n-adminweb","n-cognito","사용자·그룹 관리",null],
+  ["admin","n-mcp-admin","n-secrets","데이터소스 자격증명 등록 (register_datasource)",null],
+  ["admin","n-adminweb","n-cognito","사용자·그룹 관리 (Admin 전용)",null],
   ["admin","n-cognito","n-gateway","JWT → Cedar policy 평가",3],
-  ["admin","n-adminweb","n-mcp-admin","관리 도구 호출",null],
   ["admin","n-cw","n-adminweb","트레이스·메트릭 조회",null],
   // ④ 평가·개선 루프
   ["eval","n-runtime","n-otel","OTEL 트레이스",1],

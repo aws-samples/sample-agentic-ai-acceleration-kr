@@ -20,6 +20,8 @@ export interface GatewayStackProps extends StackProps {
   // runtime 스택 참조 (MCP target 이 가리킬 두 Runtime ARN)
   readonly sqlMcpRuntime: agentcore.Runtime;
   readonly semanticMcpRuntime: agentcore.Runtime;
+  /** M4: datasource-admin-mcp runtime (3번째 MCP target) */
+  readonly adminMcpRuntime: agentcore.Runtime;
 }
 
 /**
@@ -28,7 +30,7 @@ export interface GatewayStackProps extends StackProps {
  * 포함:
  *  - Gateway `agentic-t2sql-gateway` (MCP protocol + semantic search 기본)
  *    · 인바운드: Cognito CustomJwt(웹 클라이언트 + M2M 테스트 클라이언트 allowed)
- *  - GatewayTarget 2개: sql-execution-mcp / semantic-retrieval-mcp
+ *  - GatewayTarget 3개: sql-execution-mcp / semantic-retrieval-mcp / datasource-admin-mcp(M4)
  *    · McpServerTargetConfiguration → 각 Runtime 의 MCP invocations 엔드포인트
  *    · 아웃바운드 SigV4: GatewayCredentialProvider.fromIamRole(service "bedrock-agentcore")
  *    · Gateway 서비스 role 에 InvokeAgentRuntime(두 Runtime ARN 한정) 부여
@@ -80,6 +82,7 @@ export class AgenticT2SqlGatewayStack extends Stack {
     // Runtime → MCP invocations 엔드포인트 URL(percent-encoded ARN 경로).
     const sqlEndpoint = this.buildRuntimeMcpEndpoint(props.sqlMcpRuntime.agentRuntimeId);
     const semanticEndpoint = this.buildRuntimeMcpEndpoint(props.semanticMcpRuntime.agentRuntimeId);
+    const adminEndpoint = this.buildRuntimeMcpEndpoint(props.adminMcpRuntime.agentRuntimeId);
 
     const sqlTarget = agentcore.GatewayTarget.forMcpServer(this, 'SqlMcpTarget', {
       gateway: this.gateway,
@@ -95,14 +98,30 @@ export class AgenticT2SqlGatewayStack extends Stack {
       endpoint: semanticEndpoint,
       credentialProviderConfigurations: [iamCredential],
     });
-    // 두 타깃 간 결정적 순서(선택). 참조로 사용해 lint 미사용 경고 방지.
+    // M4: 관리 도구 target. 도구명은 `datasource-admin-mcp___<tool>` 로 노출된다.
+    // 일반 User 는 Cedar default-deny(phase 2 에서 action 스코프)로 이 도구군에 접근하지 못하고,
+    // Manager/Admin 만 permitPrivileged 로 허용된다.
+    const adminTarget = agentcore.GatewayTarget.forMcpServer(this, 'AdminMcpTarget', {
+      gateway: this.gateway,
+      gatewayTargetName: config.adminMcpTargetName,
+      description: 'semantic 큐레이션·승인 + 데이터소스 등록/테스트/크롤 관리 도구 MCP (Manager/Admin 전용)',
+      endpoint: adminEndpoint,
+      credentialProviderConfigurations: [iamCredential],
+    });
+    // 타깃 간 결정적 생성 순서(선택). 참조로 사용해 lint 미사용 경고 방지.
     semanticTarget.node.addDependency(sqlTarget);
+    adminTarget.node.addDependency(semanticTarget);
 
     // ───────────────────────── Gateway 서비스 role 에 InvokeAgentRuntime 부여 ─────────────────────────
     // fromIamRole 아웃바운드는 Gateway 의 실행 role 로 SigV4 서명한다. MCP server target 은
     // grantNeededPermissionsToRole 이 no-op 이므로, 실제 InvokeAgentRuntime 권한은 직접 부여한다.
-    // 대상은 두 Runtime ARN 으로 한정(최소 권한). ARN 은 base/runtime 의 결정적 이름 규칙과 정합.
-    this.gateway.role.addToPrincipalPolicy(
+    // 대상은 세 Runtime ARN 으로 한정(최소 권한). ARN 은 base/runtime 의 결정적 이름 규칙과 정합.
+    //
+    // ⚠️ target 생성 시 Gateway 서비스가 이 role 로 MCP 서버에 접속해 도구 목록을 fetch·검증한다
+    //    (M4 배포 실측: 정책 갱신 전에 target 이 만들어지면 "Authorization error when sending
+    //    message" 로 NotStabilized). 따라서 모든 target 이 이 정책 갱신 이후에 생성되도록
+    //    policyDependable 에 명시적 의존을 건다.
+    const invokeGrant = this.gateway.role.addToPrincipalPolicy(
       new iam.PolicyStatement({
         sid: 'InvokeMcpRuntimes',
         actions: ['bedrock-agentcore:InvokeAgentRuntime'],
@@ -111,9 +130,17 @@ export class AgenticT2SqlGatewayStack extends Stack {
           `${props.sqlMcpRuntime.agentRuntimeArn}/*`,
           props.semanticMcpRuntime.agentRuntimeArn,
           `${props.semanticMcpRuntime.agentRuntimeArn}/*`,
+          // M4: 관리 도구 runtime
+          props.adminMcpRuntime.agentRuntimeArn,
+          `${props.adminMcpRuntime.agentRuntimeArn}/*`,
         ],
       }),
     );
+    if (invokeGrant.policyDependable) {
+      for (const target of [sqlTarget, semanticTarget, adminTarget]) {
+        target.node.addDependency(invokeGrant.policyDependable);
+      }
+    }
 
     // ───────────────────────── PolicyEngine + Cedar 정책 ─────────────────────────
     // 엔진은 default-deny + forbid-wins. 아래 정책 3개로 페르소나 기반 접근을 표현한다.
@@ -138,13 +165,32 @@ export class AgenticT2SqlGatewayStack extends Stack {
    principal.getTag("cognito:groups") like "*Admin*")
 };`;
 
-    // 정책 2 (permit): 인증된 사용자는 이 gateway 의 도구 사용 허용.
-    //   ⚠️ action 목록(`action in [AgentCore::Action::"<Target>___<tool>"]`)으로 좁히는 시도는
-    //   정책 생성 시점 검증에서 "unable to find an applicable action" 으로 실패했다(배포 실측 —
-    //   CFN 상 정책이 target 도구 동기화 완료 전에 검증됨). 현재 노출 도구가 run_sql/search_schema
-    //   2개뿐이라 전체 허용과 실질 차이가 없어 단순화한다. M4 에서 datasource-admin-mcp(관리 도구)
-    //   target 추가 시 action 스코프를 다시 좁힌다(정책을 target 생성 이후 2-phase 로 갱신).
-    const permitBaseline = `permit(
+    // 정책 2 (permit): 인증된 사용자(일반 User)의 도구 허용 범위.
+    //
+    //   ⚠️ M3 학습: action 목록(`action in [AgentCore::Action::"<Target>___<tool>"]`)으로 좁히는
+    //   시도는 정책 생성 시점 검증에서 "unable to find an applicable action" 으로 실패한다
+    //   (CFN 상 정책이 target 도구 동기화 완료 전에 검증됨). 그래서 M4 는 2-phase 로 처리한다:
+    //
+    //     phase 1 (cedarActionScoping=false, 기본): 광역 permit — admin target 을 포함한 gateway
+    //             배포가 먼저 성공하도록 한다. 이 시점엔 admin 도구도 일반 User 에게 열려 있다.
+    //     phase 2 (cedarActionScoping=true): 도구 동기화가 끝난 뒤 statement 만 action 목록
+    //             스코프로 교체(논리 ID 동일 → CFN update). 일반 User 는 run_sql/search_schema
+    //             만 허용되고 datasource-admin-mcp___* 는 default-deny 로 차단된다
+    //             (Manager/Admin 은 정책 1 의 광역 permit 으로 계속 전체 허용).
+    //
+    //   ⚠️ phase 2 는 admin target 배포 후에만 성공한다. `-c cedarActionScoping=true` 로
+    //      gateway 를 재배포한다(scripts/deploy.sh gateway-scoped).
+    const scopedActions = [
+      `AgentCore::Action::"${config.sqlTargetName}___run_sql"`,
+      `AgentCore::Action::"${config.semanticTargetName}___search_schema"`,
+    ].join(', ');
+    const permitBaseline = config.cedarActionScoping
+      ? `permit(
+  principal is AgentCore::OAuthUser,
+  action in [${scopedActions}],
+  resource == AgentCore::Gateway::"${gwArn}"
+);`
+      : `permit(
   principal is AgentCore::OAuthUser,
   action,
   resource == AgentCore::Gateway::"${gwArn}"
@@ -180,11 +226,15 @@ export class AgenticT2SqlGatewayStack extends Stack {
       permitPrivileged,
       'Manager/Admin 그룹: 모든 도구 허용',
     );
+    // ⚠️ 논리 ID(`PolicyPermitBaseline`)·정책명은 두 phase 에서 동일하게 유지한다.
+    //    statement 만 바뀌므로 CFN 이 교체가 아닌 update 로 처리한다.
     const p2 = mkPolicy(
       'PermitBaseline',
       'permit_authenticated_search_and_run',
       permitBaseline,
-      '일반 인증 사용자: search_schema/run_sql 만 허용 (나머지는 default-deny)',
+      config.cedarActionScoping
+        ? '일반 인증 사용자: search_schema/run_sql 만 허용 (admin 도구는 default-deny)'
+        : '일반 인증 사용자: 전체 허용 (phase 1 — action 스코프는 cedarActionScoping=true 재배포로 적용)',
     );
     const p3 = mkPolicy(
       'ForbidDenied',

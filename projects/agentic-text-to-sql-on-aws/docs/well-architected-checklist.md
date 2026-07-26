@@ -28,9 +28,9 @@
 - [ ] **AGENTOPS01-BP01/02** — 각 Strands 에이전트에 "job description" 정의: supervisor(intent 라우팅), specialist(schema-linking / SQL-generation / SQL-validation / result-explanation). autonomy 경계(예: SQL agent는 SELECT만) + 측정 가능한 성공 기준(SQL 실행 성공률, gold set 정확도, query cost 상한)
 - [ ] **AGENTOPS02** — 프롬프트/설정 lifecycle: 프롬프트를 코드에서 분리(Configuration Bundle), 버전/롤백, drift 감지
 - [ ] **AGENTOPS03** — AgentOps CI/CD: CodePipeline에 Evaluations promotion gate, 회귀 시 배포 차단·자동 롤백
-- [x] **AGENTOPS04** — AgentCore Gateway = 권위 있는 tool catalog: 각 MCP 서버를 owner/version/param schema와 함께 등록, semantic discovery, 툴 fallback 정의 ✅ M3: Gateway 가 유일한 도구 평면(MCP target 2개 + semantic tool search 기본 활성). orchestrator 는 TOOL_PLANE_MODE=gateway 로 전환됨(direct 는 폴백)
+- [x] **AGENTOPS04** — AgentCore Gateway = 권위 있는 tool catalog: 각 MCP 서버를 owner/version/param schema와 함께 등록, semantic discovery, 툴 fallback 정의 ✅ M3: Gateway 가 유일한 도구 평면(semantic tool search 기본 활성). orchestrator 는 TOOL_PLANE_MODE=gateway 로 전환됨(direct 는 폴백). M4: MCP target 3개(datasource-admin-mcp 추가 — 관리 도구도 동일 카탈로그·Cedar 인가 경로)
 - [ ] **AGENTOPS05** — NL→schema-linking→SQL-gen→validation→실행→설명 전 구간 OTel span + W3C Trace Context 전파(UI가 inbound에서 trace header 주입), 구조화 JSON audit 로깅
-- [ ] **AGENTOPS06** — 다층 테스트 + 지속 평가(LLM-as-judge) + Manager 승인 워크플로우(admin panel)
+- [~] **AGENTOPS06** — 다층 테스트 + 지속 평가(LLM-as-judge) + Manager 승인 워크플로우(admin panel) — 🔶 M4 부분: **Manager 승인 워크플로우 구현** ✅ (admin panel 승인 큐: candidate 검토 → publish → OpenSearch/Neptune 전파, Cedar 로 Manager/Admin 만 승인 가능, E2E 레벨6 검증). 다층 테스트는 단위(pytest 250+)·E2E(35체크) 구축, 지속 평가(LLM-as-judge)·Evaluations promotion gate 는 M5
 - [ ] **AGENTOPS07** — 소비 상한: 세션 token cap, SQL 재시도 max, Data API scan 상한 → 초과 시 loop 중단. break-glass 런북(분석가 직접 read-only 접근 경로)을 시스템 밖에 문서화
 - [ ] CloudFormation drift detection + AWS Config로 Runtime/Gateway/Cedar/Data API role 구성 drift 감지
 
@@ -39,7 +39,7 @@
 - [x] **AGENTSEC03** — 컴포넌트별 IAM role 분리: orchestrator / sql-mcp / semantic-mcp / ui / gateway / OSIS / graph-sync Lambda 각각 별도 role. **sql-mcp만** rds-data(클러스터 ARN 한정)·redshift-data 실행 권한 보유 ✅ M3 (redshift-data 액션은 리소스 조건 제약상 계정 스코프 — 알려진 완화)
 - [x] **AGENTSEC02** — READ-ONLY 4중 방어: ① Cedar default-deny ② 툴 핸들러 내 결정론적 SQL AST validator(non-SELECT/DDL/DML/multi-statement/시스템 카탈로그/COPY·UNLOAD 거부 — LLM 밖에서) ③ read-only IAM ④ DB SELECT-only grant ✅ M3 완성: PolicyEngine ENFORCE(default-deny+forbid-wins) + postgres/redshift dialect AST validator(UNLOAD/COPY 차단 테스트) + Aurora·Redshift 각 agent_ro SELECT-only. E2E: Denied 그룹 차단·DELETE rejected 확인
 - [ ] **AGENTSEC08** — prompt injection 방어: 직접(NL 질문) + **간접(semantic layer 콘텐츠, DB 결과 row)** injection surface 모두에 ApplyGuardrail(prompt-attack block). 출력에 sensitive-info 필터로 PII 마스킹
-- [ ] **AGENTSEC03-BP02** — 사용자 위임: Cognito 인증 → `GetWorkloadAccessTokenForJWT`로 user context를 서명 JWT claim으로 전파 → downstream row/table 수준 authz. 에이전트가 사용자 역할 assume 금지
+- [~] **AGENTSEC03-BP02** — 사용자 위임: Cognito 인증 → user context 전파 → downstream authz. 에이전트가 사용자 역할 assume 금지 — 🔶 M4 부분: **admin 경로 사용자 JWT On-Behalf-Of 완성** ✅ (admin panel 이 사용자 AccessToken 을 그대로 Gateway MCP 에 전달 → Cedar 가 실제 사용자 그룹으로 도구 단위 인가, E2E: e2e-user 는 admin 도구 미노출/403·e2e-manager 는 허용). orchestrator 도 `forwardedProps.userAccessToken` additive 로 OBO 지원 — 단 채팅 UI 에 로그인이 없어 기본은 서비스 계정 위임(M2M). `GetWorkloadAccessTokenForJWT` 기반 workload identity 전파·row/table 수준 authz 는 후속(현 구현은 gateway 인바운드 JWT 로 동등한 사용자 신원 인가를 달성)
 - [ ] **AGENTSEC06** — trust zone 분리: data-access 컴포넌트를 상위 trust zone subnet/SG로 분리
 - [ ] **AGENTSEC07** — rogue-agent 격리: 이상 SQL 볼륨/미승인 테이블 접근 시 EventBridge → deny-all policy 부착 + forensic state S3 캡처
 - [ ] **AGENTSEC05** — non-repudiation: 생성 SQL·resolved entity·실행 identity 구조화 로깅 → S3 Object Lock(immutable audit)
