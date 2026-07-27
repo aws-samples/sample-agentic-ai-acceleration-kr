@@ -46,11 +46,36 @@ Amazon Bedrock AgentCore 기반의 agentic Text-to-SQL 솔루션입니다. 사�
 
 ```mermaid
 flowchart TB
-    l1["[1] UI Layer — Next.js + CopilotKit (ECS Fargate + ALB)<br/>브라우저 ↔ 서버사이드 프록시(SigV4) ↔ AgentCore Runtime<br/>AG-UI SSE 이벤트 (TEXT_MESSAGE_* / TOOL_CALL_* / STEP_*)"]
-    l2["[2] Orchestration — Strands Graph (AgentCore Runtime + Memory)<br/>intent → schema_linking → sql_generation → execution → synthesis<br/>(execution 실패 시 self-correction 루프)"]
-    l3["[3] Tool — MCP servers (AgentCore Runtime 호스팅)<br/>· sql-execution-mcp<br/>· semantic-retrieval-mcp (VPC 모드 — Neptune 접근)<br/>· datasource-admin-mcp"]
-    l4["[4] Semantic layer<br/>DynamoDB(원본, 버전·상태)<br/>└ Streams → OpenSearch(hybrid) / Neptune(join path)<br/>candidate/published/rejected 분리"]
-    l5["[5] Data — Aurora PostgreSQL Serverless v2<br/>+ Redshift Serverless (datasource=&quot;redshift&quot;)<br/>(Data API, read-only)"]
+    subgraph l1["[1] UI Layer"]
+        direction LR
+        browser["브라우저"] --> proxy["서버사이드 프록시 (SigV4)<br/>Next.js + CopilotKit<br/>(ECS Fargate + ALB)"] --> sse["AG-UI SSE 이벤트<br/>TEXT_MESSAGE_* / TOOL_CALL_* / STEP_*"]
+    end
+
+    subgraph l2["[2] Orchestration Layer — Strands Graph (AgentCore Runtime + Memory)"]
+        direction LR
+        intent --> linking["schema_linking"] --> gen["sql_generation"] --> exec["execution"] --> synth["synthesis"]
+        exec -. "self-correction" .-> gen
+    end
+
+    subgraph l3["[3] Tool Layer — AgentCore Gateway (단일 도구 평면) + Runtime 호스팅 MCP"]
+        direction LR
+        sqlmcp["sql-execution-mcp"] ~~~ semmcp["semantic-retrieval-mcp<br/>(VPC 모드 — Neptune 접근)"] ~~~ adminmcp["datasource-admin-mcp"]
+    end
+
+    subgraph l4["[4] Semantic Layer — candidate/published/rejected 분리"]
+        direction LR
+        os["OpenSearch<br/>(hybrid 검색)"]
+        ddb["DynamoDB<br/>(원본, 버전·상태)"]
+        neptune["Neptune<br/>(join path 그래프)"]
+        os ~~~ ddb ~~~ neptune
+        ddb -- Streams --> os
+        ddb -- Streams --> neptune
+    end
+
+    subgraph l5["[5] Data Layer — Data API, read-only"]
+        direction LR
+        aurora["Aurora PostgreSQL Serverless v2"] ~~~ redshift["Redshift Serverless<br/>(datasource=&quot;redshift&quot;)"]
+    end
 
     l1 -- "POST /invocations (AG-UI, SigV4)" --> l2
     l2 -- "MCP (Gateway 경유, SigV4 streamable-http)" --> l3
