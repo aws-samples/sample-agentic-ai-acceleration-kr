@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>agentic-text-to-sql-on-aws — 3D 아키텍처 탐색기</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #141b26;
+    --border: #2b3850;
+    --text: #e6ebf5;
+    --muted: #8b9bb8;
+    --c-query: #5b9cff;   /* 질의 흐름 */
+    --c-clarify: #f5b84d; /* 재요청 흐름 */
+    --c-admin: #b78cf7;   /* 관리 흐름 */
+    --c-eval: #3ecf8e;    /* 개선 흐름 */
+    --l1: #5b9cff; --l2: #b78cf7; --l3: #f5b84d; --l4: #4dd0c4; --l5: #3ecf8e;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: "Pretendard","Apple SD Gothic Neo","Noto Sans KR",-apple-system,sans-serif;
+  }
+  #canvas-wrap { position: fixed; inset: 0; }
+
+  /* ── 상단 헤더 + 흐름 토글 ── */
+  #hud-top {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 10;
+    padding: 16px 20px 10px; pointer-events: none;
+    background: linear-gradient(180deg, rgba(13,17,23,.92) 0%, rgba(13,17,23,0) 100%);
+  }
+  h1 { font-size: 18px; margin-bottom: 2px; }
+  h1 code { color: var(--c-query); }
+  .sub { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+  .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; pointer-events: auto; }
+  .btn {
+    background: var(--panel); color: var(--muted); border: 1px solid var(--border);
+    border-radius: 999px; padding: 6px 14px; font-size: 12.5px; cursor: pointer; font-weight: 600;
+    font-family: inherit;
+  }
+  .btn .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  .btn[data-flow="all"].active     { color: var(--text); border-color: #4a5a7d; background: #1b2333; }
+  .btn[data-flow="query"].active   { color: var(--c-query);   border-color: var(--c-query);   background: rgba(91,156,255,.12); }
+  .btn[data-flow="clarify"].active { color: var(--c-clarify); border-color: var(--c-clarify); background: rgba(245,184,77,.12); }
+  .btn[data-flow="admin"].active   { color: var(--c-admin);   border-color: var(--c-admin);   background: rgba(183,140,247,.12); }
+  .btn[data-flow="eval"].active    { color: var(--c-eval);    border-color: var(--c-eval);    background: rgba(62,207,142,.12); }
+  .btn.ctl { border-radius: 8px; }
+  .btn.ctl.on { color: var(--text); border-color: #4a5a7d; background: #1b2333; }
+
+  /* ── 좌하단: 흐름 단계 패널 ── */
+  #steps {
+    position: fixed; left: 20px; bottom: 20px; z-index: 10; width: 400px;
+    background: rgba(20,27,38,.94); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px 16px; font-size: 12px; display: none; backdrop-filter: blur(4px);
+  }
+  #steps h3 { font-size: 13px; margin-bottom: 8px; }
+  #steps ol { margin-left: 18px; line-height: 1.75; color: var(--muted); }
+  #steps ol li b { color: var(--text); font-weight: 600; }
+
+  /* ── 우측: 노드 상세 패널 ── */
+  #detail {
+    position: fixed; right: 20px; top: 108px; z-index: 10; width: 360px; max-height: calc(100vh - 200px);
+    background: rgba(20,27,38,.96); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px 18px; display: none; overflow-y: auto; backdrop-filter: blur(4px);
+  }
+  #detail .close { position: absolute; top: 10px; right: 12px; cursor: pointer; color: var(--muted); font-size: 16px; background: none; border: none; font-family: inherit; }
+  #detail .kind { font-size: 10.5px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; }
+  #detail h2 { font-size: 16px; margin: 3px 0 10px; }
+  #detail .desc { font-size: 12.5px; line-height: 1.7; color: var(--text); margin-bottom: 12px; }
+  #detail .meta { border-top: 1px solid var(--border); padding-top: 10px; font-size: 12px; }
+  #detail .meta .row { display: flex; gap: 8px; margin-bottom: 7px; line-height: 1.55; }
+  #detail .meta .row .k { color: var(--muted); flex: 0 0 62px; }
+  #detail .chip {
+    display: inline-block; font-size: 10px; font-weight: 700; border-radius: 5px;
+    padding: 2px 7px; margin: 2px 4px 2px 0; color: #0d1117; background: var(--muted);
+  }
+
+  /* ── 범례 ── */
+  #legend {
+    position: fixed; right: 20px; bottom: 20px; z-index: 9;
+    background: rgba(20,27,38,.9); border: 1px solid var(--border); border-radius: 12px;
+    padding: 12px 14px; font-size: 11.5px; color: var(--muted); line-height: 2;
+  }
+  #legend .k { display: flex; align-items: center; gap: 8px; }
+  #legend .bar { width: 22px; height: 0; border-top: 2.5px solid; flex: none; }
+  #legend .sq { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+
+  /* ── 3D 라벨 (CSS2D) ── */
+  .lbl {
+    color: var(--text); font-size: 11.5px; font-weight: 600; text-align: center;
+    text-shadow: 0 1px 4px #000, 0 0 8px #000; pointer-events: none; white-space: nowrap;
+  }
+  .lbl small { display: block; font-weight: 400; font-size: 9.5px; color: var(--muted); }
+  .lbl.frame { font-size: 13px; font-weight: 800; letter-spacing: .6px; color: var(--muted); }
+  .lbl.layerlbl { font-size: 11px; font-weight: 800; letter-spacing: .5px; }
+  .lbl.persona { font-size: 12.5px; }
+
+  #hint { position: fixed; left: 20px; top: 108px; z-index: 9; font-size: 11.5px; color: var(--muted);
+    background: rgba(20,27,38,.85); border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; line-height: 1.7; }
+</style>
+</head>
+<body>
+
+<div id="canvas-wrap"></div>
+
+<div id="hud-top">
+  <h1><code>agentic-text-to-sql-on-aws</code> — 3D 아키텍처 탐색기</h1>
+  <div class="sub">us-west-2 · 3 Subsystems / 5 Layers / 3 Personas — 드래그로 회전, 스크롤로 확대, 노드를 클릭하면 상세 정보가 표시됩니다</div>
+  <div class="toolbar">
+    <button class="btn active" data-flow="all"><span class="dot" style="background:#8b9bb8"></span>전체 보기</button>
+    <button class="btn" data-flow="query"><span class="dot" style="background:var(--c-query)"></span>① 질의 흐름</button>
+    <button class="btn" data-flow="clarify"><span class="dot" style="background:var(--c-clarify)"></span>② 재요청(clarification)</button>
+    <button class="btn" data-flow="admin"><span class="dot" style="background:var(--c-admin)"></span>③ 관리·큐레이션</button>
+    <button class="btn" data-flow="eval"><span class="dot" style="background:var(--c-eval)"></span>④ 평가·개선 루프</button>
+    <button class="btn ctl" id="btn-rotate">자동 회전</button>
+    <button class="btn ctl" id="btn-reset">시점 초기화</button>
+  </div>
+</div>
+
+<div id="hint">🖱️ 드래그: 회전 · 우클릭 드래그: 이동 · 휠: 줌<br>노드 클릭 → 상세 · 흐름 버튼 → 경로 강조 + 단계 설명</div>
+
+<div id="steps"></div>
+
+<div id="detail">
+  <button class="close" onclick="document.getElementById('detail').style.display='none'">✕</button>
+  <div class="kind" id="d-kind"></div>
+  <h2 id="d-name"></h2>
+  <div class="desc" id="d-desc"></div>
+  <div class="meta" id="d-meta"></div>
+</div>
+
+<div id="legend">
+  <div class="k"><span class="bar" style="border-color:var(--c-query)"></span>① 질의: User → UI → 오케스트레이터 → Gateway(MCP) → Semantic/Data</div>
+  <div class="k"><span class="bar" style="border-color:var(--c-clarify)"></span>② 재요청: interrupt → 폼 → 동일 세션 재개</div>
+  <div class="k"><span class="bar" style="border-color:var(--c-admin)"></span>③ 관리: Admin/Manager → Admin Panel → 메타데이터·권한</div>
+  <div class="k"><span class="bar" style="border-color:var(--c-eval)"></span>④ 개선: Track A(평가→bundle 승격) · Track B(지식 채굴→승인)</div>
+  <div class="k"><span class="sq" style="background:#7c5cff"></span>Bedrock AgentCore</div>
+  <div class="k"><span class="sq" style="background:#ff9900"></span>기타 AWS 서비스</div>
+</div>
+
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { CSS2DRenderer, CSS2DObject } from "three/addons/renderers/CSS2DRenderer.js";
+
+/* ═══════════════════ 데이터 정의 ═══════════════════ */
+
+const LAYER_Y = { 1: 48, 2: 36, 3: 24, 4: 12, 5: 0 };
+const LAYER_COLOR = { 1: 0x5b9cff, 2: 0xb78cf7, 3: 0xf5b84d, 4: 0x4dd0c4, 5: 0x3ecf8e };
+const LAYER_NAME = {
+  1: "1 · UI LAYER — 스트리밍 UI · AG-UI protocol",
+  2: "2 · ORCHESTRATION — Strands Graph",
+  3: "3 · TOOL — Gateway 단일 도구 평면 (Lambda 미사용)",
+  4: "4 · SEMANTIC — 비즈니스 컨텍스트 · GraphRAG",
+  5: "5 · DATA — read-only · Data API",
+};
+const KIND = { agentcore: 0x7c5cff, aws: 0xff9900, ext: 0x4a5a7d };
+
+// 노드: id, 표시명, 부제, 종류, 위치 [x,y,z], 크기 [w,h,d], 상세
+const NODES = [
+  // ── Subsystem 1 · L1 UI ──
+  { id:"alb", name:"ALB", sub:"HTTPS", kind:"aws", pos:[-22, LAYER_Y[1], 0], size:[9,3,7],
+    detail:{ kind:"AWS · UI Layer", desc:"Application Load Balancer. 브라우저 트래픽의 진입점.",
+      tech:"HTTPS (전환 예정 항목은 CLAUDE.md 향후 과제 참고)", flows:"질의 ①" } },
+  { id:"web", name:"웹 앱 (ECS Fargate)", sub:"Next.js + CopilotKit", kind:"aws", pos:[4, LAYER_Y[1], 0], size:[18,3,9],
+    detail:{ kind:"AWS · UI Layer", desc:"Next.js + CopilotKit Runtime. 브라우저는 AgentCore를 직접 호출하지 않으며, 서버 사이드가 Cognito 토큰을 검증하고 SigV4로 서명해 전달하는 프록시 역할을 한다. AG-UI SSE 스트리밍과 interrupt 기반 clarification 폼을 렌더링한다.",
+      tech:"Next.js catch-all route(/api/copilotkit/[[...slug]]) · SigV4 서명 · AG-UI(SSE)", flows:"질의 ① · 재요청 ②",
+      chips:["AG-UI SSE","interrupt 폼 렌더링"] } },
+
+  // ── Subsystem 1 · L2 Orchestration ──
+  { id:"runtime", name:"AgentCore Runtime — 오케스트레이터", sub:"Strands Graph (5 노드)", kind:"agentcore", pos:[-8, LAYER_Y[2], 0], size:[22,3,9],
+    detail:{ kind:"AgentCore · Orchestration Layer", desc:"Strands Agents SDK의 Graph 패턴. intent → schema_linking → sql_generation → execution → synthesis 5개 노드로 구성되고, 검증 실패·실행 오류 시 execution → sql_generation self-correction 엣지를 순회한다. AST 검증은 Graph 노드가 아니라 sql-execution-mcp 도구 내부에서 수행된다(LLM 밖 강제). BedrockAgentCoreApp 엔트리포인트 위에서 AG-UI wire-format 이벤트를 직접 방출한다.",
+      tech:"Strands Graph · BedrockAgentCoreApp · 컨테이너(ECR, ARM64) · microVM 세션 격리 · clarification 재개 = 모듈 레벨 세션 캐시(LRU), microVM 교체 시 CLARIFICATION_EXPIRED", flows:"질의 ① · 재요청 ② · 개선 ④",
+      chips:["microVM 세션 격리","self-correction"] } },
+  { id:"memory", name:"AgentCore Memory", sub:"short-term (STM)", kind:"agentcore", pos:[18, LAYER_Y[2], 0], size:[14,3,8],
+    detail:{ kind:"AgentCore · Orchestration Layer", desc:"멀티턴 대화 히스토리(\"그럼 작년은?\" 류 후속 질문)를 위한 short-term memory. Long-term memory(사용자 선호·용어 패턴, actor별 namespace 격리)는 설계상 orchestration layer 소속(D6)이지만 현재 미구현 — 향후 과제.",
+      tech:"AgentCore Memory (STM only)", flows:"질의 ①", chips:["STM 구현","LTM 향후 과제"] } },
+
+  // ── Subsystem 1 · L3 Tool ──
+  { id:"gateway", name:"AgentCore Gateway", sub:"Identity + Cedar", kind:"agentcore", pos:[-22, LAYER_Y[3], 0], size:[14,3,9],
+    detail:{ kind:"AgentCore · Tool Layer", desc:"MCP 도구 집약(aggregation)·semantic tool search를 담당하는 단일 도구 평면. 인바운드 인증은 Cognito JWT(사용자 신원 전파), 인가는 Cedar PolicyEngine(ENFORCE, default-deny)이 담당한다. 미인가 도구는 tools/list에서 아예 제외된다. 도구명은 <TargetName>___<tool> 프리픽스.",
+      tech:"MCP target 3개 · Cedar ENFORCE · Cognito CustomJwt · Identity token vault(아웃바운드)", flows:"질의 ① · 관리 ③",
+      chips:["Cognito JWT 인바운드","Cedar ENFORCE"] } },
+  { id:"mcp-sql", name:"sql-execution-mcp", sub:"SQL 검증·실행", kind:"agentcore", pos:[0, LAYER_Y[3], -6], size:[14,3,6],
+    detail:{ kind:"AgentCore Runtime 호스팅 MCP · Tool Layer", desc:"run_sql(sql, datasource) 도구. SQLGlot AST allow-list 검증(SELECT/WITH만, 단일 statement, pg·redshift dialect, 시스템 카탈로그 차단) 후 datasource 라우팅으로 Data API 실행. 자동 LIMIT 주입·timeout 포함. 거부 쿼리는 전수 감사 로깅.",
+      tech:"MCP :8000 /mcp · SQLGlot · RDS/Redshift Data API", flows:"질의 ①", chips:["AST allow-list","read-only"] } },
+  { id:"mcp-sem", name:"semantic-retrieval-mcp", sub:"스키마/용어/예시 검색", kind:"agentcore", pos:[0, LAYER_Y[3], 6], size:[14,3,6],
+    detail:{ kind:"AgentCore Runtime 호스팅 MCP · Tool Layer", desc:"search_schema(query, top_k) 도구. OpenSearch hybrid(vector+BM25) 검색과 Neptune openCypher 그래프 순회를 결합해 스키마·비즈니스 용어·동의어·few-shot 예시를 반환한다 (GraphRAG).",
+      tech:"MCP :8000 · OpenSearch hybrid · Neptune openCypher", flows:"질의 ①", chips:["GraphRAG"] } },
+  { id:"mcp-admin", name:"datasource-admin-mcp", sub:"관리 도구 10종", kind:"agentcore", pos:[20, LAYER_Y[3], 0], size:[15,3,7],
+    detail:{ kind:"AgentCore Runtime 호스팅 MCP · Tool Layer", desc:"Manager/Admin 전용 관리 도구 10종: list/get/put/publish/unpublish/reject_entity(큐레이션 CRUD·승인), mine_candidates(Track B 채굴), register_datasource, test_datasource, crawl_schema. Cedar action 스코프로 페르소나별 접근 제한.",
+      tech:"MCP :8000 · Cedar action 스코프 (Manager/Admin 전용)", flows:"관리 ③ · 개선 ④(Track B)", chips:["Cedar 스코프"] } },
+
+  // ── Subsystem 1 · L4 Semantic ──
+  { id:"ddb", name:"DynamoDB", sub:"system-of-record", kind:"aws", pos:[-20, LAYER_Y[4], 0], size:[13,3,8],
+    detail:{ kind:"AWS · Semantic Layer", desc:"semantic 지식의 유일한 쓰기 지점(system-of-record). 비즈니스 용어·동의어·메트릭·few-shot NLQ↔SQL 쌍의 CRUD와 항목 단위 VERSION#n 버전 이력을 관리한다. candidate/published/rejected 상태 분리 — candidate는 파생 인덱스에 동기화하지 않아 에이전트에 노출되지 않는다(지식 오염 방어선).",
+      tech:"DynamoDB Streams → ① OSIS zero-ETL(OpenSearch) ② consumer Lambda(Neptune, 실패 시 DLQ)", flows:"질의 ① · 관리 ③ · 개선 ④",
+      chips:["dual-write 금지","candidate/published 분리"] } },
+  { id:"os", name:"OpenSearch", sub:"hybrid 검색", kind:"aws", pos:[0, LAYER_Y[4], 0], size:[13,3,8],
+    detail:{ kind:"AWS · Semantic Layer", desc:"hybrid(vector+BM25) 검색 인덱스. 스키마 메타데이터·동의어·예시를 임베딩해 \"요즘 들어온 유저\" 같은 미등록 표현도 매칭한다. DynamoDB Streams → OSIS zero-ETL로 published 항목만 동기화.",
+      tech:"관리형 도메인(SigV4 서비스명 es) · knn_vector 매핑 선생성 · hybrid 쿼리 + post_filter", flows:"질의 ①", chips:["vector+BM25"] } },
+  { id:"neptune", name:"Neptune Serverless", sub:"관계 그래프", kind:"aws", pos:[20, LAYER_Y[4], 0], size:[13,3,8],
+    detail:{ kind:"AWS · Semantic Layer", desc:"테이블-컬럼-용어-메트릭 관계, join path, 엔티티 계층 그래프. \"최근 사용자의 지역별 구매액\" 같은 multi-hop 질의에서 용어 해석과 join 경로 도출을 위한 그래프 순회를 담당한다 (AWS GraphRAG 레퍼런스 패턴).",
+      tech:"openCypher · Streams consumer Lambda 로 upsert (실패 시 DLQ)", flows:"질의 ①", chips:["GraphRAG","multi-hop"] } },
+
+  // ── Subsystem 1 · L5 Data ──
+  { id:"aurora", name:"Aurora PostgreSQL", sub:"RDS Data API", kind:"aws", pos:[-20, LAYER_Y[5], 0], size:[13,3,8],
+    detail:{ kind:"AWS · Data Layer", desc:"기본 데이터 소스. RDS Data API 기반이라 드라이버·커넥션 풀이 불필요하다. read-only DB 사용자(agent_ro) 강제 — 다층 SQL 안전장치의 최후 방어선.",
+      tech:"Aurora Serverless v2 (PostgreSQL 16.9) · Data API · Secrets Manager 자격증명", flows:"질의 ①", chips:["read-only"] } },
+  { id:"redshift", name:"Redshift Serverless", sub:"Redshift Data API", kind:"aws", pos:[0, LAYER_Y[5], 0], size:[13,3,8],
+    detail:{ kind:"AWS · Data Layer", desc:"분석계 데이터 소스 (datasource=\"redshift\"). Redshift Data API + read-only 사용자. UNLOAD/COPY 등은 AST 검증에서 차단.",
+      tech:"Redshift Serverless 4 RPU · 전용 isolated VPC(3-AZ)", flows:"질의 ①", chips:["read-only","4 RPU"] } },
+  { id:"secrets", name:"Secrets Manager", sub:"DB 자격증명", kind:"aws", pos:[20, LAYER_Y[5], 0], size:[13,3,7],
+    detail:{ kind:"AWS · Data Layer", desc:"DB 자격증명 저장소. 자격증명이 LLM 컨텍스트에 노출되지 않도록 도구(MCP 서버)가 실행 시점에 조회한다.",
+      tech:"register_datasource 도구가 연결 설정을 저장", flows:"관리 ③", chips:["LLM 비노출"] } },
+
+  // ── Subsystem 2 · 개선 파이프라인 (x=62 수직 스택) ──
+  { id:"otel", name:"CloudWatch GenAI Observability", sub:"OTEL 트레이스", kind:"aws", pos:[62, 52, 0], size:[17,3,8],
+    detail:{ kind:"AWS · Subsystem 2", desc:"orchestrator의 OTEL 트레이스와 구조화 로그(t2sql_query_record — version vector {bundle, agent} 스탬프 포함)를 수집. 대시보드·알람의 근거이자 평가·채굴의 입력.",
+      tech:"OTEL → CloudWatch · GenAI Observability 대시보드", flows:"개선 ④" } },
+  { id:"eval", name:"AgentCore Evaluations", sub:"EX · LLM-judge · online", kind:"agentcore", pos:[62, 43, 0], size:[17,3,8],
+    detail:{ kind:"AgentCore · Subsystem 2", desc:"3종 평가: ① custom code-based evaluator(Execution Accuracy — goldset 매칭 후 gold/생성 SQL을 read-only 재실행해 결과셋 동등성 비교, judge 비용 없음. 서비스 규격상 Lambda로 구현 — tool layer 'Lambda 금지'와 무관), ② builtin LLM-judge(Correctness·ToolSelectionAccuracy), ③ online evaluation(라이브 트레이스 샘플링 상시 채점). 배치 평가는 admin panel에서 실행·리뷰.",
+      tech:"goldset-v1 (8문항) · StartBatchEvaluation · OnlineEvaluationConfig", flows:"개선 ④ Track A", chips:["EX evaluator","online eval"] } },
+  { id:"insights", name:"Insights", sub:"Preview · 후속", kind:"agentcore", dim:true, pos:[62, 34, 0], size:[17,3,7],
+    detail:{ kind:"AgentCore · Subsystem 2 (Preview·후속)", desc:"failure/intent/trajectory 패턴 분석, silent failure 탐지. Preview 기능으로 현재 미사용 — 향후 과제.",
+      tech:"AgentCore Optimization (Preview)", flows:"개선 ④", chips:["미사용"] } },
+  { id:"reco", name:"Recommendations", sub:"개선안 자동 생성", kind:"agentcore", pos:[62, 25, 0], size:[17,3,7],
+    detail:{ kind:"AgentCore · Subsystem 2 (Preview)", desc:"evaluator 스코어를 reward로 삼아 system prompt·tool description 개선안을 자동 생성. admin panel에서 실행하고, 채택 시 Configuration Bundle 새 버전으로 반영한다.",
+      tech:"AgentCore Optimization Recommendations (Preview)", flows:"개선 ④ Track A" } },
+  { id:"bundle", name:"Configuration Bundle", sub:"불변 버전 스냅샷", kind:"agentcore", pos:[62, 16, 0], size:[17,3,7],
+    detail:{ kind:"AgentCore · Subsystem 2 (Preview)", desc:"프롬프트·설정의 불변 버전 스냅샷. 승격 = SSM 포인터(/agentic-t2sql/active-bundle) 전환 → orchestrator가 60s TTL 캐시로 재배포 없이 반영. 실패 시 코드 기본값 폴백, 롤백 = 이전 버전 재승격. Manager가 admin panel에서 승격을 승인한다.",
+      tech:"UpdateConfigurationBundle · SSM 포인터 · 60s TTL 캐시", flows:"개선 ④ Track A", chips:["무중단 반영","롤백 가능"] } },
+  { id:"ab", name:"A/B Testing", sub:"미제공 → 수동 전환 폴백", kind:"agentcore", dim:true, pos:[62, 7, 0], size:[17,3,7],
+    detail:{ kind:"AgentCore · Subsystem 2 (폴백)", desc:"Gateway 트래픽 분할 API가 안정 제공되지 않아, 수동 전량 전환 + online eval 전후 비교로 대체한다 (architecture.md §8 리스크 완화).",
+      tech:"수동 bundle 전환 + online eval 비교", flows:"개선 ④", chips:["폴백 운영"] } },
+  { id:"miner", name:"Semantic 후보 채굴 (Track B)", sub:"mine_candidates", kind:"agentcore", pos:[62, -2, 0], size:[17,3,8],
+    detail:{ kind:"datasource-admin-mcp 도구 · Subsystem 2", desc:"t2sql_query_record 로그를 채굴해 성공 질의 → few-shot 후보, 실패 표현 → 용어/동의어 후보를 DynamoDB에 status: candidate로 기록한다(에이전트 미노출). 반려(rejected) 이력으로 중복 채굴을 방지. 자동 반영은 하지 않는다 — Manager 승인이 지식 오염(poisoning) 방어선. 사용자 thumbs-up/down 피드백 소스는 향후 과제.",
+      tech:"mine_candidates 도구 · CloudWatch Logs 채굴 · candidate → 승인 큐", flows:"개선 ④ Track B", chips:["사람 승인 필수"] } },
+
+  // ── Subsystem 3 · Admin Panel (y=-16 플랫폼) ──
+  { id:"adminweb", name:"Admin Panel (ECS Fargate)", sub:"Next.js web + API", kind:"aws", pos:[-14, -16, 0], size:[20,3,9],
+    detail:{ kind:"AWS · Subsystem 3", desc:"Admin/Manager 공용 관리 콘솔 (Cognito 로그인, JWT 검증·그룹 인가). 데이터소스 등록, semantic 큐레이션, 승인 큐(candidate→published/rejected), 권한 관리 + Cedar 뷰, 배치 평가 실행·리뷰, bundle 승격 승인, Recommendations 실행, 트레이스 디버깅. 쓰기는 사용자 JWT OBO로 Gateway MCP를 경유한다 — DynamoDB 직접 쓰기 없음.",
+      tech:"Next.js · ECS Fargate · JWT OBO → Gateway", flows:"관리 ③ · 개선 ④",
+      chips:["데이터소스 등록","semantic 큐레이션","승인 큐","Cedar 뷰","bundle 승인","트레이스 디버깅"] } },
+  { id:"cognito", name:"Cognito", sub:"User Pool · 그룹", kind:"aws", pos:[8, -16, 0], size:[13,3,7],
+    detail:{ kind:"AWS · Subsystem 3", desc:"사용자 인증과 페르소나 그룹(Admin/Manager/User) 관리. JWT를 발급하며 Cedar 정책은 JWT의 cognito:groups claim을 tag로 평가한다.",
+      tech:"User Pool · 그룹 = 페르소나 · JWT → Cedar", flows:"관리 ③" } },
+  { id:"cw", name:"CloudWatch", sub:"대시보드·트레이스", kind:"aws", pos:[28, -16, 0], size:[13,3,7],
+    detail:{ kind:"AWS · Subsystem 3", desc:"상태 대시보드(메트릭·online eval 스코어)와 OTEL 트레이스 탐색의 데이터 소스.",
+      tech:"CloudWatch Metrics · Logs Insights", flows:"관리 ③" } },
+
+  // ── 페르소나 ──
+  { id:"p-user", name:"💬 User", sub:"자연어 질의·재요청 응답", kind:"persona", pos:[-52, 48, 0], size:[4],
+    detail:{ kind:"페르소나", desc:"자연어로 데이터를 질의하고, 결과·시각화를 확인하며, clarification 재요청에 응답하는 최종 사용자.",
+      tech:"채팅 UI 사용 · Cedar 정책상 SELECT 실행 도구만 접근", flows:"질의 ① · 재요청 ②" } },
+  { id:"p-manager", name:"📖 Manager", sub:"큐레이션·개선 승인", kind:"persona", pos:[-52, -12, 7], size:[4],
+    detail:{ kind:"페르소나", desc:"semantic 메타데이터(비즈니스 용어, 동의어, 관계, few-shot)를 큐레이션하고, Track A/B의 개선안·후보를 승인/반려하는 도메인 관리자.",
+      tech:"admin panel · Cedar 정책상 메타데이터 갱신 도구까지 접근", flows:"관리 ③ · 개선 ④" } },
+  { id:"p-admin", name:"🛠️ Admin", sub:"배포·운영·권한", kind:"persona", pos:[-52, -20, -7], size:[4],
+    detail:{ kind:"페르소나", desc:"솔루션 배포, 인프라 운영, 데이터 소스 연결, 사용자/권한 관리, 모니터링·디버깅을 담당하는 운영자.",
+      tech:"admin panel (Cognito Admin 그룹)", flows:"관리 ③" } },
+];
+
+// 엣지: [flow, from, to, step(선택)]
+const EDGES = [
+  // ① 질의
+  ["query","p-user","alb",1], ["query","alb","web",null], ["query","web","runtime",2],
+  ["query","runtime","memory",3], ["query","runtime","gateway",4],
+  ["query","gateway","mcp-sem",5], ["query","mcp-sem","os",null], ["query","mcp-sem","neptune",null],
+  ["query","gateway","mcp-sql",6], ["query","mcp-sql","aurora",null], ["query","mcp-sql","redshift",null],
+  // ② 재요청
+  ["clarify","runtime","web",1], ["clarify","web","p-user",2], ["clarify","p-user","runtime",3],
+  // ③ 관리
+  ["admin","p-admin","adminweb",null], ["admin","p-manager","adminweb",null],
+  ["admin","adminweb","gateway",1], ["admin","gateway","mcp-admin",2],
+  ["admin","mcp-admin","ddb",3], ["admin","ddb","os",4], ["admin","ddb","neptune",4],
+  ["admin","mcp-admin","secrets",null], ["admin","adminweb","cognito",null],
+  ["admin","cognito","gateway",null], ["admin","cw","adminweb",null],
+  // ④ 개선 (Track A + B)
+  ["eval","runtime","otel",1], ["eval","otel","eval",2],
+  ["eval","eval","insights",null], ["eval","eval","reco",3], ["eval","reco","bundle",4],
+  ["eval","adminweb","bundle",5], ["eval","bundle","ab",null], ["eval","bundle","runtime",6],
+  ["eval","otel","miner",7], ["eval","miner","ddb",8], ["eval","adminweb","miner",9],
+  ["eval","ddb","os",10], ["eval","ddb","neptune",10],
+];
+
+const FLOW_COLOR = { query: 0x5b9cff, clarify: 0xf5b84d, admin: 0xb78cf7, eval: 0x3ecf8e };
+
+const FLOW_STEPS = {
+  query: { title: "① 질의 흐름", steps: [
+    "<b>User → ALB → 웹 앱</b>: 자연어 질의 입력 (Cognito 로그인)",
+    "<b>웹 앱 → Runtime</b>: SigV4 프록시, AG-UI SSE 스트리밍 연결",
+    "<b>Runtime ↔ Memory</b>: 멀티턴 대화 기억 저장/조회 (STM)",
+    "<b>Runtime → Gateway</b>: MCP 도구 호출 (Cedar 인가)",
+    "<b>Gateway → semantic-retrieval-mcp</b>: OpenSearch hybrid 검색 + Neptune 그래프 순회로 schema linking",
+    "<b>Gateway → sql-execution-mcp</b>: AST 검증(SQLGlot) 통과한 SQL만 Data API 로 read-only 실행 → synthesis 가 결과를 markdown 표 + 내러티브로 스트리밍",
+  ]},
+  clarify: { title: "② 재요청(clarification) 흐름", steps: [
+    "<b>Runtime → 웹 앱</b>: 정보 부족 인지 → Strands interrupt (폼 스키마 포함) SSE 이벤트",
+    "<b>웹 앱 → User</b>: CopilotKit 이 date-range picker 등 인터랙티브 폼 렌더링",
+    "<b>User → Runtime</b>: 응답 제출 → 동일 runtimeSessionId 재호출, microVM 세션 캐시로 중단 지점부터 재개 (microVM 교체 시 CLARIFICATION_EXPIRED 재질의 안내)",
+  ]},
+  admin: { title: "③ 관리·큐레이션 흐름", steps: [
+    "<b>Admin Panel → Gateway</b>: 쓰기는 사용자 JWT OBO 로 MCP 경유 (DynamoDB 직접 쓰기 없음)",
+    "<b>Gateway → datasource-admin-mcp</b>: Cedar 인가 후 관리 도구 호출 (큐레이션 CRUD·승인·데이터소스 등록/크롤)",
+    "<b>mcp → DynamoDB</b>: 용어/동의어/few-shot CRUD·publish (candidate/published/rejected 상태)",
+    "<b>DynamoDB → OpenSearch·Neptune</b>: Streams 파생 동기화 (published 만, OSIS zero-ETL + consumer Lambda)",
+  ]},
+  eval: { title: "④ 평가·개선 루프 (Track A + B)", steps: [
+    "<b>Runtime → CloudWatch</b>: OTEL 트레이스 + t2sql_query_record (version vector {bundle, agent})",
+    "<b>→ Evaluations</b>: online eval 샘플링 상시 채점 + admin panel 배치 평가 (EX evaluator·LLM-judge)",
+    "<b>→ Recommendations</b>: evaluator 스코어를 reward 로 prompt·tool description 개선안 생성",
+    "<b>→ Configuration Bundle</b>: 개선안을 불변 버전 스냅샷으로 (UpdateConfigurationBundle)",
+    "<b>Admin Panel → Bundle</b>: Manager 승격 승인 → SSM active-bundle 포인터 전환",
+    "<b>Bundle → Runtime</b>: 60s TTL 캐시로 무중단 반영 (A/B 분할 미제공 → 수동 전환 폴백)",
+    "<b>Track B — CloudWatch → 채굴기</b>: 성공 질의·실패 표현 채굴 (mine_candidates)",
+    "<b>채굴기 → DynamoDB</b>: few-shot·용어 후보를 status: candidate 로 기록 (에이전트 미노출)",
+    "<b>Admin Panel → 승인 큐</b>: Manager 검토 → publish / reject+사유 (중복 채굴 방지)",
+    "<b>DynamoDB → OpenSearch·Neptune</b>: 승인 후 동기화 → 이후 질의부터 에이전트가 사용",
+  ]},
+};
+
+/* ═══════════════════ 3D 씬 구성 ═══════════════════ */
+
+const wrap = document.getElementById("canvas-wrap");
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0d1117);
+scene.fog = new THREE.Fog(0x0d1117, 260, 480);
+
+const camera = new THREE.PerspectiveCamera(46, innerWidth/innerHeight, 0.1, 1000);
+const CAM_HOME = new THREE.Vector3(118, 78, 148);
+const CAM_TARGET = new THREE.Vector3(8, 16, 0);
+camera.position.copy(CAM_HOME);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+wrap.appendChild(renderer.domElement);
+
+const labelRenderer = new CSS2DRenderer();
+labelRenderer.setSize(innerWidth, innerHeight);
+labelRenderer.domElement.style.position = "fixed";
+labelRenderer.domElement.style.inset = "0";
+labelRenderer.domElement.style.pointerEvents = "none";
+document.body.appendChild(labelRenderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.copy(CAM_TARGET);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.maxDistance = 380;
+controls.minDistance = 40;
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.75));
+const dir1 = new THREE.DirectionalLight(0xffffff, 1.1); dir1.position.set(60, 120, 80); scene.add(dir1);
+const dir2 = new THREE.DirectionalLight(0x88aaff, 0.35); dir2.position.set(-80, 40, -60); scene.add(dir2);
+
+function makeLabel(html, cls) {
+  const div = document.createElement("div");
+  div.className = "lbl " + (cls||"");
+  div.innerHTML = html;
+  return new CSS2DObject(div);
+}
+
+/* ── 레이어 슬래브 (Subsystem 1) ── */
+const SLAB_W = 74, SLAB_D = 30;
+for (const [lnum, y] of Object.entries(LAYER_Y)) {
+  const geo = new THREE.BoxGeometry(SLAB_W, 0.8, SLAB_D);
+  const mat = new THREE.MeshStandardMaterial({
+    color: LAYER_COLOR[lnum], transparent: true, opacity: 0.10,
+    roughness: 0.6, metalness: 0.1,
+  });
+  const slab = new THREE.Mesh(geo, mat);
+  slab.position.set(0, y - 0.4, 0);
+  scene.add(slab);
+  const edge = new THREE.LineSegments(
+    new THREE.EdgesGeometry(geo),
+    new THREE.LineBasicMaterial({ color: LAYER_COLOR[lnum], transparent: true, opacity: 0.4 })
+  );
+  edge.position.copy(slab.position);
+  scene.add(edge);
+  const lbl = makeLabel(LAYER_NAME[lnum], "layerlbl");
+  lbl.element.style.color = "#" + LAYER_COLOR[lnum].toString(16).padStart(6, "0");
+  lbl.position.set(-SLAB_W/2 - 3, y + 1.6, SLAB_D/2);
+  lbl.center.set(1, 0.5);
+  scene.add(lbl);
+}
+
+/* ── 서브시스템 프레임 ── */
+function frameBox(x, y, z, w, h, d, title) {
+  const geo = new THREE.BoxGeometry(w, h, d);
+  const wire = new THREE.LineSegments(
+    new THREE.EdgesGeometry(geo),
+    new THREE.LineDashedMaterial({ color: 0x33415e, dashSize: 2.4, gapSize: 1.6, transparent: true, opacity: 0.9 })
+  );
+  wire.computeLineDistances();
+  wire.position.set(x, y, z);
+  scene.add(wire);
+  const lbl = makeLabel(title, "frame");
+  lbl.position.set(x - w/2 + 2, y + h/2 + 2.5, z);
+  lbl.center.set(0, 1);
+  scene.add(lbl);
+}
+frameBox(0, 25.5, 0, 84, 61, 38, "SUBSYSTEM 1 · CORE SYSTEM (5 LAYERS)");
+frameBox(62, 25, 0, 24, 66, 14, "SUBSYSTEM 2 · 개선 파이프라인");
+frameBox(2, -15, 0, 62, 10, 16, "SUBSYSTEM 3 · ADMIN PANEL");
+
+/* ── 노드 메시 ── */
+const nodeMeshes = {};
+const pickables = [];
+for (const n of NODES) {
+  let mesh;
+  if (n.kind === "persona") {
+    mesh = new THREE.Mesh(
+      new THREE.SphereGeometry(n.size[0], 24, 18),
+      new THREE.MeshStandardMaterial({ color: 0x1a2233, roughness: 0.4, metalness: 0.2,
+        emissive: 0x27334d, emissiveIntensity: 0.6 })
+    );
+    mesh.position.set(...n.pos);
+    const lbl = makeLabel(`${n.name}<small>${n.sub}</small>`, "persona");
+    lbl.position.set(0, n.size[0] + 1.2, 0);
+    lbl.center.set(0.5, 1);
+    mesh.add(lbl);
+  } else {
+    const [w, h, d] = n.size;
+    const color = KIND[n.kind] ?? KIND.ext;
+    mesh = new THREE.Mesh(
+      new THREE.BoxGeometry(w, h, d),
+      new THREE.MeshStandardMaterial({
+        color: 0x141b26, roughness: 0.45, metalness: 0.25,
+        emissive: color, emissiveIntensity: n.dim ? 0.06 : 0.16,
+        transparent: !!n.dim, opacity: n.dim ? 0.65 : 1,
+      })
+    );
+    mesh.position.set(n.pos[0], n.pos[1] + h/2 + 0.4, n.pos[2]);
+    // 종류 색 엣지 라인
+    const edge = new THREE.LineSegments(
+      new THREE.EdgesGeometry(mesh.geometry),
+      new THREE.LineBasicMaterial({ color, transparent: true, opacity: n.dim ? 0.35 : 0.85 })
+    );
+    mesh.add(edge);
+    const lbl = makeLabel(`${n.name}<small>${n.sub}</small>`);
+    lbl.position.set(0, h/2 + 0.6, 0);
+    lbl.center.set(0.5, 1);
+    mesh.add(lbl);
+  }
+  mesh.userData.node = n;
+  scene.add(mesh);
+  nodeMeshes[n.id] = mesh;
+  pickables.push(mesh);
+}
+
+/* ── 엣지 (곡선 + 파티클) ── */
+const edgeObjs = []; // {flow, line, mat, curve, particles:[{mesh, offset}]}
+const up = new THREE.Vector3(0, 1, 0);
+for (const [flow, from, to, step] of EDGES) {
+  const a = nodeMeshes[from].position.clone();
+  const b = nodeMeshes[to].position.clone();
+  const dirv = b.clone().sub(a);
+  const dist = dirv.length();
+  let perp = new THREE.Vector3().crossVectors(dirv, up);
+  if (perp.lengthSq() < 0.5) perp = new THREE.Vector3().crossVectors(dirv, new THREE.Vector3(1, 0, 0));
+  perp.normalize();
+  // 흐름별로 살짝 다른 방향으로 부풀려 곡선 겹침 완화
+  const side = { query: 1, clarify: -1, admin: 1, eval: -1 }[flow];
+  const bulge = Math.min(10, dist * 0.18);
+  const mid = a.clone().add(b).multiplyScalar(0.5)
+    .add(perp.multiplyScalar(bulge * side))
+    .add(new THREE.Vector3(0, Math.min(4, dist * 0.06), 0));
+  const curve = new THREE.QuadraticBezierCurve3(a, mid, b);
+
+  const pts = curve.getPoints(40);
+  const mat = new THREE.LineBasicMaterial({ color: FLOW_COLOR[flow], transparent: true, opacity: 0.55 });
+  const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mat);
+  scene.add(line);
+
+  // 방향 표시 파티클 (흐름 방향으로 순환 이동)
+  const particles = [];
+  const pcount = dist > 40 ? 2 : 1;
+  for (let i = 0; i < pcount; i++) {
+    const p = new THREE.Mesh(
+      new THREE.SphereGeometry(0.75, 10, 8),
+      new THREE.MeshBasicMaterial({ color: FLOW_COLOR[flow], transparent: true, opacity: 0.95 })
+    );
+    scene.add(p);
+    particles.push({ mesh: p, offset: i / pcount + (step ? step * 0.07 : 0) });
+  }
+  edgeObjs.push({ flow, line, mat, curve, particles });
+}
+
+/* ═══════════════════ 인터랙션 ═══════════════════ */
+
+let activeFlow = "all";
+function applyFlow(flow) {
+  activeFlow = flow;
+  for (const e of edgeObjs) {
+    const on = flow === "all" || e.flow === flow;
+    e.mat.opacity = on ? (flow === "all" ? 0.5 : 0.95) : 0.05;
+    for (const p of e.particles) p.mesh.visible = on;
+  }
+  const stepsEl = document.getElementById("steps");
+  if (flow === "all") { stepsEl.style.display = "none"; }
+  else {
+    const s = FLOW_STEPS[flow];
+    stepsEl.innerHTML = `<h3 style="color:#${FLOW_COLOR[flow].toString(16).padStart(6,"0")}">${s.title}</h3><ol>` +
+      s.steps.map(t => `<li>${t}</li>`).join("") + "</ol>";
+    stepsEl.style.display = "block";
+  }
+}
+document.querySelectorAll(".btn[data-flow]").forEach(b => b.addEventListener("click", () => {
+  document.querySelectorAll(".btn[data-flow]").forEach(x => x.classList.remove("active"));
+  b.classList.add("active");
+  applyFlow(b.dataset.flow);
+}));
+
+document.getElementById("btn-rotate").addEventListener("click", e => {
+  controls.autoRotate = !controls.autoRotate;
+  controls.autoRotateSpeed = 0.8;
+  e.currentTarget.classList.toggle("on", controls.autoRotate);
+});
+document.getElementById("btn-reset").addEventListener("click", () => {
+  camera.position.copy(CAM_HOME);
+  controls.target.copy(CAM_TARGET);
+});
+
+/* ── 클릭 → 상세 패널 / 호버 하이라이트 ── */
+const ray = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+let hovered = null;
+let downAt = null;
+
+function pick(ev) {
+  mouse.set((ev.clientX / innerWidth) * 2 - 1, -(ev.clientY / innerHeight) * 2 + 1);
+  ray.setFromCamera(mouse, camera);
+  const hits = ray.intersectObjects(pickables, false);
+  return hits.length ? hits[0].object : null;
+}
+renderer.domElement.addEventListener("pointermove", ev => {
+  const m = pick(ev);
+  if (hovered && hovered !== m) {
+    hovered.material.emissiveIntensity = hovered.userData.baseEmissive;
+    hovered = null;
+    renderer.domElement.style.cursor = "";
+  }
+  if (m && hovered !== m) {
+    m.userData.baseEmissive = m.material.emissiveIntensity;
+    m.material.emissiveIntensity = Math.min(0.55, m.userData.baseEmissive + 0.3);
+    hovered = m;
+    renderer.domElement.style.cursor = "pointer";
+  }
+});
+renderer.domElement.addEventListener("pointerdown", ev => { downAt = [ev.clientX, ev.clientY]; });
+renderer.domElement.addEventListener("pointerup", ev => {
+  if (!downAt) return;
+  const moved = Math.hypot(ev.clientX - downAt[0], ev.clientY - downAt[1]);
+  downAt = null;
+  if (moved > 5) return; // 드래그(회전)는 클릭으로 취급 안 함
+  const m = pick(ev);
+  const panel = document.getElementById("detail");
+  if (!m) { panel.style.display = "none"; return; }
+  const n = m.userData.node, d = n.detail;
+  document.getElementById("d-kind").textContent = d.kind;
+  document.getElementById("d-kind").style.color =
+    n.kind === "agentcore" ? "#a58cff" : n.kind === "aws" ? "#ffb84d" : "#8b9bb8";
+  document.getElementById("d-name").textContent = n.name;
+  document.getElementById("d-desc").textContent = d.desc;
+  let meta = "";
+  if (d.tech)  meta += `<div class="row"><span class="k">기술</span><span>${d.tech}</span></div>`;
+  if (d.flows) meta += `<div class="row"><span class="k">참여 흐름</span><span>${d.flows}</span></div>`;
+  if (d.chips) meta += `<div class="row"><span class="k">특성</span><span>` +
+    d.chips.map(c => `<span class="chip">${c}</span>`).join("") + `</span></div>`;
+  document.getElementById("d-meta").innerHTML = meta;
+  panel.style.display = "block";
+});
+
+/* ═══════════════════ 렌더 루프 ═══════════════════ */
+const clock = new THREE.Clock();
+function animate() {
+  requestAnimationFrame(animate);
+  const t = clock.getElapsedTime();
+  for (const e of edgeObjs) {
+    if (activeFlow !== "all" && e.flow !== activeFlow) continue;
+    const speed = 0.09;
+    for (const p of e.particles) {
+      const u = (t * speed + p.offset) % 1;
+      e.curve.getPoint(u, p.mesh.position);
+    }
+  }
+  controls.update();
+  renderer.render(scene, camera);
+  labelRenderer.render(scene, camera);
+}
+animate();
+
+window.addEventListener("resize", () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  labelRenderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>

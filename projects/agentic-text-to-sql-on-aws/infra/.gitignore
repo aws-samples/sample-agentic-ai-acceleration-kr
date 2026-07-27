@@ -1,0 +1,7 @@
+# CDK 로컬 산출물 (환경별 재생성 — 커밋 금지)
+cdk.out/
+cdk.context.json
+dist/
+node_modules/
+*.js.map
+install.log

@@ -1,0 +1,463 @@
+/* Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms. */
+
+/* ui/globals.css 와 동일한 다크 팔레트를 공유한다(같은 제품군 톤 유지).
+   외부 UI 킷은 추가하지 않고 필요한 최소 스타일만 자체 정의한다. */
+
+:root {
+  --t2s-bg: #0f172a;
+  --t2s-panel: #1e293b;
+  --t2s-border: #334155;
+  --t2s-text: #e2e8f0;
+  --t2s-muted: #94a3b8;
+  --t2s-accent: #38bdf8;
+  --t2s-code-bg: #0b1220;
+  --t2s-ok: #4ade80;
+  --t2s-warn: #fbbf24;
+  --t2s-error: #f87171;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  background: var(--t2s-bg);
+  color: var(--t2s-text);
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic',
+    sans-serif;
+  font-size: 14px;
+}
+
+/* ---------- 레이아웃 ---------- */
+
+.adm-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.adm-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--t2s-border);
+  background: var(--t2s-panel);
+}
+
+.adm-header h1 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.adm-header p {
+  margin: 3px 0 0;
+  font-size: 12px;
+  color: var(--t2s-muted);
+}
+
+.adm-user {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--t2s-muted);
+}
+
+.adm-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--t2s-border);
+  background: var(--t2s-panel);
+}
+
+.adm-tab {
+  padding: 10px 14px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--t2s-muted);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.adm-tab:hover {
+  color: var(--t2s-text);
+}
+
+.adm-tab-active {
+  color: var(--t2s-text);
+  border-bottom-color: var(--t2s-accent);
+  font-weight: 600;
+}
+
+.adm-main {
+  flex: 1;
+  padding: 20px 24px 48px;
+}
+
+.adm-section {
+  margin-bottom: 28px;
+}
+
+.adm-section > h2 {
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.adm-section > p.adm-desc {
+  margin: 0 0 14px;
+  font-size: 12px;
+  color: var(--t2s-muted);
+}
+
+.adm-panel {
+  padding: 16px;
+  border: 1px solid var(--t2s-border);
+  border-radius: 10px;
+  background: var(--t2s-panel);
+}
+
+.adm-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-end;
+  margin-bottom: 14px;
+}
+
+.adm-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .adm-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ---------- 폼 ---------- */
+
+.adm-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.adm-field-grow {
+  flex: 1;
+  min-width: 180px;
+}
+
+.adm-label {
+  font-size: 12px;
+  color: var(--t2s-muted);
+}
+
+.adm-input,
+.adm-select,
+.adm-textarea {
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--t2s-border);
+  background: var(--t2s-code-bg);
+  color: var(--t2s-text);
+  font-size: 13px;
+  font-family: inherit;
+  width: 100%;
+}
+
+.adm-textarea {
+  font-family: 'SFMono-Regular', Menlo, Consolas, monospace;
+  min-height: 200px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.adm-input:focus,
+.adm-select:focus,
+.adm-textarea:focus {
+  outline: none;
+  border-color: var(--t2s-accent);
+}
+
+.adm-btn {
+  padding: 8px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--t2s-border);
+  background: transparent;
+  color: var(--t2s-text);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.adm-btn:hover:not(:disabled) {
+  border-color: var(--t2s-accent);
+}
+
+.adm-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.adm-btn-primary {
+  background: var(--t2s-accent);
+  border-color: var(--t2s-accent);
+  color: var(--t2s-bg);
+  font-weight: 600;
+}
+
+.adm-btn-sm {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.adm-btn-link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--t2s-accent);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.adm-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ---------- 표 ---------- */
+
+.adm-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--t2s-border);
+  border-radius: 10px;
+}
+
+.adm-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.adm-table th,
+.adm-table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--t2s-border);
+  vertical-align: top;
+}
+
+.adm-table th {
+  background: var(--t2s-panel);
+  color: var(--t2s-muted);
+  font-weight: 600;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.adm-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.adm-table tbody tr.adm-row-selected {
+  background: rgba(56, 189, 248, 0.08);
+}
+
+.adm-mono {
+  font-family: 'SFMono-Regular', Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+/* ---------- 배지 · 알림 ---------- */
+
+.adm-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--t2s-border);
+  font-size: 11px;
+  color: var(--t2s-muted);
+  white-space: nowrap;
+}
+
+.adm-badge-published {
+  border-color: var(--t2s-ok);
+  color: var(--t2s-ok);
+}
+
+.adm-badge-candidate {
+  border-color: var(--t2s-warn);
+  color: var(--t2s-warn);
+}
+
+/* 반려(rejected) 상태. */
+.adm-badge-rejected {
+  border-color: var(--t2s-error);
+  color: var(--t2s-error);
+}
+
+.adm-alert {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--t2s-border);
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
+.adm-alert-error {
+  border-color: var(--t2s-error);
+  color: var(--t2s-error);
+}
+
+.adm-alert-ok {
+  border-color: var(--t2s-ok);
+  color: var(--t2s-ok);
+}
+
+.adm-alert-info {
+  color: var(--t2s-muted);
+}
+
+.adm-empty {
+  padding: 20px;
+  text-align: center;
+  color: var(--t2s-muted);
+  font-size: 13px;
+}
+
+/* ---------- 메트릭 카드 ---------- */
+
+.adm-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.adm-card {
+  padding: 14px 16px;
+  border: 1px solid var(--t2s-border);
+  border-radius: 10px;
+  background: var(--t2s-panel);
+}
+
+.adm-card-label {
+  font-size: 12px;
+  color: var(--t2s-muted);
+}
+
+.adm-card-value {
+  margin-top: 6px;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.adm-card-unit {
+  margin-left: 4px;
+  font-size: 12px;
+  color: var(--t2s-muted);
+  font-weight: 400;
+}
+
+/* ---------- 코드 블록 (Cedar 정책 · 트레이스 이벤트) ---------- */
+
+.adm-code {
+  margin: 0;
+  padding: 12px;
+  overflow-x: auto;
+  border-radius: 8px;
+  background: var(--t2s-code-bg);
+  border: 1px solid var(--t2s-border);
+  font-family: 'SFMono-Regular', Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.adm-timeline {
+  max-height: 480px;
+  overflow-y: auto;
+  border: 1px solid var(--t2s-border);
+  border-radius: 10px;
+}
+
+.adm-timeline-item {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--t2s-border);
+  font-size: 12px;
+}
+
+.adm-timeline-item:last-child {
+  border-bottom: none;
+}
+
+.adm-timeline-ts {
+  color: var(--t2s-muted);
+  font-family: 'SFMono-Regular', Menlo, Consolas, monospace;
+}
+
+.adm-timeline-msg {
+  font-family: 'SFMono-Regular', Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ---------- 로그인 ---------- */
+
+.adm-login {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.adm-login-card {
+  width: 100%;
+  max-width: 360px;
+  padding: 24px;
+  border: 1px solid var(--t2s-border);
+  border-radius: 12px;
+  background: var(--t2s-panel);
+}
+
+.adm-login-card h1 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+
+.adm-login-card p.adm-desc {
+  margin: 0 0 18px;
+  font-size: 12px;
+  color: var(--t2s-muted);
+}
+
+.adm-login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}

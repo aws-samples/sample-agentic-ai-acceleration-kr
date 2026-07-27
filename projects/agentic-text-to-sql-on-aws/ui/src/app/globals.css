@@ -1,0 +1,324 @@
+/* Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms. */
+
+/* CopilotKit(v2) 기본 스타일 (채팅 UI 레이아웃/버블/입력창) */
+@import '@copilotkit/react-core/v2/styles.css';
+
+:root {
+  --t2s-bg: #0f172a;
+  --t2s-panel: #1e293b;
+  --t2s-border: #334155;
+  --t2s-text: #e2e8f0;
+  --t2s-muted: #94a3b8;
+  --t2s-accent: #38bdf8;
+  --t2s-chip-bg: #164e63;
+  --t2s-code-bg: #0b1220;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--t2s-bg);
+  color: var(--t2s-text);
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic',
+    sans-serif;
+}
+
+.t2s-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.t2s-header {
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--t2s-border);
+  background: var(--t2s-panel);
+}
+
+.t2s-header h1 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.t2s-header p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--t2s-muted);
+}
+
+.t2s-chat {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.t2s-chat > * {
+  flex: 1;
+  min-height: 0;
+}
+
+.t2s-chat-inner {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+
+.t2s-chat-inner > *:last-child {
+  flex: 1;
+  min-height: 0;
+}
+
+/* clarification 폼이 렌더되면 마지막 자식이 되므로, 채팅창이 아닌 폼이 flex:1 을
+   차지하지 않도록 고정 높이로 되돌린다(위 last-child 규칙 상쇄). */
+.t2s-chat-inner > .t2s-clarify-wrap:last-child {
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+/* 파이프라인 진행 바 (STEP_STARTED/FINISHED 기반) */
+.t2s-pipeline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--t2s-border);
+  background: var(--t2s-panel);
+}
+
+.t2s-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  border: 1px solid var(--t2s-border);
+  color: var(--t2s-muted);
+  background: transparent;
+}
+
+.t2s-step-dot {
+  width: 10px;
+  height: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid var(--t2s-muted);
+  font-size: 9px;
+  line-height: 1;
+}
+
+.t2s-step-active {
+  color: var(--t2s-text);
+  border-color: var(--t2s-accent);
+}
+
+.t2s-step-active .t2s-step-dot {
+  border-color: var(--t2s-accent);
+  border-top-color: transparent;
+  animation: t2s-spin 0.7s linear infinite;
+}
+
+.t2s-step-done {
+  color: var(--t2s-text);
+}
+
+.t2s-step-done .t2s-step-dot {
+  border-color: #4ade80;
+  color: #4ade80;
+}
+
+/* 도구 진행 상태 칩 */
+.t2s-tool-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  margin: 4px 0;
+  border-radius: 999px;
+  background: var(--t2s-chip-bg);
+  color: var(--t2s-text);
+  font-size: 13px;
+  border: 1px solid var(--t2s-border);
+}
+
+.t2s-tool-chip .t2s-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--t2s-muted);
+  border-top-color: var(--t2s-accent);
+  border-radius: 50%;
+  animation: t2s-spin 0.7s linear infinite;
+}
+
+.t2s-tool-chip.done .t2s-check {
+  color: #4ade80;
+}
+
+@keyframes t2s-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* clarification(재요청) 인터랙티브 폼 */
+.t2s-clarify-wrap {
+  padding: 12px 16px 16px;
+  border-top: 1px solid var(--t2s-border);
+  background: var(--t2s-panel);
+}
+
+.t2s-clarify {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--t2s-accent);
+  border-radius: 10px;
+  background: var(--t2s-bg);
+}
+
+.t2s-clarify-question {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--t2s-text);
+}
+
+.t2s-clarify-icon {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--t2s-accent);
+  color: var(--t2s-bg);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.t2s-clarify-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.t2s-clarify-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.t2s-clarify-label {
+  font-size: 12px;
+  color: var(--t2s-muted);
+}
+
+.t2s-clarify-input {
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--t2s-border);
+  background: var(--t2s-code-bg);
+  color: var(--t2s-text);
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.t2s-clarify-input:focus {
+  outline: none;
+  border-color: var(--t2s-accent);
+}
+
+.t2s-clarify-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.t2s-clarify-range {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.t2s-clarify-range .t2s-clarify-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.t2s-clarify-range-sep {
+  color: var(--t2s-muted);
+}
+
+.t2s-clarify-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.t2s-clarify-btn {
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: 1px solid var(--t2s-border);
+  background: transparent;
+  color: var(--t2s-text);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.t2s-clarify-btn:hover:not(:disabled) {
+  border-color: var(--t2s-accent);
+}
+
+.t2s-clarify-btn-primary {
+  background: var(--t2s-accent);
+  border-color: var(--t2s-accent);
+  color: var(--t2s-bg);
+  font-weight: 600;
+}
+
+.t2s-clarify-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* SQL 코드 블록 */
+.t2s-sql-block {
+  margin: 8px 0;
+  border: 1px solid var(--t2s-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.t2s-sql-block .t2s-sql-label {
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--t2s-muted);
+  background: var(--t2s-panel);
+  border-bottom: 1px solid var(--t2s-border);
+}
+
+.t2s-sql-block pre {
+  margin: 0;
+  padding: 12px;
+  overflow-x: auto;
+  background: var(--t2s-code-bg);
+  font-family: 'SFMono-Regular', Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}

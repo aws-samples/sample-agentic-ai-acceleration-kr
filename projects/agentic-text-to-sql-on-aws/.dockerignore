@@ -1,0 +1,21 @@
+# 레포 루트를 빌드 컨텍스트로 쓰는 이미지(datasource-admin-mcp — semantic-layer 경로 의존성)
+# 를 위한 제외 규칙. 컨텍스트 전송량을 줄이고 시크릿·로컬 산출물 유입을 막는다.
+**/node_modules/
+**/cdk.out/
+**/.venv/
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.ruff_cache/
+**/*.egg-info/
+**/dist/
+**/.next/
+**/tests/
+**/.git/
+**/.env
+**/.env.*
+!**/.env.example
+**/*-outputs.json
+**/*.log
+**/*.csv
+**/.DS_Store

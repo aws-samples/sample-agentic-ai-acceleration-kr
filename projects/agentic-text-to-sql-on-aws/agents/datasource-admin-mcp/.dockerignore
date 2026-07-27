@@ -1,0 +1,14 @@
+# 빌드 컨텍스트가 레포 루트이므로 실제 제외 규칙은 루트 .dockerignore 가 담당한다.
+# (이 파일은 로컬 도구 일관성용 — agents/* 의 다른 MCP 서버와 동형 유지.)
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+tests/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
