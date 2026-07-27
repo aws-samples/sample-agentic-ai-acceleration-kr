@@ -1,7 +1,7 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 /**
- * GET /api/eval/runs/{id} — GetBatchEvaluation (결과·스코어, §9.6).
+ * GET /api/eval/runs/{id} — GetBatchEvaluation (결과·스코어).
  *
  * 평가자별 평균 스코어(`evaluationResults.evaluatorSummaries`)와 insight 결과
  * (`executionSummaryResult`)를 화면이 그대로 보여줄 수 있게 전달한다. 업스트림 실패는 502.

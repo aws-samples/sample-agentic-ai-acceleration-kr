@@ -103,7 +103,7 @@ def _set_base_env(monkeypatch) -> None:
 
 
 def test_build_retriever_schema_only_when_no_semantic_env(monkeypatch) -> None:
-    # SEMANTIC_INDEX·graph 없음 → M1 동일: OpenSearchHybridRetriever 단독.
+    # SEMANTIC_INDEX·graph 없음 → OpenSearchHybridRetriever 단독.
     _set_base_env(monkeypatch)
     monkeypatch.delenv("SEMANTIC_INDEX", raising=False)
     monkeypatch.delenv("SEMANTIC_GRAPH_ENABLED", raising=False)

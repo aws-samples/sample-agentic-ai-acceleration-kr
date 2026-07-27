@@ -18,21 +18,21 @@ export interface RuntimeStackProps extends StackProps {
   // base 스택에서 전달받는 참조들(props 로 명시 전달 — cross-stack export 자동 생성)
   readonly auroraCluster: rds.DatabaseCluster;
   readonly agentRoSecret: secretsmanager.ISecret;
-  // M3: Redshift 2번째 소스. base 가 소유하므로 object 참조로 전달(결정적 cross-stack export).
+  // Redshift 2번째 소스. base 가 소유하므로 object 참조로 전달(결정적 cross-stack export).
   readonly redshiftRoSecret: secretsmanager.ISecret;
   readonly openSearchDomain: opensearch.IDomain;
   readonly memory: agentcore.Memory;
   readonly ecrOrchestrator: ecr.IRepository;
   readonly ecrSqlMcp: ecr.IRepository;
   readonly ecrSemanticMcp: ecr.IRepository;
-  /** M4: datasource-admin-mcp 이미지 리포 */
+  /** datasource-admin-mcp 이미지 리포 */
   readonly ecrAdminMcp: ecr.IRepository;
   readonly orchestratorRole: iam.Role;
   readonly sqlMcpRole: iam.Role;
   readonly semanticMcpRole: iam.Role;
-  /** M4: datasource-admin-mcp Runtime 실행 role (base 소유) */
+  /** datasource-admin-mcp Runtime 실행 role (base 소유) */
   readonly adminMcpRole: iam.Role;
-  // M2: semantic 스택에서 전달받는 참조들 (Neptune VPC 접근)
+  // semantic 스택에서 전달받는 참조들 (Neptune VPC 접근)
   readonly vpc: ec2.IVpc;
   /** Neptune 전용 SG — semantic MCP runtime 로부터 8182 인바운드를 여기서 허용 */
   readonly graphSecurityGroup: ec2.SecurityGroup;
@@ -45,7 +45,7 @@ export interface RuntimeStackProps extends StackProps {
  *
  *  - sql-execution-mcp   : protocol MCP  (port 8000, /mcp)
  *  - semantic-retrieval-mcp: protocol MCP (port 8000, /mcp)
- *  - datasource-admin-mcp: protocol MCP (port 8000, /mcp) — M4 관리 도구 평면
+ *  - datasource-admin-mcp: protocol MCP (port 8000, /mcp) — 관리 도구 평면
  *  - orchestrator        : protocol HTTP (port 8080, /invocations, /ping)
  *
  * 모두 fromEcrRepository(repo, 'latest') 로 이미지 참조(D9: direct code upload 금지).
@@ -55,7 +55,7 @@ export class AgenticT2SqlRuntimeStack extends Stack {
   public readonly orchestratorRuntime: agentcore.Runtime;
   public readonly sqlMcpRuntime: agentcore.Runtime;
   public readonly semanticMcpRuntime: agentcore.Runtime;
-  /** M4: 관리 도구(큐레이션·승인·데이터소스) MCP runtime */
+  /** 관리 도구(큐레이션·승인·데이터소스) MCP runtime */
   public readonly adminMcpRuntime: agentcore.Runtime;
 
   constructor(scope: Construct, id: string, props: RuntimeStackProps) {
@@ -79,7 +79,7 @@ export class AgenticT2SqlRuntimeStack extends Stack {
         AURORA_CLUSTER_ARN: props.auroraCluster.clusterArn,
         AURORA_SECRET_ARN: props.agentRoSecret.secretArn,
         DB_NAME: config.dbName,
-        // M3: 2번째 데이터 소스(datasource="redshift"). base 가 결정적으로 전달(순환 없음).
+        // 2번째 데이터 소스(datasource="redshift"). base 가 결정적으로 전달(순환 없음).
         REDSHIFT_WORKGROUP: config.redshiftWorkgroupName,
         REDSHIFT_DB: config.dbName,
         REDSHIFT_SECRET_ARN: props.redshiftRoSecret.secretArn,
@@ -87,7 +87,7 @@ export class AgenticT2SqlRuntimeStack extends Stack {
     });
 
     // ───────────────── Semantic retrieval MCP runtime (MCP protocol) ─────────────────
-    // M2: VPC 모드 전환. Neptune 은 VPC 내부(PRIVATE_ISOLATED)라 runtime 이 VPC 안에서 접근하고,
+    // VPC 모드. Neptune 은 VPC 내부(PRIVATE_ISOLATED)라 runtime 이 VPC 안에서 접근하고,
     // OpenSearch 퍼블릭 엔드포인트는 PRIVATE_WITH_EGRESS 서브넷의 NAT 로 나간다.
     //
     // semantic runtime 전용 SG 를 이 스택에서 만들어 runtime 에 붙이고, Neptune SG 인바운드
@@ -131,7 +131,7 @@ export class AgenticT2SqlRuntimeStack extends Stack {
         // 관리형 OpenSearch 도메인이므로 SigV4 서명 서비스명은 "es"
         // (seed 인덱서와 정합; Serverless 로 전환 시 "aoss").
         OPENSEARCH_SERVICE: 'es',
-        // M2: Neptune 그래프 순회 + semantic 인덱스. SEMANTIC_GRAPH_ENABLED=true 로
+        // Neptune 그래프 순회 + semantic 인덱스. SEMANTIC_GRAPH_ENABLED=true 로
         // GraphAugmentedRetriever 활성(미배포 환경에선 false 로 OpenSearch 단독 graceful degrade).
         GRAPH_ENDPOINT: props.graphEndpoint,
         SEMANTIC_GRAPH_ENABLED: 'true',
@@ -139,10 +139,10 @@ export class AgenticT2SqlRuntimeStack extends Stack {
       },
     });
 
-    // ───────────────── Datasource admin MCP runtime (MCP protocol, M4) ─────────────────
+    // ───────────────── Datasource admin MCP runtime (MCP protocol) ─────────────────
     // semantic 큐레이션(CRUD·publish)·데이터소스 등록/테스트·스키마 크롤 도구를 제공한다.
     // DynamoDB(semantic)·Data API·Secrets Manager 는 모두 AWS API 평면이라 VPC 불필요 →
-    // PUBLIC 네트워크(sql-mcp 와 동형). 인가는 Gateway 앞단의 Cedar 가 담당한다(§8.0).
+    // PUBLIC 네트워크(sql-mcp 와 동형). 인가는 Gateway 앞단의 Cedar 가 담당한다.
     this.adminMcpRuntime = new agentcore.Runtime(this, 'AdminMcpRuntime', {
       runtimeName: `${nameBase}_datasource_admin_mcp`,
       description: 'Semantic 큐레이션·승인 + 데이터소스 등록/테스트/스키마 크롤 MCP (admin panel 도구 평면)',
@@ -167,7 +167,7 @@ export class AgenticT2SqlRuntimeStack extends Stack {
         REDSHIFT_SECRET_ARN: props.redshiftRoSecret.secretArn,
         // 등록 데이터소스 자격증명 시크릿 프리픽스(role 정책의 리소스 제한과 반드시 일치).
         DATASOURCE_SECRET_PREFIX: `${config.appPrefix}/datasource/`,
-        // M5 Track B: 후보 채굴기(mine_candidates)가 orchestrator 의 `t2sql_query_record`
+        // Track B: 후보 채굴기(mine_candidates)가 orchestrator 의 `t2sql_query_record`
         // 로그를 찾을 프리픽스. adminMcpRole 의 logs 리소스 제한과 일치해야 한다.
         ORCHESTRATOR_LOG_GROUP_PREFIX: '/aws/bedrock-agentcore/runtimes/',
       },
@@ -197,15 +197,15 @@ export class AgenticT2SqlRuntimeStack extends Stack {
         SEMANTIC_MCP_ARN: this.semanticMcpRuntime.agentRuntimeArn,
         MEMORY_ID: props.memory.memoryId,
         MODEL_ID: config.modelId,
-        // ───────── M3: 도구 평면(tool plane) 모드 ─────────
+        // ───────── 도구 평면(tool plane) 모드 ─────────
         // 기본 "direct"(Runtime MCP 직접 SigV4). Gateway 배포는 이 스택 '이후'이므로 runtime→gateway
         // 참조는 순환이다. 따라서 GATEWAY_URL 은 결정적으로 알 수 없어 placeholder(빈 문자열/컨텍스트)로
         // 두고, gateway 배포 후 `aws bedrock-agentcore update-agent-runtime` 로 두 env 를 주입해
-        // "gateway" 로 전환한다(CLAUDE.md M2 학습: 이미지/env 갱신은 update-agent-runtime). gateway
+        // "gateway" 로 전환한다(이미지/env 갱신은 update-agent-runtime 으로). gateway
         // 모드의 Cognito M2M env(COGNITO_*)도 그 시점에 함께 주입한다.
         TOOL_PLANE_MODE: config.toolPlaneMode,
         GATEWAY_URL: config.gatewayUrl,
-        // ───────── M5: bundle 기반 프롬프트/모델 오버라이드 + 버전 스탬프(§9.5) ─────────
+        // ───────── bundle 기반 프롬프트/모델 오버라이드 + 버전 스탬프 ─────────
         // 활성 bundle 포인터(SSM). 파라미터 자체는 evaluation 스택 소유이고 runtime→evaluation
         // 참조는 배포 순서상 역방향이므로, 값은 config 리터럴(이름 규칙)로 주입한다.
         // 파라미터가 없거나 빈 값이면 orchestrator 는 코드 기본값으로 폴백한다(AGENTREL04).
@@ -231,7 +231,7 @@ export class AgenticT2SqlRuntimeStack extends Stack {
     });
     new CfnOutput(this, 'AdminMcpRuntimeArn', {
       value: this.adminMcpRuntime.agentRuntimeArn,
-      description: 'Datasource admin MCP runtime ARN (M4 — gateway target)',
+      description: 'Datasource admin MCP runtime ARN (gateway target)',
     });
   }
 }

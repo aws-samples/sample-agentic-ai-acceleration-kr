@@ -126,7 +126,7 @@ def test_clarification_response_invalid_missing_id():
 
 
 # ---------------------------------------------------------------------------
-# M4 additive: forwardedProps.userAccessToken (OBO)
+# forwardedProps.userAccessToken (OBO)
 # ---------------------------------------------------------------------------
 
 

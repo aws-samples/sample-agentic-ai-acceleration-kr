@@ -1,7 +1,7 @@
 """RDS Data API 실행기 (read-only agent_ro 자격증명).
 
 EX 평가는 gold SQL 과 생성 SQL 을 **같은 조건**으로 실행해 결과셋을 비교한다.
-Aurora PostgreSQL Data API(동기 ExecuteStatement)만 사용한다(§9.1 — goldset 은 aurora 만).
+Aurora PostgreSQL Data API(동기 ExecuteStatement)만 사용한다(goldset 은 aurora 만 다룬다).
 
 boto3 클라이언트는 지연 생성하며 주입 가능하다(단위 테스트는 fake 주입).
 """

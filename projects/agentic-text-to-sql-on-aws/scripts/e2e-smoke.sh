@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# e2e-smoke.sh — E2E 스모크 테스트 실행 래퍼(레벨 1~6).
+# e2e-smoke.sh — E2E 스모크 테스트 실행 래퍼(레벨 1~7).
 #
 #  레벨1 (MCP): scripts/e2e_verify.py --level 1  (orchestrator venv 에서 실행)
 #  레벨2 (에이전트): scripts/e2e_verify.py --level 2
 #  레벨3 (UI): ALB URL 200 확인 + /api/health 확인
-#  레벨4 (M2): clarification interrupt E2E + semantic 검색 확장(용어/fewshot)
-#  레벨5 (M3): Gateway 집약 + Cedar 허용/거부 + Redshift datasource
+#  레벨4 (clarification/semantic): clarification interrupt E2E + semantic 검색 확장(용어/fewshot)
+#  레벨5 (Gateway/Cedar/Redshift): Gateway 집약 + Cedar 허용/거부 + Redshift datasource
 #             (E2E_USER_PASSWORD env 필요 — Cognito 테스트 사용자)
-#  레벨6 (M4): admin panel ALB·인증/인가 + Manager 큐레이션→승인→전파
+#  레벨6 (admin panel/큐레이션·승인/사용자 OBO): admin panel ALB·인증/인가 + Manager 큐레이션→승인→전파
 #             + Cedar admin 도구 접근 제어(사용자 JWT OBO)
 #             (admin-outputs.json 필요, 테스트 사용자는 scripts/create-e2e-users.sh 로 생성)
-#  레벨7 (M5): 개선 파이프라인 — reject·채굴→승인→전파·중복방지(Track B)
+#  레벨7 (개선 파이프라인): reject·채굴→승인→전파·중복방지(Track B)
 #             + EX evaluator·배치 평가·online eval·bundle 승격/원복(Track A)
 #             (evaluation-outputs.json 필요. 레벨2 가 남긴 질의 로그를 채굴하므로
 #              단독 실행 시 레벨2 를 먼저 돌릴 것 — all 은 순서 자동 충족)
@@ -21,8 +21,8 @@
 # 사용:
 #   scripts/e2e-smoke.sh          # 가능한 레벨 전부
 #   scripts/e2e-smoke.sh 1        # MCP 레벨만
-#   scripts/e2e-smoke.sh 6        # M4 admin/큐레이션/OBO 만
-#   scripts/e2e-smoke.sh 7        # M5 개선 파이프라인만
+#   scripts/e2e-smoke.sh 6        # admin/큐레이션/OBO 만
+#   scripts/e2e-smoke.sh 7        # 개선 파이프라인만
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

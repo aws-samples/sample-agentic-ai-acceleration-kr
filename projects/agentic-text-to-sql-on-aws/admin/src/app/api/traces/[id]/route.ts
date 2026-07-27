@@ -1,7 +1,7 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 /**
- * GET /api/traces/{id} — 세션 이벤트 타임라인 (§8.4).
+ * GET /api/traces/{id} — 세션 이벤트 타임라인.
  *
  * `{id}` 는 `/api/traces/sessions` 가 준 합성 키(`<로그그룹>|<스트림>`)를 URL 인코딩한 값이다.
  * 임의 로그 그룹 조회를 막기 위해 **프리픽스(RUNTIME_LOG_GROUP_PREFIX) 검증**을 반드시 통과시킨다.

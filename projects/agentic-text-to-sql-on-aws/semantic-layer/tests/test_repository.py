@@ -225,7 +225,7 @@ def test_get_missing_returns_none():
     assert repo.get_entity("table", "nope") is None
 
 
-# --- M4 additive: datasource entity_type -------------------------------------
+# --- datasource entity_type --------------------------------------------------
 
 
 def test_datasource_entity_type_is_valid():
@@ -272,7 +272,7 @@ def test_graph_sync_ignores_datasource_entities():
     assert _delete_statements("datasource", data) == []
 
 
-# --- M5 additive: rejected 상태 ------------------------------------------------
+# --- rejected 상태 -------------------------------------------------------------
 
 
 def test_rejected_status_is_valid_and_additive_only():

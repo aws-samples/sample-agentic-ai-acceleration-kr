@@ -3,9 +3,10 @@
 자연어 질의를 받아 AgentCore Runtime 의 오케스트레이터 에이전트로 전달하고, 에이전트의
 스트리밍 응답(파이프라인 진행 · 텍스트 델타 · 도구 진행 · SQL · 결과)을 실시간 렌더링하는 웹앱입니다.
 
-> M1 범위: 자연어 질의 → SSE 스트리밍(STEP 진행 바 + 텍스트 + 도구 칩 + SQL) → 결과.
+> 기능: 자연어 질의 → SSE 스트리밍(STEP 진행 바 + 텍스트 + 도구 칩 + SQL) → 결과.
 > 결과 표는 synthesis 단계의 markdown 표를 CopilotChat 이 렌더합니다(아래 "결과 표시" 참고).
-> M2 범위: clarification(재요청) 인터랙티브 폼 추가(아래 "clarification 재요청 폼" 참고).
+> 정보가 부족한 질의에는 clarification(재요청) 인터랙티브 폼을 띄웁니다
+> (아래 "clarification 재요청 폼" 참고).
 
 ## 아키텍처 요약
 
@@ -44,10 +45,11 @@ AgentCore Runtime /invocations  (SSE, text/event-stream)
   **synthesis 단계의 TEXT_MESSAGE(markdown 표)** 로 흐르며, CopilotChat 이 streamdown
   (remark-gfm)으로 자동 렌더합니다.
 - 요청 규약: `threadId` = 브라우저 세션 UUID(고정, AgentCore Memory 세션 격리),
-  `forwardedProps.actorId` = 사용자 식별자(M1 고정 `demo-user`, `AGENT_ACTOR_ID` 로 override,
-  M3 에서 Cognito sub 로 교체). actorId 는 프록시의 SigV4 fetch 단계에서 body 에 주입됩니다.
+  `forwardedProps.actorId` = 사용자 식별자(기본 고정값 `demo-user`, `AGENT_ACTOR_ID` 로
+  override — 사용자 인증 도입 시 Cognito sub 로 교체). actorId 는 프록시의 SigV4 fetch
+  단계에서 body 에 주입됩니다.
 
-## clarification 재요청 폼 (M2)
+## clarification 재요청 폼
 
 orchestrator 는 질의에 필요한 정보가 부족하면 **AG-UI CUSTOM 이벤트**를 방출하고
 `RUN_FINISHED` 로 스트림을 닫습니다. UI 는 이를 인라인 폼으로 렌더하고, 사용자 응답을
@@ -99,7 +101,7 @@ CUSTOM 이벤트 수신은 `@ag-ui/client` 0.0.57 `AgentSubscriber` 의 **네이
 | `AGENT_RUNTIME_ARN` | 오케스트레이터가 배포된 AgentCore Runtime ARN (필수) |
 | `AWS_REGION` | 리전 (기본 `us-west-2`) |
 | `AGENT_RUNTIME_QUALIFIER` | Runtime qualifier (기본 `DEFAULT`) |
-| `AGENT_ACTOR_ID` | 사용자 식별자(forwardedProps.actorId). M1 기본 `demo-user` |
+| `AGENT_ACTOR_ID` | 사용자 식별자(forwardedProps.actorId). 기본 `demo-user` |
 | `AGUI_ADAPTER` | 이벤트 어댑터: `agui`(기본) 또는 `raw-sse`(폴백) |
 
 ## 로컬 실행
@@ -153,10 +155,12 @@ npm run dev                              # http://localhost:3000
 | `src/components/ClarificationHost.tsx` | CUSTOM(clarification) 수신 + forwardedProps 재실행 트리거 |
 | `src/components/ClarificationForm.tsx` | clarification value 스키마 → select/date_range/text 폼 렌더 |
 
-## 인증 (M3)
+## 인증
 
-M1 에서는 인증을 강제하지 않습니다. 프록시(`route.ts`)에 Cognito JWT 검증 훅 **자리(주석)**
-만 마련해 두었습니다. M3 에서 여기에 JWT 검증·`sub` 전파를 추가합니다.
+이 채팅 UI 는 로그인이 없어 인증을 강제하지 않습니다(알려진 한계 — 도구 평면 인가는 Gateway
+앞단의 Cedar 가 서비스 계정 위임으로 처리). 프록시(`route.ts`)에 Cognito JWT 검증 훅
+**자리(주석)** 를 마련해 두었으므로, 사용자 인증이 필요하면 여기에 JWT 검증·`sub` 전파를
+추가합니다.
 
 ## Docker / 배포
 

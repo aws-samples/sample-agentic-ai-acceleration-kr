@@ -137,17 +137,12 @@
   .legend .bar.dot { border-top-style: dotted; }
   .legend .sq { width: 11px; height: 11px; border-radius: 3px; }
 
-  .agree {
-    margin-top: 20px; width: 1380px; background: rgba(91,156,255,.07);
-    border: 1px solid rgba(91,156,255,.3); border-radius: 10px; padding: 14px 18px; font-size: 13.5px;
-  }
-  .agree b { color: var(--c-query); }
 </style>
 </head>
 <body>
 
-<h1><code>agentic-text-to-sql-on-aws</code> — 아키텍처 다이어그램 (최종 합의 확인)</h1>
-<div class="sub">2026-07-26 · us-west-2 · feature/agentic-text-to-sql · 3 Parts / 5 Layers / 3 Personas — 아래 버튼으로 데이터 흐름을 전환해서 확인하세요</div>
+<h1><code>agentic-text-to-sql-on-aws</code> — 아키텍처 다이어그램</h1>
+<div class="sub">us-west-2 · 3 Parts / 5 Layers / 3 Personas — 아래 버튼으로 데이터 흐름을 전환해서 확인하세요</div>
 
 <div class="toolbar">
   <button class="btn active" data-flow="all"><span class="dot" style="background:#8b9bb8"></span>전체 보기</button>
@@ -236,13 +231,13 @@
     <!-- ══════════ L3: Tool ══════════ -->
     <div class="node agentcore" id="n-gateway" style="left:230px; top:415px; width:250px">
       <b>AgentCore Gateway</b>
-      <span>MCP 도구 집약 · semantic tool search (M3 ✅)</span>
+      <span>MCP 도구 집약 · semantic tool search</span>
       <span class="chip" style="background:#f0716e; color:#fff">Identity: Cognito JWT 인바운드</span>
       <span class="chip" style="background:#f0716e; color:#fff">PolicyEngine: Cedar ENFORCE</span>
     </div>
     <div class="node agentcore small" id="n-mcp-sql" style="left:530px; top:400px; width:200px">
       <b>sql-execution-mcp</b>
-      <span>AgentCore Runtime 호스팅 (MCP :8000)<br>AST allow-list 검증(pg·redshift dialect)<br>→ datasource 라우팅 Data API 실행 (M3 ✅)</span>
+      <span>AgentCore Runtime 호스팅 (MCP :8000)<br>AST allow-list 검증(pg·redshift dialect)<br>→ datasource 라우팅 Data API 실행</span>
     </div>
     <div class="node agentcore small" id="n-mcp-sem" style="left:530px; top:470px; width:200px">
       <b>semantic-retrieval-mcp</b>
@@ -250,21 +245,21 @@
     </div>
     <div class="node agentcore small" id="n-mcp-admin" style="left:770px; top:435px; width:200px">
       <b>datasource-admin-mcp</b>
-      <span>Runtime 호스팅 · 관리 도구 (M4 ✅)<br>큐레이션 CRUD·승인·데이터소스 등록/크롤<br>(Manager/Admin 전용 — Cedar action 스코프)</span>
+      <span>Runtime 호스팅 · 관리 도구<br>큐레이션 CRUD·승인·데이터소스 등록/크롤<br>(Manager/Admin 전용 — Cedar action 스코프)</span>
     </div>
 
     <!-- ══════════ L4: Semantic ══════════ -->
     <div class="node aws" id="n-ddb" style="left:270px; top:595px; width:200px">
       <b>DynamoDB</b>
-      <span>system-of-record (M2 ✅)<br>용어·few-shot·스키마 CRUD·버전<br>candidate/published 분리</span>
+      <span>system-of-record<br>용어·few-shot·스키마 CRUD·버전<br>candidate/published 분리</span>
     </div>
     <div class="node aws" id="n-os" style="left:530px; top:595px; width:200px">
       <b>OpenSearch</b>
-      <span>hybrid 검색 (vector+BM25)<br>스키마 + semantic 인덱스 (M2 ✅)<br>← OSIS zero-ETL (published만)</span>
+      <span>hybrid 검색 (vector+BM25)<br>스키마 + semantic 인덱스<br>← OSIS zero-ETL (published만)</span>
     </div>
     <div class="node aws" id="n-neptune" style="left:780px; top:595px; width:190px">
       <b>Neptune Serverless</b>
-      <span>용어 관계·join path 그래프 (M2 ✅)<br>openCypher 순회 (GraphRAG)<br>← Streams consumer Lambda</span>
+      <span>용어 관계·join path 그래프<br>openCypher 순회 (GraphRAG)<br>← Streams consumer Lambda</span>
     </div>
 
     <!-- ══════════ L5: Data ══════════ -->
@@ -274,7 +269,7 @@
     </div>
     <div class="node aws" id="n-redshift" style="left:530px; top:765px; width:200px">
       <b>Redshift Serverless</b>
-      <span>Redshift Data API · read-only (M3 ✅)<br>4 RPU · datasource="redshift"</span>
+      <span>Redshift Data API · read-only<br>4 RPU · datasource="redshift"</span>
     </div>
     <div class="node aws small" id="n-secrets" style="left:780px; top:770px; width:190px">
       <b>Secrets Manager</b>
@@ -287,7 +282,7 @@
       <span>OTEL 트레이스 · 대시보드 · 알람</span>
     </div>
     <div class="node agentcore" id="n-eval" style="left:1075px; top:150px; width:270px">
-      <b>AgentCore Evaluations — M5 ✅</b>
+      <b>AgentCore Evaluations</b>
       <span>• code-based(Lambda): Execution Accuracy<br>&nbsp;&nbsp;(goldset 매칭 → gold/생성 SQL read-only<br>&nbsp;&nbsp;재실행 → 결과셋 동등성)<br>• LLM-judge builtin: Correctness·ToolSelection<br>• online eval: 트레이스 샘플링 상시 채점<br>• batch eval: admin panel 에서 실행·리뷰</span>
     </div>
     <div class="node agentcore small" id="n-insights" style="left:1075px; top:315px; width:270px; opacity:.75">
@@ -295,20 +290,20 @@
       <span>failure/intent/trajectory 패턴 · silent failure 탐지</span>
     </div>
     <div class="node small" id="n-miner" style="left:1075px; top:855px; width:270px; border-left:4px solid var(--l4)">
-      <b>Semantic 후보 채굴 (Track B) — M5 ✅</b>
+      <b>Semantic 후보 채굴 (Track B)</b>
       <span>t2sql_query_record 로그 채굴(mine_candidates)<br>성공 질의→few-shot 후보 · 실패 표현→용어 후보<br>→ DynamoDB status: candidate (승인 큐 유입)<br>반려(rejected) 이력·중복 채굴 방지</span>
     </div>
     <div class="node agentcore small" id="n-reco" style="left:1075px; top:395px; width:270px">
-      <b>Recommendations — M5 ✅ <span style="color:var(--c-clarify)">(Preview)</span></b>
+      <b>Recommendations <span style="color:var(--c-clarify)">(Preview)</span></b>
       <span>prompt·tool description 개선안 자동 생성<br>(admin panel 에서 실행 → bundle 버전 반영)</span>
     </div>
     <div class="node agentcore small" id="n-bundle" style="left:1075px; top:485px; width:270px">
-      <b>Configuration Bundle — M5 ✅ <span style="color:var(--c-clarify)">(Preview)</span></b>
+      <b>Configuration Bundle <span style="color:var(--c-clarify)">(Preview)</span></b>
       <span>불변 버전 스냅샷 · 승격 = SSM 포인터 전환<br>orchestrator 60s TTL 캐시 반영 (재배포 없음)<br>실패 시 코드 기본값 폴백 · 롤백 = 재승격</span>
     </div>
     <div class="node agentcore small" id="n-ab" style="left:1075px; top:585px; width:270px; opacity:.75">
       <b>A/B Testing <span style="color:var(--c-clarify)">(미제공 → 폴백)</span></b>
-      <span>안정 API 미확인 — 수동 전량 전환 +<br>online eval 전후 비교로 대체 (§8 완화)</span>
+      <span>안정 API 미확인 — 수동 전량 전환 +<br>online eval 전후 비교로 대체 (ARCHITECTURE.md §8 완화)</span>
     </div>
     <div class="node small" id="n-registry" style="left:1075px; top:675px; width:270px; opacity:.75">
       <b>AgentCore Registry <span style="color:var(--c-clarify)">(Preview·미사용)</span></b>
@@ -321,13 +316,13 @@
 
     <!-- ══════════ Part 3: Admin Panel ══════════ -->
     <div class="node aws" id="n-adminweb" style="left:230px; top:955px; width:290px">
-      <b>Admin Panel (ECS Fargate) — M4 ✅</b>
+      <b>Admin Panel (ECS Fargate)</b>
       <span>Next.js web + API · Cognito 로그인(JWT 검증·그룹 인가)<br>쓰기는 사용자 JWT OBO → Gateway MCP 경유(DynamoDB 직접 쓰기 없음)</span>
       <span class="chip" style="background:var(--c-admin); color:#0d1117">데이터소스 등록</span>
       <span class="chip" style="background:var(--c-admin); color:#0d1117">semantic 큐레이션</span>
       <span class="chip" style="background:var(--c-admin); color:#0d1117">승인 큐 (candidate→published)</span>
       <span class="chip" style="background:var(--c-admin); color:#0d1117">권한 관리 + Cedar 뷰</span>
-      <span class="chip" style="background:var(--c-eval); color:#0d1117">평가 리뷰·bundle 승인 (M5)</span>
+      <span class="chip" style="background:var(--c-eval); color:#0d1117">평가 리뷰·bundle 승인</span>
       <span class="chip" style="background:#8b9bb8; color:#0d1117">트레이스 디버깅</span>
     </div>
     <div class="node aws small" id="n-cognito" style="left:590px; top:965px; width:190px">
@@ -352,10 +347,6 @@
   <span class="k"><span class="bar dot" style="border-color:var(--c-eval)"></span>④ 개선 Track A: 트레이스→평가→개선안→승인→Runtime/Gateway 적용 · Track B: 지식 채굴→승인 큐→Semantic layer 보강</span>
   <span class="k"><span class="sq" style="background:#7c5cff"></span>Bedrock AgentCore</span>
   <span class="k"><span class="sq" style="background:#ff9900"></span>기타 AWS 서비스</span>
-</div>
-
-<div class="agree">
-  <b>✋ 최종 합의 확인</b> — 이 다이어그램이 의도한 구조(3 파트 · 5 계층 · 도구는 Runtime 호스팅 MCP만 · Manager 승인 거버넌스)와 일치하면 구현(M1)을 시작합니다. 수정이 필요하면 노드/흐름 이름으로 알려주세요.
 </div>
 
 <script>
@@ -390,7 +381,7 @@ const EDGES = [
   ["admin","n-adminweb","n-cognito","사용자·그룹 관리 (Admin 전용)",null],
   ["admin","n-cognito","n-gateway","JWT → Cedar policy 평가",3],
   ["admin","n-cw","n-adminweb","트레이스·메트릭 조회",null],
-  // ④ 평가·개선 루프 (M5 구현 반영: batch/online eval → 추천 → bundle 새 버전 →
+  // ④ 평가·개선 루프 (batch/online eval → 추천 → bundle 새 버전 →
   //    Manager 승격(SSM 포인터) → orchestrator TTL 캐시 반영. A/B 는 폴백이라 점선 의미)
   ["eval","n-runtime","n-otel","OTEL 트레이스 + t2sql_query_record",1],
   ["eval","n-otel","n-eval","online eval 샘플링 · batch eval(admin 실행)",2],
@@ -400,7 +391,7 @@ const EDGES = [
   ["eval","n-adminweb","n-bundle","Manager 승격 승인 → SSM active-bundle 전환",6],
   ["eval","n-bundle","n-ab","(A/B 미제공 — 수동 전환 폴백)",7],
   ["eval","n-bundle","n-runtime","orchestrator 60s TTL 캐시로 무중단 반영",8],
-  // ④-B 평가·개선 루프 Track B: semantic layer 보강 (M5 구현: mine_candidates 도구)
+  // ④-B 평가·개선 루프 Track B: semantic layer 보강 (mine_candidates 도구)
   ["eval","n-otel","n-miner","Track B: 성공 질의·실패 표현 채굴 (mine_candidates)",10],
   ["eval","n-miner","n-ddb","few-shot·용어 후보 (candidate, 에이전트 미노출)",11],
   ["eval","n-adminweb","n-miner","Manager 승인/반려 (publish / reject+사유)",12],

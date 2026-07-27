@@ -47,7 +47,8 @@ export async function sigv4Fetch(url: string, init: RequestInit): Promise<Respon
   headers['host'] = parsed.host;
 
   // RunAgentInput body 에 actorId 를 주입한다 (orchestrator 확정 계약: forwardedProps.actorId
-  // = 사용자 식별자, AgentCore Memory 사용자 격리 근거). M1 은 고정값, M3 에서 Cognito sub 로 교체.
+  // = 사용자 식별자, AgentCore Memory 사용자 격리 근거). 이 UI 는 로그인이 없어 고정값을 쓴다
+  // (사용자 인증 도입 시 Cognito sub 로 교체).
   const body =
     typeof init.body === 'string' ? injectActorId(init.body) : (init.body as string | undefined);
 
@@ -78,7 +79,7 @@ export async function sigv4Fetch(url: string, init: RequestInit): Promise<Respon
   });
 }
 
-/** M1 고정 actorId. M3 에서 Cognito sub 로 교체 (프록시 인증 훅 참조). */
+/** 고정 actorId. 사용자 인증 도입 시 Cognito sub 로 교체 (프록시 인증 훅 참조). */
 const DEFAULT_ACTOR_ID = process.env.AGENT_ACTOR_ID ?? 'demo-user';
 
 /**

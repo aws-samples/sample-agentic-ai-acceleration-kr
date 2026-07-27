@@ -50,12 +50,13 @@ function ensureSessionId(raw: string | null): string {
 }
 
 function buildHandler(req: Request) {
-  // ── 인증 훅 자리 (M3) ─────────────────────────────────────────────────────
-  // M3 에서 Cognito JWT 검증을 여기에 추가한다:
+  // ── 인증 훅 자리 ───────────────────────────────────────────────────────────
+  // 이 채팅 UI 는 로그인이 없어 인증을 강제하지 않는다(알려진 한계 — 도구 평면 인가는
+  // Gateway 앞단의 Cedar 가 서비스 계정 위임으로 처리). 사용자 인증을 도입하려면
+  // 여기에 Cognito JWT 검증을 추가한다:
   //   const token = req.headers.get('authorization');
   //   const claims = await verifyCognitoJwt(token);   // 실패 시 401
   //   → claims.sub 를 AgentCore 로 전파해 row-level 정책 근거로 사용.
-  // M1 에서는 인증을 강제하지 않는다 (ARCHITECTURE.md M3 범위).
   // ──────────────────────────────────────────────────────────────────────────
 
   const { invocationsUrl } = getAgentCoreConfig();

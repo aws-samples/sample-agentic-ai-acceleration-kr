@@ -16,8 +16,8 @@ AgentCore Evaluations 의 custom **code-based evaluator** 계약을 구현한다
 오류 응답: ``{"errorCode":"...","errorMessage":"..."}``
 제약: 최대 300초, 입력 최대 6MB.
 
-## 평가 로직 (§9.1)
-1. `sessionSpans` 에서 `t2sql_query_record`(§9.5) 또는 gen_ai 속성으로 (질문, SQL, status) 복원
+## 평가 로직
+1. `sessionSpans` 에서 `t2sql_query_record` 또는 gen_ai 속성으로 (질문, SQL, status) 복원
 2. goldset(`goldset-v1.jsonl`) 질문 매칭 — 매칭 없으면 **SKIP**
 3. gold SQL / 생성 SQL 을 read-only(agent_ro)로 각각 실행해 결과셋 정규화 비교
    → 일치 PASS/1.0, 불일치 FAIL/0.0 (+차이 요약)

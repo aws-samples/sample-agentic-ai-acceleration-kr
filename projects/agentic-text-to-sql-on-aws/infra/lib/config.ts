@@ -10,7 +10,7 @@ export interface EcrRepoNames {
   readonly sqlExecutionMcp: string;
   readonly semanticRetrievalMcp: string;
   readonly ui: string;
-  // ── M4: admin panel ──
+  // ── admin panel ──
   /** datasource-admin-mcp 이미지 리포 (agentic-t2sql/datasource-admin-mcp) */
   readonly datasourceAdminMcp: string;
   /** admin web(Next.js) 이미지 리포 (agentic-t2sql/admin-web) */
@@ -35,7 +35,7 @@ export interface AppConfig {
   /** ECR 리포 이름 4종 */
   readonly ecrRepos: EcrRepoNames;
 
-  // ───────────── M2: Semantic layer ─────────────
+  // ───────────── Semantic layer ─────────────
   /** DynamoDB semantic system-of-record 테이블명 (agentic-t2sql-semantic) */
   readonly semanticTableName: string;
   /** semantic 문서용 OpenSearch 인덱스명 (t2sql-semantic — OSIS 싱크 대상) */
@@ -45,7 +45,7 @@ export interface AppConfig {
   /** Neptune Serverless 최대 용량 (NCU) */
   readonly graphMaxNcu: number;
 
-  // ───────────── M3: Gateway / Identity / Policy(Cedar) ─────────────
+  // ───────────── Gateway / Identity / Policy(Cedar) ─────────────
   /** Gateway 이름 (agentic-t2sql-gateway). 하이픈 허용 패턴 ^([0-9a-zA-Z][-]?){1,48}$ */
   readonly gatewayName: string;
   /** PolicyEngine 이름. ⚠️ 패턴 ^[A-Za-z][A-Za-z0-9_]*$ — 하이픈 불가, 언더스코어만. */
@@ -64,7 +64,7 @@ export interface AppConfig {
    */
   readonly gatewayUrl: string;
 
-  // ───────────── M3: Redshift Serverless (Data Layer 2번째 소스) ─────────────
+  // ───────────── Redshift Serverless (Data Layer 2번째 소스) ─────────────
   /** Redshift Serverless namespace 이름 (agentic-t2sql-rs-ns). */
   readonly redshiftNamespaceName: string;
   /** Redshift Serverless workgroup 이름 (agentic-t2sql-rs-wg). */
@@ -77,21 +77,21 @@ export interface AppConfig {
   /** Redshift read-only 사용자(agent_ro) 시크릿 이름. */
   readonly redshiftRoSecretName: string;
 
-  // ───────────── M4: Admin panel / datasource-admin-mcp ─────────────
+  // ───────────── Admin panel / datasource-admin-mcp ─────────────
   /** Gateway MCP target 이름 (도구명 prefix `datasource-admin-mcp___<tool>`). */
   readonly adminMcpTargetName: string;
   /**
    * Cedar action 스코프 2-phase 스위치 (기본 false).
    *
-   * M3 학습: `action in [AgentCore::Action::"<Target>___<tool>"]` 스코프는 target 의 도구
+   * 배포 실측: `action in [AgentCore::Action::"<Target>___<tool>"]` 스코프는 target 의 도구
    * 동기화가 끝나기 전에 정책이 검증되어 "unable to find an applicable action" 으로 실패한다.
    * 따라서 (phase 1) false 로 admin target 을 포함한 gateway 를 먼저 배포하고,
    * (phase 2) `-c cedarActionScoping=true` 로 재배포해 정책 statement 만 좁힌다.
    */
   readonly cedarActionScoping: boolean;
 
-  // ───────────── M5: 개선 파이프라인 (Track A 평가 · Track B 채굴) ─────────────
-  /** EX(Execution Accuracy) code-based evaluator Lambda 이름 (§9.3). */
+  // ───────────── 개선 파이프라인 (Track A 평가 · Track B 채굴) ─────────────
+  /** EX(Execution Accuracy) code-based evaluator Lambda 이름. */
   readonly exEvaluatorFunctionName: string;
   /**
    * AgentCore custom evaluator 이름. ⚠️ 패턴 `^[a-zA-Z][a-zA-Z0-9_]{0,47}$`
@@ -127,16 +127,16 @@ const DEFAULTS = {
     sqlExecutionMcp: 'agentic-t2sql/sql-execution-mcp',
     semanticRetrievalMcp: 'agentic-t2sql/semantic-retrieval-mcp',
     ui: 'agentic-t2sql/ui',
-    // M4 admin panel
+    // admin panel
     datasourceAdminMcp: 'agentic-t2sql/datasource-admin-mcp',
     adminWeb: 'agentic-t2sql/admin-web',
   },
-  // M2 semantic layer
+  // semantic layer
   semanticTableName: 'agentic-t2sql-semantic',
   semanticIndex: 't2sql-semantic',
   graphMinNcu: 1,
   graphMaxNcu: 2.5,
-  // M3 gateway / policy
+  // gateway / policy
   gatewayName: 'agentic-t2sql-gateway',
   // PolicyEngine·Policy 이름은 언더스코어만 허용(하이픈 불가) → prefix 의 하이픈을 치환.
   policyEngineName: 'agentic_t2sql_policy_engine',
@@ -144,15 +144,15 @@ const DEFAULTS = {
   semanticTargetName: 'semantic-retrieval-mcp',
   toolPlaneMode: 'direct',
   gatewayUrl: '',
-  // M3 redshift
+  // redshift
   redshiftNamespaceName: 'agentic-t2sql-rs-ns',
   redshiftWorkgroupName: 'agentic-t2sql-rs-wg',
   redshiftBaseCapacity: 4,
   redshiftRoSecretName: 'agentic-t2sql/redshift/agent_ro',
-  // M4 admin panel
+  // admin panel
   adminMcpTargetName: 'datasource-admin-mcp',
   cedarActionScoping: false,
-  // M5 개선 파이프라인
+  // 개선 파이프라인
   exEvaluatorFunctionName: 'agentic-t2sql-ex-evaluator',
   // Evaluator/OnlineEvaluationConfig 이름은 언더스코어만 허용 → prefix 하이픈 치환.
   executionEvaluatorName: 'agentic_t2sql_execution_accuracy',
@@ -193,25 +193,25 @@ export function loadConfig(scope: Construct): AppConfig {
     semanticIndex: ctx('semanticIndex') ?? DEFAULTS.semanticIndex,
     graphMinNcu: (ctx('graphMinNcu') as number | undefined) ?? DEFAULTS.graphMinNcu,
     graphMaxNcu: (ctx('graphMaxNcu') as number | undefined) ?? DEFAULTS.graphMaxNcu,
-    // M3 gateway / policy
+    // gateway / policy
     gatewayName: ctx('gatewayName') ?? DEFAULTS.gatewayName,
     policyEngineName: ctx('policyEngineName') ?? DEFAULTS.policyEngineName,
     sqlTargetName: ctx('sqlTargetName') ?? DEFAULTS.sqlTargetName,
     semanticTargetName: ctx('semanticTargetName') ?? DEFAULTS.semanticTargetName,
     toolPlaneMode: ctx('toolPlaneMode') ?? DEFAULTS.toolPlaneMode,
     gatewayUrl: ctx('gatewayUrl') ?? DEFAULTS.gatewayUrl,
-    // M3 redshift
+    // redshift
     redshiftNamespaceName: ctx('redshiftNamespaceName') ?? DEFAULTS.redshiftNamespaceName,
     redshiftWorkgroupName: ctx('redshiftWorkgroupName') ?? DEFAULTS.redshiftWorkgroupName,
     redshiftBaseCapacity:
       (ctx('redshiftBaseCapacity') as number | undefined) ?? DEFAULTS.redshiftBaseCapacity,
     redshiftRoSecretName: ctx('redshiftRoSecretName') ?? DEFAULTS.redshiftRoSecretName,
-    // M4 admin panel
+    // admin panel
     adminMcpTargetName: ctx('adminMcpTargetName') ?? DEFAULTS.adminMcpTargetName,
     // CLI `-c cedarActionScoping=true` 는 문자열로 전달되므로 'true' 도 받아들인다
     // (cdk.json context 에 boolean 으로 두는 경우도 지원).
     cedarActionScoping: parseBool(ctx('cedarActionScoping'), DEFAULTS.cedarActionScoping),
-    // M5 개선 파이프라인
+    // 개선 파이프라인
     exEvaluatorFunctionName:
       ctx('exEvaluatorFunctionName') ?? DEFAULTS.exEvaluatorFunctionName,
     executionEvaluatorName: ctx('executionEvaluatorName') ?? DEFAULTS.executionEvaluatorName,

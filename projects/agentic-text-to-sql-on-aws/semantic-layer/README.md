@@ -33,7 +33,7 @@ semantic-layer/
 공통 속성: `entity_type`, `entity_id`, `status`(`candidate`\|`published`\|`rejected`),
 `version`(N), `updated_at`(ISO8601), `updated_by`.
 
-`rejected` 는 M5 additive(승인 큐 반려)입니다. `reject(entity_type, entity_id, reason)` 은
+`rejected` 는 승인 큐에서의 반려 상태입니다. `reject(entity_type, entity_id, reason)` 은
 사유를 payload 의 `rejection_reason` 으로 남기고, `published` 가 아니므로 파생 저장소에는
 노출되지 않습니다. 반려 후에도 `publish`(재승인)/`unpublish`(재검토 큐 복귀)가 가능합니다.
 

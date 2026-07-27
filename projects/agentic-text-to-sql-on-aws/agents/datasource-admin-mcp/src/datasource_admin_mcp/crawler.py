@@ -1,6 +1,6 @@
 """스키마 크롤러 — 커넥터 크롤 결과를 semantic 엔티티로 적재한다.
 
-크롤 산출물은 항상 **candidate** 로 기록한다(§8.3): Manager 승인(publish) 후에야
+크롤 산출물은 항상 **candidate** 로 기록한다: Manager 승인(publish) 후에야
 Streams → OpenSearch/Neptune 로 전파되어 검색에 반영된다. 자동 크롤이 운영 검색 품질을
 즉시 흔들지 않도록 하는 안전장치(개선 파이프라인 Track B 와 동일한 승인 게이트).
 """

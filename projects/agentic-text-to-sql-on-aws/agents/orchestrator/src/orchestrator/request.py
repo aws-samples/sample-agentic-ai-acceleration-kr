@@ -7,9 +7,9 @@ CopilotKit 프록시가 전달하는 형태를 수용한다:
 actorId/sessionId 규격:
 - sessionId: AG-UI `threadId` (대화 스레드 = STM 세션 단위)
 - actorId: forwardedProps.actorId 또는 state.actorId, 없으면 "anonymous"
-  (M3 에서 Cognito JWT sub 로 대체 예정)
+  (Cognito JWT sub 를 쓰도록 확장할 수 있다)
 
-M4 additive: forwardedProps.userAccessToken (Cognito AccessToken) 이 오면 gateway 모드에서
+forwardedProps.userAccessToken (Cognito AccessToken) 이 오면 gateway 모드에서
 사용자 위임(On-Behalf-Of) Bearer 로 쓰인다. **토큰 값은 절대 로깅하지 않는다.**
 """
 
@@ -28,7 +28,7 @@ class ParsedRequest:
     clarification_response 가 있으면 이번 요청은 앞선 clarification interrupt 에 대한 재개다.
     형태: {"interruptId": str, "values": {<field name>: <값>, ...}}.
 
-    user_access_token (M4 additive) 은 호출자가 전달한 Cognito AccessToken 이다.
+    user_access_token 은 호출자가 전달한 Cognito AccessToken 이다.
     gateway 모드에서 M2M 서비스 토큰 대신 이 토큰으로 Gateway MCP 를 호출(OBO)한다.
     민감값이므로 로그·이벤트·LLM 컨텍스트에 노출하지 않는다.
     """
@@ -79,7 +79,7 @@ def parse_run_input(payload: dict[str, Any]) -> ParsedRequest:
 
 
 def _parse_user_access_token(forwarded: Any, state: Any) -> str | None:
-    """사용자 위임(OBO) Cognito AccessToken 을 추출 (M4 additive).
+    """사용자 위임(OBO) Cognito AccessToken 을 추출한다.
 
     `forwardedProps.userAccessToken` 우선, snake_case(`user_access_token`)와
     `state` 경유도 수용한다. 문자열이 아니거나 공백이면 None(= 기존 서비스 계정 위임 유지).

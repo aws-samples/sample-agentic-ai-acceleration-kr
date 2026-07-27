@@ -9,8 +9,8 @@ stream_async 로 스트리밍하므로 stream_translator 가 그대로 처리한
 MODE 는 config.Settings.mode 로 선택한다(기본 "graph").
 SDK 의존성은 지연 임포트하여 순수 로직 테스트와 분리한다.
 
-M5 additive: `bundle_override` 를 주입하면 활성 Configuration Bundle 의
-`system_prompt` / `model_id` 로 코드 기본값을 오버라이드한다(§9.5). 미주입(None)이면
+`bundle_override` 를 주입하면 활성 Configuration Bundle 의
+`system_prompt` / `model_id` 로 코드 기본값을 오버라이드한다. 미주입(None)이면
 기존 동작 그대로다.
 """
 
@@ -29,7 +29,7 @@ class OrchestratorBuilder:
 
     tools_by_server: {"sql": [run_sql tools], "semantic": [search_schema tools]}
     session_manager: AgentCoreMemorySessionManager | None (STM)
-    bundle_override: BundleOverride | None (M5 additive) — system_prompt/model_id 오버라이드.
+    bundle_override: BundleOverride | None — system_prompt/model_id 오버라이드.
       None 이면 코드 기본값(SYSTEM_PROMPT, Settings.model_id)을 사용한다.
     """
 

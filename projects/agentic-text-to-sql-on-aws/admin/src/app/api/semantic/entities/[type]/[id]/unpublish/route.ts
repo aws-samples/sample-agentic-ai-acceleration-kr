@@ -1,6 +1,6 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
-/** POST /api/semantic/entities/{type}/{id}/unpublish — MCP `unpublish_entity` (발행 회수, §8.4). */
+/** POST /api/semantic/entities/{type}/{id}/unpublish — MCP `unpublish_entity` (발행 회수). */
 
 import { handle } from '@/lib/api';
 import { requireManager } from '@/lib/auth';

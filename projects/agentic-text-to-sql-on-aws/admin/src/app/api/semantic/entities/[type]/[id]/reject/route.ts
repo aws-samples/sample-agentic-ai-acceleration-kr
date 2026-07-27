@@ -1,7 +1,7 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 /**
- * POST /api/semantic/entities/{type}/{id}/reject — MCP `reject_entity` (반려, §9.4 / §9.6).
+ * POST /api/semantic/entities/{type}/{id}/reject — MCP `reject_entity` (반려).
  *
  * status=rejected 로 전이하고 payload 에 `rejection_reason` 을 남긴다. rejected 는 승인 큐
  * (candidate) 에서 사라지고 파생 저장소(OpenSearch·Neptune)에도 노출되지 않는다 —

@@ -1,10 +1,10 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 /**
- * GET /api/recommendations/{id} — GetRecommendation (§9.6).
+ * GET /api/recommendations/{id} — GetRecommendation.
  *
  * 완료(COMPLETED) 상태면 추천 텍스트(시스템 프롬프트 / 도구 설명)를 평탄화해 전달한다.
- * Manager 는 그 텍스트를 Configuration Bundle 새 버전으로 반영한 뒤 승격한다(§9.1 — 사람 승인).
+ * Manager 는 그 텍스트를 Configuration Bundle 새 버전으로 반영한 뒤 승격한다(사람 승인).
  */
 
 import { GetRecommendationCommand } from '@aws-sdk/client-bedrock-agentcore';

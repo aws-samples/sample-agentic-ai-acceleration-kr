@@ -1,7 +1,7 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 /**
- * GET /api/eval/online — online eval config 상태 요약 (§9.6).
+ * GET /api/eval/online — online eval config 상태 요약.
  *
  * `ONLINE_EVAL_CONFIG_ID` 가 없으면 evaluation 스택이 아직 배포되지 않은 환경이므로
  * `{configured:false}` 로 내려 화면이 "미구성" 안내를 띄운다(오류 아님 — 회귀 금지).

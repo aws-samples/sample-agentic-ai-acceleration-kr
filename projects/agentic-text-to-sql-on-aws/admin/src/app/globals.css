@@ -311,7 +311,7 @@ body {
   color: var(--t2s-warn);
 }
 
-/* 반려(rejected) — M5 §9.1 additive 상태. */
+/* 반려(rejected) 상태. */
 .adm-badge-rejected {
   border-color: var(--t2s-error);
   color: var(--t2s-error);

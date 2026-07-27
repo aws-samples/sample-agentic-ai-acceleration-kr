@@ -2,7 +2,7 @@
 
 /**
  * GET  /api/datasources — MCP `list_entities(entity_type="datasource")`
- * POST /api/datasources — MCP `register_datasource` (§8.4)
+ * POST /api/datasources — MCP `register_datasource`
  *
  * 등록 시 `config`(호스트·DB·자격증명 등)는 admin web 이 저장하지 않는다. MCP 서버가
  * Secrets Manager `agentic-t2sql/datasource/<id>` 에 넣고, 자격증명을 제외한 메타만

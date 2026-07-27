@@ -8,7 +8,7 @@
 Data API 호출 패턴은 ``sql-execution-mcp/executor.py`` 와 동형이다(패키지 간 의존을 만들지
 않기 위해 의도적으로 복사 — 두 런타임 이미지는 서로 독립이다).
 
-주의(CLAUDE.md M3 학습): Redshift Data API 는 **SecretArn 을 반드시 넘겨야** 한다.
+주의: Redshift Data API 는 **SecretArn 을 반드시 넘겨야** 한다.
 생략하면 IAM 매핑 사용자로 실행돼 information_schema 조회조차 권한 부족으로 실패한다.
 
 이 커넥터는 관리 평면(크롤·점검) 전용이며 read-only 자격증명만 사용한다.
@@ -294,7 +294,7 @@ class RedshiftDataApiConnector(DatasourceConnector):
         submit = self.client.execute_statement(
             WorkgroupName=self.workgroup,
             Database=self.db_name,
-            # 필수 — 없으면 IAM 매핑 사용자로 실행된다(CLAUDE.md M3 학습).
+            # 필수 — 없으면 IAM 매핑 사용자로 실행된다(배포 실측).
             SecretArn=self.secret_arn,
             Sql=sql,
         )

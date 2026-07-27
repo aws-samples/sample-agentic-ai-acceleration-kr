@@ -10,7 +10,7 @@
 - ``INSERT``/``MODIFY`` 의 NewImage 가 ``published`` → MERGE 멱등 upsert.
 - NewImage 가 ``published`` 이외(``candidate``/``rejected`` — published 에서의 강등 포함)
   또는 ``REMOVE`` → 노드/엣지 삭제. candidate/rejected 는 에이전트에 노출되지 않아야
-  하므로 그래프에서 제거한다(M5 rejected additive 는 코드 변경 없이 이 경로로 처리된다).
+  하므로 그래프에서 제거한다(`rejected` 상태도 이 경로로 처리된다).
 
 그래프 모델
 ----------

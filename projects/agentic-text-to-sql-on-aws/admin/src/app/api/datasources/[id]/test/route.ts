@@ -1,6 +1,6 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
-/** POST /api/datasources/{id}/test — MCP `test_datasource` (연결 테스트, §8.4). */
+/** POST /api/datasources/{id}/test — MCP `test_datasource` (연결 테스트). */
 
 import { handle } from '@/lib/api';
 import { requireManager } from '@/lib/auth';

@@ -44,7 +44,7 @@ def build_retriever() -> SemanticRetriever:
     """env 에 따라 retriever 를 조립한다.
 
     - semantic 확장이 꺼진 환경(``SEMANTIC_INDEX`` 미설정 & graph 비활성) → 기존
-      ``OpenSearchHybridRetriever`` 단독으로 M1 과 동일하게 동작(하위호환 보장).
+      ``OpenSearchHybridRetriever`` 단독(스키마 검색만)으로 동작한다(하위호환 보장).
     - ``SEMANTIC_INDEX`` 가 있거나 graph 가 켜지면 → 스키마 hybrid + 용어/few-shot
       (SemanticTermRetriever) 를 CompositeRetriever 로 결합.
     - 추가로 ``SEMANTIC_GRAPH_ENABLED`` 가 true 이고 ``GRAPH_ENDPOINT`` 가 있으면
@@ -56,7 +56,7 @@ def build_retriever() -> SemanticRetriever:
     semantic_enabled = bool(os.environ.get("SEMANTIC_INDEX")) or graph_enabled
 
     if not semantic_enabled:
-        logger.info("semantic_extension_disabled — schema-only retriever (M1 호환)")
+        logger.info("semantic_extension_disabled — schema-only retriever")
         return schema_retriever
 
     term_retriever = SemanticTermRetriever()

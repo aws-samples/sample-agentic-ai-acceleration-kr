@@ -4,7 +4,7 @@
  * AWS SDK v3 클라이언트 싱글턴.
  *
  * 읽기 위주 관리 평면(Cognito 사용자·그룹, Cedar 조회, CloudWatch 메트릭·로그)은 MCP 도구가
- * 아니라 **admin web task role** 의 SDK 직접 호출로 처리한다 (§8.0). 도구 평면(semantic 쓰기)과
+ * 아니라 **admin web task role** 의 SDK 직접 호출로 처리한다. 도구 평면(semantic 쓰기)과
  * 분리되어 있으므로 Cedar 인가 대상이 아니고, 대신 task role IAM 이 최소 권한을 강제한다.
  *
  * 자격증명은 표준 provider chain — ECS 에서는 task role, 로컬은 `AWS_PROFILE` 등.
@@ -37,7 +37,7 @@ export function agentCoreControlClient(): BedrockAgentCoreControlClient {
 }
 
 /**
- * AgentCore **데이터플레인** 클라이언트 (§9.6) — StartBatchEvaluation / GetBatchEvaluation /
+ * AgentCore **데이터플레인** 클라이언트 — StartBatchEvaluation / GetBatchEvaluation /
  * StartRecommendation / GetRecommendation. control 평면과 엔드포인트가 다르므로 별도 클라이언트다.
  */
 export function agentCoreDataClient(): BedrockAgentCoreClient {
@@ -55,7 +55,7 @@ export function cloudWatchLogsClient(): CloudWatchLogsClient {
   return logs;
 }
 
-/** SSM — 활성 bundle 포인터(`/agentic-t2sql/active-bundle`) 조회·승격 (§9.1). */
+/** SSM — 활성 bundle 포인터(`/agentic-t2sql/active-bundle`) 조회·승격. */
 export function ssmClient(): SSMClient {
   if (!ssm) ssm = new SSMClient({ region: AWS_REGION });
   return ssm;

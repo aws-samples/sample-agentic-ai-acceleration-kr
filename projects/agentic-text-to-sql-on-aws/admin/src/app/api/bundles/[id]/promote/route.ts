@@ -1,13 +1,13 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 /**
- * POST /api/bundles/{id}/promote {versionId} — 활성 bundle 승격 (§9.6).
+ * POST /api/bundles/{id}/promote {versionId} — 활성 bundle 승격.
  *
  * 승격은 SSM 파라미터(`/agentic-t2sql/active-bundle`) 값을 JSON `{bundleId, versionId}` 로
- * 갱신하는 **한 번의 쓰기**다(§9.1). orchestrator 는 세션 시작 시 TTL 60s 캐시로 이 값을 읽어
+ * 갱신하는 **한 번의 쓰기**다. orchestrator 는 세션 시작 시 TTL 60s 캐시로 이 값을 읽어
  * system_prompt/model_id 를 오버라이드하고, 실패·빈 값이면 코드 기본값으로 폴백한다.
  *
- * A/B 트래픽 분할은 안정 API 표면이 없어 미구현이므로(§9.0), 승격은 전량 전환이고
+ * A/B 트래픽 분할은 안정 API 표면이 없어 미구현이므로, 승격은 전량 전환이고
  * **롤백도 같은 API 로 예전 versionId 를 다시 승격**하는 방식이다(수동 전환 폴백).
  */
 

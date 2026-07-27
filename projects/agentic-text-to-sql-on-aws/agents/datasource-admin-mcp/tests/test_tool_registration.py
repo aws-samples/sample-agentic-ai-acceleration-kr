@@ -1,6 +1,6 @@
-"""실 FastMCP 로 도구 10종이 등록·스키마화되는지 검증 — §8.3·§9.4 시그니처 계약 테스트.
+"""실 FastMCP 로 도구 10종이 등록·스키마화되는지 검증 — 도구 시그니처 계약 테스트.
 
-CLAUDE.md M2 학습: ``from __future__ import annotations`` 하에서 데코레이터가
+``from __future__ import annotations`` 하에서 데코레이터가
 ``get_type_hints`` 로 어노테이션을 모듈 전역에서 평가하므로, 함수 내부 지연 임포트한 타입을
 어노테이션에 쓰면 배포 시점에 NameError 로 크래시한다(로컬 pytest 는 통과했던 사례).
 이 테스트는 실제 SDK 의 스키마 생성 경로를 태워 그 함정을 사전에 잡는다.
@@ -14,7 +14,7 @@ import pytest
 
 from datasource_admin_mcp import server
 
-# §8.3(M4) + §9.4(M5) 계약: 도구명 → (필수 인자, 선택 인자 기본값)
+# 도구 시그니처 계약(README 와 동일): 도구명 → (필수 인자, 선택 인자 기본값)
 EXPECTED_TOOLS: dict[str, tuple[list[str], dict[str, object]]] = {
     "list_entities": ([], {"entity_type": None, "status": None}),
     "get_entity": (["entity_type", "entity_id"], {}),
@@ -30,7 +30,7 @@ EXPECTED_TOOLS: dict[str, tuple[list[str], dict[str, object]]] = {
     ),
     "test_datasource": (["datasource_id"], {}),
     "crawl_schema": (["datasource_id"], {"actor": "admin-panel"}),
-    # M5 §9.4 additive
+    # 개선 파이프라인 Track B
     "reject_entity": (
         ["entity_type", "entity_id"],
         {"reason": "", "actor": "admin-panel"},
@@ -50,9 +50,9 @@ def test_all_contracted_tools_registered(tools: dict) -> None:
     assert set(tools) == set(EXPECTED_TOOLS), f"등록된 도구: {sorted(tools)}"
 
 
-def test_m4_tools_still_registered(tools: dict) -> None:
-    # additive only 계약: M4 도구 8종은 제거·개명되지 않아야 한다.
-    m4_tools = {
+def test_core_tools_still_registered(tools: dict) -> None:
+    # additive only 계약: 큐레이션·데이터소스 도구 8종은 제거·개명되지 않아야 한다.
+    core_tools = {
         "list_entities",
         "get_entity",
         "put_entity",
@@ -62,7 +62,7 @@ def test_m4_tools_still_registered(tools: dict) -> None:
         "test_datasource",
         "crawl_schema",
     }
-    assert m4_tools <= set(tools)
+    assert core_tools <= set(tools)
 
 
 def test_mine_candidates_hours_is_integer_typed(tools: dict) -> None:

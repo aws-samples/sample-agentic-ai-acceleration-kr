@@ -1,7 +1,7 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 /**
- * POST /api/mining/run {hours} — MCP `mine_candidates` (Track B 후보 채굴, §9.4 / §9.6).
+ * POST /api/mining/run {hours} — MCP `mine_candidates` (Track B 후보 채굴).
  *
  * orchestrator 가 남기는 `t2sql_query_record` 로그를 읽어 fewshot/term 후보를 candidate 로
  * 적재한다. 채굴기는 admin-mcp 도구이므로(Lambda 아님 — 도구 평면 유지) 여기서도 사용자 JWT

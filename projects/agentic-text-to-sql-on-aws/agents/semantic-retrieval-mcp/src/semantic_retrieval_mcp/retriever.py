@@ -1,10 +1,10 @@
 """Semantic 검색 — 저장소 중립 인터페이스(ARCHITECTURE.md §8).
 
 추상 ``SemanticRetriever`` base + 구현체들:
-- ``OpenSearchHybridRetriever``: 스키마 메타데이터(``t2sql-schema-docs``) hybrid 검색 (M1).
-- ``SemanticTermRetriever``: 비즈니스 용어/few-shot(``t2sql-semantic``) hybrid 검색 (M2).
-- ``GraphTraverser``: Neptune(neptunedata openCypher) join-path 순회 (M2).
-- ``CompositeRetriever``: 위 셋을 결합해 스키마+용어+join path를 한 번에 반환 (M2).
+- ``OpenSearchHybridRetriever``: 스키마 메타데이터(``t2sql-schema-docs``) hybrid 검색.
+- ``SemanticTermRetriever``: 비즈니스 용어/few-shot(``t2sql-semantic``) hybrid 검색.
+- ``GraphTraverser``: Neptune(neptunedata openCypher) join-path 순회.
+- ``CompositeRetriever``: 위 셋을 결합해 스키마+용어+join path를 한 번에 반환.
 
 인터페이스는 저장소 중립을 유지하여 Neptune 미배포 환경에서도 OpenSearch 단독으로
 graceful degrade 한다.
@@ -30,7 +30,7 @@ logger = logging.getLogger("semantic_retrieval_mcp.retriever")
 class RetrievalHit:
     """정규화된 검색 결과 한 건. 도구 계약(search_schema)의 results 원소와 대응.
 
-    M2에서 additive 필드(term/synonyms/sql_fragment/join_paths)를 추가했다. 기존
+    용어/few-shot·join path 전용 필드(term/synonyms/sql_fragment/join_paths)는 additive 다. 기존
     소비자(orchestrator mcp_parsing, UI)는 필요한 필드만 읽으므로 하위호환이 유지된다.
     """
 
@@ -40,7 +40,7 @@ class RetrievalHit:
     description: str | None
     ddl_snippet: str | None
     score: float
-    # ── M2 additive 필드 (기본 None — 기존 doc_type=table|column 히트는 그대로) ──
+    # ── 용어/few-shot·join path 전용 필드 (기본 None — doc_type=table|column 히트는 그대로) ──
     term: str | None = None
     synonyms: list[str] | None = None
     sql_fragment: str | None = None
@@ -424,7 +424,7 @@ def _parse_join_path_response(response: dict[str, Any]) -> list[str]:
 
 
 class CompositeRetriever(SemanticRetriever):
-    """스키마 + 용어/few-shot + Neptune join-path 를 결합하는 M2 조합 retriever.
+    """스키마 + 용어/few-shot + Neptune join-path 를 결합하는 조합 retriever.
 
     ① schema 검색(top_k) ② term/fewshot 검색(top_k) ③ 두 결과의 table 집합으로 join path
     조회 → table 히트들에 join_paths 부착. table 히트가 없으면 join_paths 만 담은 별도

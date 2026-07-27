@@ -1,7 +1,7 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 /**
- * POST /api/datasources/{id}/crawl — MCP `crawl_schema` (§8.4).
+ * POST /api/datasources/{id}/crawl — MCP `crawl_schema`.
  *
  * information_schema 를 크롤해 table/column/join 엔티티를 **candidate** 로 적재한다.
  * 발행은 승인 큐를 거치므로, 크롤 직후에는 검색 평면에 반영되지 않는다.

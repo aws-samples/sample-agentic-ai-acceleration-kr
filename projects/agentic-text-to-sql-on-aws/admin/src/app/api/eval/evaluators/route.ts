@@ -1,10 +1,10 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 /**
- * GET /api/eval/evaluators — ListEvaluators (builtin + custom, §9.6).
+ * GET /api/eval/evaluators — ListEvaluators (builtin + custom).
  *
  * 배치 평가 실행 시 선택 가능한 평가자 목록이다. EX(Execution Accuracy) custom evaluator 는
- * evaluation 스택이 만들며(§9.3), 화면은 `EXECUTION_EVALUATOR_ID` 를 기본 선택으로 표시한다.
+ * evaluation 스택이 만들며, 화면은 `EXECUTION_EVALUATOR_ID` 를 기본 선택으로 표시한다.
  */
 
 import { ListEvaluatorsCommand } from '@aws-sdk/client-bedrock-agentcore-control';

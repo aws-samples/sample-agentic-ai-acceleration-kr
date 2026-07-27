@@ -27,7 +27,7 @@ export interface AdminStackProps extends StackProps {
   // gateway 스택 참조 (도구 평면 OBO 호출 + Cedar 정책 조회)
   readonly gateway: agentcore.Gateway;
   readonly policyEngine: agentcore.CfnPolicyEngine;
-  // ── M5: evaluation 스택 참조 (평가·bundle 관리 화면) ──
+  // ── evaluation 스택 참조 (평가·bundle 관리 화면) ──
   // admin 은 evaluation 이후 배포되므로 객체 참조가 안전하다(admin→evaluation 단방향).
   readonly executionEvaluator: agentcore.Evaluator;
   readonly onlineEvalConfig: agentcore.OnlineEvaluationConfig;
@@ -41,13 +41,13 @@ export interface AdminStackProps extends StackProps {
 }
 
 /**
- * AgenticT2SqlAdminStack — M4 admin panel(Next.js) 을 ECS Fargate + 전용 퍼블릭 ALB 로 호스팅.
+ * AgenticT2SqlAdminStack — admin panel(Next.js) 을 ECS Fargate + 전용 퍼블릭 ALB 로 호스팅.
  *
  * ui-stack.ts 와 동형 구조이며 차이는 다음과 같다:
  *  - 컨테이너는 web + API routes 를 함께 서빙한다. API route 가 Cognito JWT(aws-jwt-verify)를
  *    검증하고 `cognito:groups` 로 Admin/Manager 기능을 분리한다.
  *  - 큐레이션·승인·데이터소스 작업은 **사용자 JWT Bearer → Gateway MCP → datasource-admin-mcp**
- *    경로다(§8.0). 즉 DynamoDB 직접 쓰기 없음 → semantic 쓰기 단일 지점 유지 + Cedar 인가 강제.
+ *    경로다. 즉 DynamoDB 직접 쓰기 없음 → semantic 쓰기 단일 지점 유지 + Cedar 인가 강제.
  *  - Cognito 사용자·그룹 관리 / Cedar 조회 / CloudWatch·X-Ray 조회는 task role 로 AWS SDK
  *    직접 호출(관리 평면 — 도구 평면과 무관).
  *  - 헬스체크는 `/api/health`(인증 불필요).
@@ -107,7 +107,7 @@ export class AgenticT2SqlAdminStack extends Stack {
         // JWT 검증(issuer/JWKS)·Cognito 관리 API 대상 pool
         COGNITO_USER_POOL_ID: props.userPool.userPoolId,
         // 로그인(USER_PASSWORD_AUTH)·audience 검증에 쓰는 클라이언트 — 웹 클라이언트는
-        // userPassword 플로우가 비활성이라 m2m 클라이언트를 사용한다(§8.5).
+        // userPassword 플로우가 비활성이라 m2m 클라이언트를 사용한다.
         COGNITO_CLIENT_ID: props.m2mClient.userPoolClientId,
         // 사용자 JWT On-Behalf-Of 로 MCP 도구를 호출할 Gateway MCP 엔드포인트
         GATEWAY_URL: props.gateway.gatewayUrl ?? '',
@@ -117,7 +117,7 @@ export class AgenticT2SqlAdminStack extends Stack {
         POLICY_ENGINE_ID: props.policyEngine.attrPolicyEngineId,
         // 세션 트레이스 탐색용 로그 그룹 접두어(task role 의 logs 리소스 제한과 일치)
         RUNTIME_LOG_GROUP_PREFIX: '/aws/bedrock-agentcore/runtimes/',
-        // ───────── M5: 평가·bundle 관리 화면 (§9.7) ─────────
+        // ───────── 평가·bundle 관리 화면 ─────────
         // EX custom evaluator — 평가 실행 시 기본 선택 evaluator.
         EXECUTION_EVALUATOR_ID: props.executionEvaluator.evaluatorId,
         // online eval 상태 화면 + batch evaluation 의 onlineEvaluationConfigSource 소스.
@@ -161,7 +161,7 @@ export class AgenticT2SqlAdminStack extends Stack {
       protocol: elbv2.ApplicationProtocol.HTTP,
       targets: [service],
       healthCheck: {
-        // 인증 불필요 경로(§8.4) — 루트는 로그인 리다이렉트 가능성이 있어 API health 를 쓴다.
+        // 인증 불필요 경로 — 루트는 로그인 리다이렉트 가능성이 있어 API health 를 쓴다.
         path: '/api/health',
         interval: Duration.seconds(30),
         healthyHttpCodes: '200-399',

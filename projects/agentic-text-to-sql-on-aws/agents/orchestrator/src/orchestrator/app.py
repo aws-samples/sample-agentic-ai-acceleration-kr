@@ -10,7 +10,7 @@ Strands Graph(기본) 또는 단일 Agent(폴백)의 stream_async 를 AG-UI 프�
 `graph.stream_async`(및 agent.stream_async)를 직접 구동하고 AG-UI wire-format 이벤트를
 우리가 방출한다. 이 방식은 CopilotKit 이 그대로 소비하는 표준 AG-UI 이벤트를 생성한다.
 
-## clarification(재요청) 재개 전략 (M2)
+## clarification(재요청) 재개 전략
 질의가 모호하면 intent 단계가 `request_clarification` 도구를 호출해 Strands interrupt 를
 발생시킨다. 이때 CUSTOM(clarification_request) 이벤트를 방출한 뒤 정상 RUN_FINISHED 로
 스트림을 닫는다(연결을 열어둔 채 대기하지 않음). 사용자의 폼 응답은 새 HTTP 요청으로
@@ -49,12 +49,12 @@ from .session_cache import SessionCache
 from .stream_translator import StreamTranslator
 
 # AgentCore Runtime 은 stdout 만 로그 그룹으로 보낸다 — 루트 로거가 핸들러 없이는
-# t2sql_query_record(INFO)가 CloudWatch 에 실리지 않는다(M5 배포 실측: LLM stdout 만 보임).
+# t2sql_query_record(INFO)가 CloudWatch 에 실리지 않는다(배포 실측: LLM stdout 만 보임).
 # BedrockAgentCoreApp 이 별도 설정을 하지 않으므로 여기서 stdout 핸들러를 명시한다.
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, force=False)
 logger = logging.getLogger("orchestrator")
 
-# §9.5 구조화 로그 마커 — 평가(EX evaluator)·채굴기(mine_candidates)·버전 귀인의 단일 원천.
+# 구조화 로그 마커 — 평가(EX evaluator)·채굴기(mine_candidates)·버전 귀인의 단일 원천.
 QUERY_RECORD_MARKER = "t2sql_query_record"
 
 SETTINGS = Settings.from_env()
@@ -81,7 +81,7 @@ class RunnerSession:
         self.runner = runner
         self._clients = clients
         self._session_manager = session_manager
-        # M5 additive: version vector 스탬프·재개 시 질의 귀인용(관측 전용).
+        # version vector 스탬프·재개 시 질의 귀인용(관측 전용).
         self.bundle_label = bundle_label
         self.question = question
 
@@ -103,7 +103,7 @@ def log_query_record(
     bundle_label: str,
     app_version: str,
 ) -> dict[str, Any]:
-    """실행 종료 시 `t2sql_query_record` 구조화 로그 1줄을 남긴다 (§9.5).
+    """실행 종료 시 `t2sql_query_record` 구조화 로그 1줄을 남긴다.
 
     이 로그가 EX 평가(스팬 파싱)와 Track B 후보 채굴(FilterLogEvents)의 단일 원천이다.
     로깅 실패가 요청 흐름을 막지 않도록 예외를 삼킨다. 반환값은 테스트/디버그용 레코드.
@@ -187,7 +187,7 @@ async def _fresh_orchestration(
 ) -> AsyncIterator[dict[str, Any]]:
     """신규 질의 처리. interrupt 발생 시 실행 세션을 캐시에 살려둔다."""
     translator = StreamTranslator(SequentialIdFactory(req.run_id))
-    # 활성 Configuration Bundle 오버라이드 조회(M5). 실패·미설정이면 None → 코드 기본값.
+    # 활성 Configuration Bundle 오버라이드 조회. 실패·미설정이면 None → 코드 기본값.
     bundle_override = load_bundle_override(
         settings.config_bundle_param, region=settings.region
     )
@@ -284,7 +284,7 @@ async def _drive(
     """runner 를 구동해 이벤트를 방출하고, 완료 후 세션 수명을 결정한다.
 
     interrupt(clarification) 로 끝나면 세션을 캐시에 유지(재개 대비), 정상 종료면 자원 정리.
-    종료 시점에 `t2sql_query_record` 구조화 로그를 남긴다(§9.5, app_version 은 additive).
+    종료 시점에 `t2sql_query_record` 구조화 로그를 남긴다(레코드에 app_version 포함).
     """
     async for strands_event in session.runner.stream_async(task):
         for agui_event in translator.translate(strands_event):
@@ -317,7 +317,7 @@ def _emit_query_record(
     status: str,
     app_version: str,
 ) -> None:
-    """세션/트랜슬레이터 상태에서 query record 를 조립해 로깅(§9.5)."""
+    """세션/트랜슬레이터 상태에서 query record 를 조립해 로깅."""
     log_query_record(
         question=(req.question or (session.question if session is not None else None)),
         sql=translator.last_sql if translator is not None else None,

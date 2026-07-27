@@ -1,4 +1,4 @@
-"""t2sql_query_record 구조화 로그 + 빌더 bundle 오버라이드 테스트 (§9.5)."""
+"""t2sql_query_record 구조화 로그 + 빌더 bundle 오버라이드 테스트."""
 
 import asyncio
 import json

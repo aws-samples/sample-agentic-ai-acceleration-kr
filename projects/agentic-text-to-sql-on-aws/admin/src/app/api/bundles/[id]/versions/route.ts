@@ -2,10 +2,10 @@
 
 /**
  * GET  /api/bundles/{id}/versions — ListConfigurationBundleVersions
- * POST /api/bundles/{id}/versions — UpdateConfigurationBundle (새 버전, §9.6)
+ * POST /api/bundles/{id}/versions — UpdateConfigurationBundle (새 버전)
  *
  * bundle 버전은 **불변**이다 — 수동 편집이든 추천 반영이든 항상 새 버전이 생기고, 어떤 버전이
- * 활성인지는 SSM 포인터가 결정한다(§9.1). 따라서 롤백은 "예전 버전으로 다시 승격"과 동일하다.
+ * 활성인지는 SSM 포인터가 결정한다. 따라서 롤백은 "예전 버전으로 다시 승격"과 동일하다.
  */
 
 import {

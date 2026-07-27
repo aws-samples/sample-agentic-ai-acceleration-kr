@@ -1,14 +1,14 @@
-"""Configuration Bundle 오버라이드 조회 (M5 Track A additive).
+"""Configuration Bundle 오버라이드 조회 (개선 파이프라인 Track A).
 
 활성 bundle 은 SSM 파라미터(`CONFIG_BUNDLE_PARAM`, 기본값 없음 = 기능 비활성)가
-단일 원천이다(§9.1 — "bundle 승격 = SSM 포인터 전환"). 조회 흐름:
+단일 원천이다("bundle 승격 = SSM 포인터 전환"). 조회 흐름:
 
 1. SSM `GetParameter` → JSON ``{"bundleId": "...", "versionId": "..."}``
 2. bedrock-agentcore-control ``GetConfigurationBundleVersion(bundleId, versionId)``
 3. ``components["orchestrator"]["configuration"]`` 에서 `system_prompt` / `model_id` 추출
 
 components 의 키는 runtime ARN 대신 **논리 키 `"orchestrator"`** 를 쓴다
-(자기 ARN 자기참조 회피 — 문서 예제와 의도적 편차, §9.1).
+(자기 ARN 자기참조 회피 — 문서 예제와 의도적 편차).
 
 **모든 실패는 경고 로그 + None 반환**(코드 기본값 폴백 — AGENTREL04). bundle 조회가
 에이전트 가용성을 떨어뜨려서는 안 된다. microVM warm 재사용을 고려해 모듈 레벨
@@ -28,7 +28,7 @@ logger = logging.getLogger("orchestrator")
 # 캐시 TTL(초). warm microVM 이 매 요청마다 SSM/control-plane 을 때리지 않게 한다.
 CACHE_TTL_SECONDS = 60.0
 
-# bundle components 의 논리 키(§9.1).
+# bundle components 의 논리 키.
 COMPONENT_KEY = "orchestrator"
 
 # 오버라이드가 없을 때의 bundle 라벨(version vector 스탬프용).

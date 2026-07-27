@@ -117,7 +117,7 @@ def test_build_builtin_connector_rejects_custom_id() -> None:
 
 
 def test_contract_constants() -> None:
-    # §8.3 시그니처의 engine 유효값 / 내장 소스 목록.
+    # register_datasource 시그니처의 engine 유효값 / 내장 소스 목록.
     assert VALID_ENGINES == ("aurora-postgresql", "redshift-serverless")
     assert BUILTIN_DATASOURCES == ("aurora", "redshift")
 

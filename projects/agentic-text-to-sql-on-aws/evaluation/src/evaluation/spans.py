@@ -5,7 +5,7 @@ AgentCore Evaluations 는 평가 대상 트레이스의 스팬을 `evaluationInp
 **방어적으로** 훑는다.
 
 추출 우선순위:
-1. `t2sql_query_record` 마커 (§9.5) — orchestrator 가 실행 종료 시 남기는 구조화 로그.
+1. `t2sql_query_record` 마커 — orchestrator 가 실행 종료 시 남기는 구조화 로그.
    어떤 문자열 값(body/message/attributes/logs 어디든)에 마커가 있으면 그 뒤의 JSON 을
    파싱한다. 가장 신뢰도 높은 원천이며 version vector 도 여기서 얻는다.
 2. gen_ai 계열 속성 — 마커가 없을 때의 폴백.
@@ -23,7 +23,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-# §9.5 구조화 로그 마커.
+# orchestrator 구조화 로그 마커.
 QUERY_RECORD_MARKER = "t2sql_query_record"
 
 # 질문 후보 속성 키 (소문자 비교).

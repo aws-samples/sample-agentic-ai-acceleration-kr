@@ -1,7 +1,7 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 /**
- * API route 인증·인가 헬퍼 (§8.4).
+ * API route 인증·인가 헬퍼.
  *
  * 흐름
  * ----
@@ -11,7 +11,7 @@
  *    (검증기는 모듈 레벨 캐시 — JWKS 를 프로세스 수명 동안 재사용한다.)
  * 3. `cognito:groups` 클레임으로 인가한다.
  *    - Manager | Admin 이 아니면 403, 토큰이 없거나 유효하지 않으면 401.
- *    - Admin 전용 경로(§8.4 `iam/*`)는 Admin 그룹만 허용.
+ *    - Admin 전용 경로(`iam/*`)는 Admin 그룹만 허용.
  *
  * 원본 Bearer 토큰은 그대로 보존해 Gateway MCP 호출에 재사용한다(On-Behalf-Of).
  */
@@ -118,7 +118,7 @@ export async function requireManager(request: Request): Promise<AdminPrincipal> 
   return principal;
 }
 
-/** Admin 만 통과 (§8.4 `iam/*` 경로). */
+/** Admin 만 통과 (`iam/*` 경로). */
 export async function requireAdmin(request: Request): Promise<AdminPrincipal> {
   const principal = await authenticate(request);
   if (!principal.isAdmin) {

@@ -20,17 +20,17 @@ export interface GatewayStackProps extends StackProps {
   // runtime 스택 참조 (MCP target 이 가리킬 두 Runtime ARN)
   readonly sqlMcpRuntime: agentcore.Runtime;
   readonly semanticMcpRuntime: agentcore.Runtime;
-  /** M4: datasource-admin-mcp runtime (3번째 MCP target) */
+  /** datasource-admin-mcp runtime (3번째 MCP target) */
   readonly adminMcpRuntime: agentcore.Runtime;
 }
 
 /**
- * AgenticT2SqlGatewayStack — M3 도구 평면(tool plane) 완성.
+ * AgenticT2SqlGatewayStack — 도구 평면(tool plane).
  *
  * 포함:
  *  - Gateway `agentic-t2sql-gateway` (MCP protocol + semantic search 기본)
  *    · 인바운드: Cognito CustomJwt(웹 클라이언트 + M2M 테스트 클라이언트 allowed)
- *  - GatewayTarget 3개: sql-execution-mcp / semantic-retrieval-mcp / datasource-admin-mcp(M4)
+ *  - GatewayTarget 3개: sql-execution-mcp / semantic-retrieval-mcp / datasource-admin-mcp
  *    · McpServerTargetConfiguration → 각 Runtime 의 MCP invocations 엔드포인트
  *    · 아웃바운드 SigV4: GatewayCredentialProvider.fromIamRole(service "bedrock-agentcore")
  *    · Gateway 서비스 role 에 InvokeAgentRuntime(두 Runtime ARN 한정) 부여
@@ -98,7 +98,7 @@ export class AgenticT2SqlGatewayStack extends Stack {
       endpoint: semanticEndpoint,
       credentialProviderConfigurations: [iamCredential],
     });
-    // M4: 관리 도구 target. 도구명은 `datasource-admin-mcp___<tool>` 로 노출된다.
+    // 관리 도구 target. 도구명은 `datasource-admin-mcp___<tool>` 로 노출된다.
     // 일반 User 는 Cedar default-deny(phase 2 에서 action 스코프)로 이 도구군에 접근하지 못하고,
     // Manager/Admin 만 permitPrivileged 로 허용된다.
     const adminTarget = agentcore.GatewayTarget.forMcpServer(this, 'AdminMcpTarget', {
@@ -118,7 +118,7 @@ export class AgenticT2SqlGatewayStack extends Stack {
     // 대상은 세 Runtime ARN 으로 한정(최소 권한). ARN 은 base/runtime 의 결정적 이름 규칙과 정합.
     //
     // ⚠️ target 생성 시 Gateway 서비스가 이 role 로 MCP 서버에 접속해 도구 목록을 fetch·검증한다
-    //    (M4 배포 실측: 정책 갱신 전에 target 이 만들어지면 "Authorization error when sending
+    //    (배포 실측: 정책 갱신 전에 target 이 만들어지면 "Authorization error when sending
     //    message" 로 NotStabilized). 따라서 모든 target 이 이 정책 갱신 이후에 생성되도록
     //    policyDependable 에 명시적 의존을 건다.
     const invokeGrant = this.gateway.role.addToPrincipalPolicy(
@@ -130,7 +130,7 @@ export class AgenticT2SqlGatewayStack extends Stack {
           `${props.sqlMcpRuntime.agentRuntimeArn}/*`,
           props.semanticMcpRuntime.agentRuntimeArn,
           `${props.semanticMcpRuntime.agentRuntimeArn}/*`,
-          // M4: 관리 도구 runtime
+          // 관리 도구 runtime
           props.adminMcpRuntime.agentRuntimeArn,
           `${props.adminMcpRuntime.agentRuntimeArn}/*`,
         ],
@@ -167,9 +167,9 @@ export class AgenticT2SqlGatewayStack extends Stack {
 
     // 정책 2 (permit): 인증된 사용자(일반 User)의 도구 허용 범위.
     //
-    //   ⚠️ M3 학습: action 목록(`action in [AgentCore::Action::"<Target>___<tool>"]`)으로 좁히는
+    //   ⚠️ 배포 실측: action 목록(`action in [AgentCore::Action::"<Target>___<tool>"]`)으로 좁히는
     //   시도는 정책 생성 시점 검증에서 "unable to find an applicable action" 으로 실패한다
-    //   (CFN 상 정책이 target 도구 동기화 완료 전에 검증됨). 그래서 M4 는 2-phase 로 처리한다:
+    //   (CFN 상 정책이 target 도구 동기화 완료 전에 검증됨). 그래서 2-phase 로 처리한다:
     //
     //     phase 1 (cedarActionScoping=false, 기본): 광역 permit — admin target 을 포함한 gateway
     //             배포가 먼저 성공하도록 한다. 이 시점엔 admin 도구도 일반 User 에게 열려 있다.

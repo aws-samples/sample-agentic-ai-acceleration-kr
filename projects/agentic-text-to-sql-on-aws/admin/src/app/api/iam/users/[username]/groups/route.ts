@@ -1,7 +1,7 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 /**
- * POST /api/iam/users/{username}/groups — 그룹 지정/해제 (Admin 전용, §8.4).
+ * POST /api/iam/users/{username}/groups — 그룹 지정/해제 (Admin 전용).
  *
  * body: `{group: string, action?: "add"|"remove"}` (기본 add).
  * 그룹 클레임(`cognito:groups`)이 Cedar 인가와 화면 분기의 근거이므로, 변경은 Admin 만 가능하다.

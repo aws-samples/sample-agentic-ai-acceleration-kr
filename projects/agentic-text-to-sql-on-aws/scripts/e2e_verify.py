@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""E2E 검증기 — M1 완료 기준의 3레벨 스모크 테스트.
+"""E2E 검증기 — 코어 파이프라인부터 개선 파이프라인까지의 레벨별 스모크 테스트.
 
 레벨 1 (MCP): SigV4 streamable-http 로 각 MCP Runtime 에 접속.
   - sql-execution-mcp: tools/list → run_sql("SELECT COUNT(*) FROM customers") == 1000,
@@ -7,16 +7,16 @@
   - semantic-retrieval-mcp: search_schema("지역별 매출") → results 비어있지 않음
 레벨 2 (에이전트): orchestrator Runtime 에 RunAgentInput POST(InvokeAgentRuntime) →
   SSE 이벤트에 RUN_STARTED → STEP/TOOL_CALL → TEXT_MESSAGE → RUN_FINISHED 확인.
-레벨 4 (M2 clarification): 모호한 질의 → CUSTOM(clarification_request) 수신 →
+레벨 4 (clarification): 모호한 질의 → CUSTOM(clarification_request) 수신 →
   같은 runtimeSessionId 로 clarificationResponse 재호출 → 정상 완료 확인.
   semantic 검색 확장(용어/fewshot 히트)도 이 레벨에서 확인.
-레벨 5 (M3 Gateway/Cedar/Redshift):
+레벨 5 (Gateway/Cedar/Redshift):
   - Cognito M2M 토큰으로 Gateway MCP 접속 → tools/list(집약) 확인
   - User 그룹 사용자: run_sql/search_schema 허용, Denied 그룹: forbid 확인 (Cedar)
   - run_sql(datasource="redshift") 정상 실행 + DELETE 거부
   전제: gateway-outputs.json + Cognito 테스트 사용자(E2E_USER/E2E_DENIED_USER env 또는
   기본 e2e-user@example.com / e2e-denied@example.com, 비밀번호는 E2E_USER_PASSWORD env).
-레벨 6 (M4 admin panel / 큐레이션·승인 / 사용자 JWT OBO):
+레벨 6 (admin panel / 큐레이션·승인 / 사용자 JWT OBO):
   - admin ALB `/` 200/3xx + `/api/health` 200
   - POST /api/auth/login(e2e-manager) → accessToken, 미인증 401, 일반 사용자 403
   - Manager 토큰으로 Gateway MCP: datasource-admin-mcp 도구 노출 → put_entity(term,
@@ -26,7 +26,7 @@
   - 정리: 생성한 e2e term 을 unpublish (실패 시 경고만)
   전제: admin-outputs.json(AgenticT2SqlAdminStack.AdminAlbUrl) + gateway/base outputs +
   E2E 사용자(scripts/create-e2e-users.sh 로 생성, e2e-manager@example.com 포함).
-레벨 7 (M5 개선 파이프라인 — 접점 계약 §9.9):
+레벨 7 (개선 파이프라인 — Track A/B):
   - Track B: put_entity → reject_entity(반려 사유) → rejected 기록·candidate 미노출,
     mine_candidates 채굴 → 승인 큐 노출 → publish → search_schema 전파, 중복 채굴 방지
   - Track A: EX evaluator ACTIVE, admin API 로 배치 평가 시작/조회, online eval 상태,
@@ -38,10 +38,10 @@
 실행:
   python scripts/e2e_verify.py --level 1        # MCP 레벨만
   python scripts/e2e_verify.py --level 2        # 에이전트 레벨만
-  python scripts/e2e_verify.py --level 4        # M2 clarification/semantic 만
-  python scripts/e2e_verify.py --level 5        # M3 Gateway/Cedar/Redshift 만
-  python scripts/e2e_verify.py --level 6        # M4 admin panel/큐레이션/OBO 만
-  python scripts/e2e_verify.py --level 7        # M5 개선 파이프라인만
+  python scripts/e2e_verify.py --level 4        # clarification/semantic 만
+  python scripts/e2e_verify.py --level 5        # Gateway/Cedar/Redshift 만
+  python scripts/e2e_verify.py --level 6        # admin panel/큐레이션/OBO 만
+  python scripts/e2e_verify.py --level 7        # 개선 파이프라인만
   python scripts/e2e_verify.py --level all      # 전부(기본)
 
 ARN 은 runtime-outputs.json(AgenticT2SqlRuntimeStack) 에서 읽거나 인자로 준다.
@@ -350,7 +350,7 @@ def verify_orchestrator(arn: str, checks: Checks, question: str) -> None:
         print(f"    내러티브 미리보기: {preview}")
 
 
-# ─────────────────────────────── 레벨 4: M2 clarification / semantic ───────────────────────────────
+# ─────────────────────────────── 레벨 4: clarification / semantic ──────────────────────────────────
 def verify_clarification(arn: str, checks: Checks) -> None:
     """모호 질의 → clarification_request 수신 → 응답 재호출 → 정상 완료."""
     print("\n[레벨4] clarification interrupt E2E")
@@ -431,7 +431,7 @@ def verify_clarification(arn: str, checks: Checks) -> None:
 
 
 async def verify_semantic_extension(arn: str, checks: Checks) -> None:
-    """semantic-retrieval-mcp 의 M2 확장(용어/fewshot 히트) 확인."""
+    """semantic-retrieval-mcp 의 semantic 확장(용어/fewshot 히트) 확인."""
     print("\n[레벨4] semantic 검색 확장 (용어/fewshot)")
 
     async def work(session):
@@ -455,7 +455,7 @@ async def verify_semantic_extension(arn: str, checks: Checks) -> None:
     await _with_mcp_session(arn, work)
 
 
-# ─────────────────────────────── 레벨 5: M3 Gateway/Cedar/Redshift ───────────────────────────────
+# ─────────────────────────────── 레벨 5: Gateway/Cedar/Redshift ──────────────────────────────────
 GATEWAY_OUTPUTS = ROOT / "infra" / "gateway-outputs.json"
 BASE_OUTPUTS = ROOT / "infra" / "base-outputs.json"
 
@@ -626,7 +626,7 @@ async def verify_gateway(ctx: dict[str, str], checks: Checks) -> None:
     await _with_gateway_session(gateway_url, denied_token, work_denied)
 
 
-# ───────────────────── 레벨 6: M4 admin panel / 큐레이션 / OBO ─────────────────────
+# ───────────────────── 레벨 6: admin panel / 큐레이션 / OBO ─────────────────────
 ADMIN_OUTPUTS = ROOT / "infra" / "admin-outputs.json"
 
 # OSIS(DynamoDB Streams → OpenSearch) 전파 지연을 감안한 폴링 상한(초)과 간격(초).
@@ -694,7 +694,7 @@ def _find_admin_tool(names: list[str], tool: str) -> str | None:
 
 
 async def verify_admin_panel(ctx: dict[str, str], checks: Checks, password: str) -> None:
-    """M4: admin ALB 헬스 · 인증/인가 · Manager 큐레이션→승인→전파 · Cedar 회귀."""
+    """admin ALB 헬스 · 인증/인가 · Manager 큐레이션→승인→전파 · Cedar 회귀."""
     print("\n[레벨6] admin panel / 큐레이션·승인 / Cedar OBO")
     import uuid
 
@@ -922,7 +922,7 @@ async def _verify_cedar_admin_scope(gateway_url: str, user_token: str, checks: C
         names = [t.name for t in tools.tools]
         put_tool = _find_admin_tool(names, "put_entity")
         if put_tool is None:
-            # 정책이 tools/list 에서 걸러내면 그 자체가 deny 증거(M3 Denied 패턴 재사용).
+            # 정책이 tools/list 에서 걸러내면 그 자체가 deny 증거(Denied 그룹 검증과 동일 패턴).
             checks.check("Cedar: 일반 사용자에게 admin 도구 미노출/거부", True, "tools/list 미노출")
         else:
             try:
@@ -932,7 +932,7 @@ async def _verify_cedar_admin_scope(gateway_url: str, user_token: str, checks: C
                         "entity_type": "term",
                         "entity_id": "e2e-should-be-blocked",
                         # ⚠️ payload 에 "denied"/"forbid" 같은 판정 키워드를 넣으면 에코백된
-                        #    응답 텍스트 매칭이 오탐 PASS 를 낸다(M4 배포 실측). 중립 값 사용.
+                        #    응답 텍스트 매칭이 오탐 PASS 를 낸다(배포 실측). 중립 값 사용.
                         "payload": {"term": "e2e-blocked", "definition": "must not be written"},
                         "status": "candidate",
                     },
@@ -990,7 +990,7 @@ async def _verify_cedar_admin_scope(gateway_url: str, user_token: str, checks: C
     await _with_gateway_session(gateway_url, user_token, work)
 
 
-# ───────────────────── 레벨 7: M5 개선 파이프라인 (Track A/B) ─────────────────────
+# ───────────────────── 레벨 7: 개선 파이프라인 (Track A/B) ─────────────────────
 EVALUATION_OUTPUTS = ROOT / "infra" / "evaluation-outputs.json"
 
 
@@ -1081,8 +1081,8 @@ async def _verify_fewshot_propagation(
 async def verify_improvement_pipeline(
     ctx: dict[str, str], checks: Checks, password: str
 ) -> None:
-    """M5: Track B(reject·채굴→승인→전파·중복방지) + Track A(평가·bundle 승격) E2E."""
-    print("\n[레벨7] M5 개선 파이프라인 (Track A/B)")
+    """Track B(reject·채굴→승인→전파·중복방지) + Track A(평가·bundle 승격) E2E."""
+    print("\n[레벨7] 개선 파이프라인 (Track A/B)")
     import uuid
 
     gateway_url = ctx.get("gateway_url", "")
@@ -1443,7 +1443,7 @@ async def verify_improvement_pipeline(
         else:
             checks.check("bundle 승격 검증", False, "bundleId/versionId 확보 실패")
 
-    # ── (6) Cedar 회귀: 일반 사용자에게 M5 admin 도구 미노출/거부 ──
+    # ── (6) Cedar 회귀: 일반 사용자에게 개선 파이프라인 admin 도구 미노출/거부 ──
     try:
         user_token = _cognito_token(client_id, user, password)
     except Exception as exc:  # noqa: BLE001
@@ -1460,7 +1460,7 @@ async def verify_improvement_pipeline(
                 "Cedar: 일반 사용자에게 mine/reject 도구 미노출", True, "tools/list 미노출"
             )
             return
-        # 노출됐다면 호출이 거부돼야 한다(M4 학습: status==ok 면 무조건 실패).
+        # 노출됐다면 호출이 거부돼야 한다(status==ok 면 무조건 실패로 판정).
         target = mine_tool or reject_tool
         try:
             r = await session.call_tool(
@@ -1474,12 +1474,12 @@ async def verify_improvement_pipeline(
             obj = _tool_payload_to_obj(r)
             succeeded = isinstance(obj, dict) and obj.get("status") == "ok"
             checks.check(
-                "Cedar: 일반 사용자 M5 admin 도구 거부",
+                "Cedar: 일반 사용자 개선 파이프라인 admin 도구 거부",
                 not succeeded,
                 f"resp={str(obj)[:160]}",
             )
         except Exception as exc:  # noqa: BLE001 — 예외 거부도 PASS
-            checks.check("Cedar: 일반 사용자 M5 admin 도구 거부", True, f"예외={str(exc)[:120]}")
+            checks.check("Cedar: 일반 사용자 개선 파이프라인 admin 도구 거부", True, f"예외={str(exc)[:120]}")
 
     await _with_gateway_session(gateway_url, user_token, work_cedar)
 
@@ -1529,7 +1529,7 @@ def main() -> int:
     if args.level in ("6", "all"):
         actx = _load_admin_ctx()
         if not ADMIN_OUTPUTS.exists() and not actx.get("gateway_url"):
-            print("[레벨6] admin-outputs.json / gateway-outputs.json 없음 — M4 미배포. skip.")
+            print("[레벨6] admin-outputs.json / gateway-outputs.json 없음 — admin 스택 미배포. skip.")
         elif not ADMIN_OUTPUTS.exists():
             print("[레벨6] admin-outputs.json 없음 — Admin 스택 미배포. skip.")
         else:
@@ -1540,7 +1540,7 @@ def main() -> int:
     if args.level in ("7", "all"):
         ectx = _load_evaluation_ctx()
         if not ectx.get("gateway_url"):
-            print("[레벨7] gateway-outputs.json 없음 — M5 미배포. skip.")
+            print("[레벨7] gateway-outputs.json 없음 — 개선 파이프라인 미배포. skip.")
         elif not EVALUATION_OUTPUTS.exists():
             print("[레벨7] evaluation-outputs.json 없음 — Evaluation 스택 미배포. skip.")
         else:

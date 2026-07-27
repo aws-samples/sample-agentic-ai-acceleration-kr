@@ -42,11 +42,11 @@ META_FIELDS = frozenset(
     {"pk", "sk", "entity_type", "entity_id", "status", "version", "updated_at", "updated_by"}
 )
 
-# M4 additive: "datasource" — admin panel 이 등록한 데이터소스 연결 메타(자격증명 제외).
+# "datasource" — admin panel 이 등록한 데이터소스 연결 메타(자격증명 제외).
 # graph_sync 는 미지원 타입에 빈 statement 를 반환하므로 그래프 동기화에 영향이 없다.
 VALID_ENTITY_TYPES = frozenset({"term", "fewshot", "table", "column", "join", "datasource"})
 
-# M5 additive: "rejected" — 승인 큐에서 반려된 항목(§9.1). published 가 아니므로
+# "rejected" — 승인 큐에서 반려된 항목. published 가 아니므로
 # 파생 저장소(OpenSearch/Neptune)에는 노출되지 않는다(graph_sync 는 삭제 경로로 처리).
 # candidate 와 구분해 두면 채굴기가 반려된 후보를 재적재하지 않고, 반려 이력도 조회 가능하다.
 VALID_STATUSES = frozenset({"candidate", "published", "rejected"})
@@ -274,7 +274,7 @@ class SemanticRepository:
         reason: str = "",
         actor: str = "system",
     ) -> dict:
-        """status 를 rejected 로 전환하고 반려 사유를 payload 에 기록(M5 §9.1).
+        """status 를 rejected 로 전환하고 반려 사유를 payload 에 기록한다.
 
         ``reason`` 이 비어 있지 않으면 payload 에 ``rejection_reason`` 으로 남긴다
         (빈 문자열이면 키를 추가하지 않는다 — 불필요한 필드 오염 방지).

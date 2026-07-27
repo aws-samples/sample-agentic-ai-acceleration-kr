@@ -14,7 +14,7 @@ from evaluation.goldset import (
 def test_bundled_goldset_loads():
     entries = load_goldset()
     assert DEFAULT_GOLDSET_PATH.exists()
-    # §9.3: 5문항 이상, aurora 만.
+    # goldset 계약: 5문항 이상, aurora 만.
     assert len(entries) >= 5
     assert all(e.datasource == "aurora" for e in entries)
     assert all(e.sql.strip().lower().startswith(("select", "with")) for e in entries)

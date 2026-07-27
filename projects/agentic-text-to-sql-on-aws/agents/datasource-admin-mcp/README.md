@@ -6,12 +6,11 @@ semantic 큐레이션·승인과 데이터소스 등록/점검/스키마 크롤�
 ## 왜 MCP 서버인가 (쓰기 경로 단일화)
 
 admin web API는 DynamoDB를 **직접 쓰지 않는다**. 모든 큐레이션·승인·데이터소스 작업은
-`사용자 JWT Bearer → Gateway MCP → datasource-admin-mcp → SemanticRepository` 경로다
-(`docs/m2-m3-interface-contract.md` §8.0).
+`사용자 JWT Bearer → Gateway MCP → datasource-admin-mcp → SemanticRepository` 경로다.
 
 1. DynamoDB **단일 쓰기 지점** 유지 (dual-write 금지 — ARCHITECTURE §4.4)
 2. **Cedar**가 Manager/Admin 인가를 도구 평면에서 강제
-3. M3 이월 부채인 **사용자별 JWT On-Behalf-Of**를 admin 경로에서 실현
+3. **사용자별 JWT On-Behalf-Of** 전파를 admin 경로에서 실현
 
 ## 도구 (10종)
 
@@ -31,19 +30,24 @@ admin web API는 DynamoDB를 **직접 쓰지 않는다**. 모든 큐레이션·�
 | `test_datasource` | `(datasource_id)` | `{"status":"ok","ok":bool,"detail":"..."}` |
 | `crawl_schema` | `(datasource_id, actor="admin-panel")` | `{"status":"ok","tables":N,"columns":N,"joins":N}` |
 
+> **하위호환 규칙**: 위 도구명·인자명과 응답 필드는 **제거·개명하지 않는다**. 확장은 신규
+> 도구/신규 필드 추가(additive only)로만 하고, 신규 인자는 기본값을 반드시 둔다 — 기존
+> 소비자(admin web·배치)가 무시해도 안전해야 한다. 도구를 추가하면 Gateway target 을
+> 재동기화해야 `tools/list` 에 노출된다(CFN 변경이 없어 자동 동기화되지 않는다).
+
 - `entity_type` 유효값: `term | fewshot | table | column | join | datasource`
-  (`datasource`는 M4 additive — `SemanticRepository.VALID_ENTITY_TYPES` 확장).
+  (`datasource`는 `SemanticRepository.VALID_ENTITY_TYPES` 에 정의된다).
 - `list_entities`/`get_entity`/`put_entity` 응답에서 **`embedding` 필드는 제거**된다(payload 경량화).
 - `term`/`fewshot` 쓰기는 Titan Text Embeddings V2(1024차원)로 임베딩을 계산해 저장한다 —
   파생 OpenSearch 인덱스의 `knn_vector` 매핑과 차원이 일치해야 kNN 질의가 성립한다.
 - 크롤 산출물은 항상 **candidate**다. Manager 승인(`publish_entity`) 후에야 Streams →
   OpenSearch/Neptune으로 전파되어 검색에 반영된다.
-- `status` 유효값: `candidate | published | rejected` (`rejected`는 M5 additive —
+- `status` 유효값: `candidate | published | rejected` (`rejected`는
   `reject_entity`가 사유를 payload `rejection_reason`으로 남긴다. `published`가 아니므로
   파생 저장소에 노출되지 않고, 이후 `publish_entity`로 재승인 / `unpublish_entity`로
   재검토 큐 복귀가 가능하다).
 
-## 후보 채굴 (개선 파이프라인 Track B — §9.4)
+## 후보 채굴 (개선 파이프라인 Track B)
 
 `mine_candidates`는 orchestrator가 실행 종료 시 남기는 구조화 로그
 `t2sql_query_record {JSON}`(`{question, sql, status, session_id, version}`)을 CloudWatch
@@ -96,7 +100,7 @@ Logs에서 읽어 semantic 후보를 **candidate**로 적재한다(승인 게이
   Redshift는 PostgreSQL 8.0.2 기반이라 동일 질의를 쓴다. FK 질의 실패는 warning만 남기고
   `joins`를 비운 채 크롤을 계속한다(엔진별 제약 메타 차이 방어).
 - **Redshift Data API는 `SecretArn`이 필수**다. 생략하면 IAM 매핑 사용자로 실행돼
-  `information_schema` 조회조차 권한 부족으로 실패한다(M3 학습).
+  `information_schema` 조회조차 권한 부족으로 실패한다(배포 실측).
 - Data API 호출 패턴은 `sql-execution-mcp/executor.py`와 동형이지만 **의도적으로 복사**했다 —
   두 런타임 이미지는 서로 독립이어야 하므로 패키지 간 의존을 만들지 않는다.
 
@@ -151,4 +155,4 @@ scripts/build-and-push.sh datasource-admin-mcp
 - rds-data `ExecuteStatement` (Aurora 클러스터 한정), redshift-data
   `ExecuteStatement`/`DescribeStatement`/`GetStatementResult`/`CancelStatement`
 - CloudWatch Logs: `DescribeLogGroups` + `FilterLogEvents`
-  (`/aws/bedrock-agentcore/runtimes/*` 한정 — 후보 채굴, §9.4)
+  (`/aws/bedrock-agentcore/runtimes/*` 한정 — 후보 채굴)

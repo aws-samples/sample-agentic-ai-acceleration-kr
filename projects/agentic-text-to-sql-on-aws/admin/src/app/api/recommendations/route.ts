@@ -2,13 +2,13 @@
 
 /**
  * GET  /api/recommendations       — ListRecommendations
- * POST /api/recommendations {type} — StartRecommendation (§9.6)
+ * POST /api/recommendations {type} — StartRecommendation
  *
- * **Preview API** 다(§9.0). 실패는 502 + 서비스 메시지를 그대로 내려 화면이 "추천 기능을
+ * **Preview API** 다. 실패는 502 + 서비스 메시지를 그대로 내려 화면이 "추천 기능을
  * 사용할 수 없습니다 — 수동 프롬프트 편집으로 진행하세요" 폴백을 안내한다.
  *
  * 입력 프롬프트는 현재 활성 bundle 의 `components["orchestrator"].system_prompt` 를 스냅샷으로
- * 쓴다(§9.1). 활성 bundle 이 없으면 빈 문자열로 호출한다 — 서비스가 거부하면 그 메시지가
+ * 쓴다. 활성 bundle 이 없으면 빈 문자열로 호출한다 — 서비스가 거부하면 그 메시지가
  * 그대로 폴백 안내에 실린다(승격 이력이 없는 초기 상태를 사용자에게 그대로 알림).
  */
 
@@ -36,7 +36,7 @@ export const dynamic = 'force-dynamic';
 
 const MAX_RECOMMENDATIONS = 50;
 
-/** 화면 입력(`SYSTEM_PROMPT`) → 서비스 enum(`SYSTEM_PROMPT_RECOMMENDATION`) 매핑 (§9.6). */
+/** 화면 입력(`SYSTEM_PROMPT`) → 서비스 enum(`SYSTEM_PROMPT_RECOMMENDATION`) 매핑. */
 const TYPE_MAP: Record<string, 'SYSTEM_PROMPT_RECOMMENDATION' | 'TOOL_DESCRIPTION_RECOMMENDATION'> =
   {
     SYSTEM_PROMPT: 'SYSTEM_PROMPT_RECOMMENDATION',
@@ -98,7 +98,7 @@ export async function POST(request: Request) {
       startTime,
       endTime,
     };
-    // evaluationConfig 는 평가자 **ARN** 을 요구한다. admin env 에는 ID(§9.7)만 있으므로
+    // evaluationConfig 는 평가자 **ARN** 을 요구한다. admin env 에는 ID 만 있으므로
     // 선택 필드인 이 블록은 생략한다 — 추천 품질 평가는 배치 평가 화면에서 별도로 수행한다.
 
     const systemPrompt = await readActiveSystemPrompt();

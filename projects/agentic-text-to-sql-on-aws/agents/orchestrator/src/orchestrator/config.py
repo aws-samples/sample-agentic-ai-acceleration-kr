@@ -30,14 +30,14 @@ class Settings:
     - max_sql_corrections: self-correction 루프 최대 재시도 횟수
     - mode: "graph"(기본, Strands Graph) | "agent"(단일 Agent 폴백)
 
-    도구 평면(tool plane) — M3 additive:
+    도구 평면(tool plane):
     - tool_plane_mode: "direct"(기본, Runtime MCP 직접 SigV4) | "gateway"(Gateway MCP 집약)
     - gateway_url: gateway 모드의 단일 MCP 엔드포인트 URL
     - cognito_client_id / cognito_user / cognito_password_secret_arn / cognito_user_pool_id:
       gateway 모드의 Cognito M2M(USER_PASSWORD_AUTH) 인증 파라미터.
       비밀번호는 Secrets Manager(ARN)에서 읽는다 — 평문 env 노출 금지.
 
-    개선 파이프라인(M5 additive):
+    개선 파이프라인:
     - config_bundle_param: 활성 Configuration Bundle 포인터 SSM 파라미터명
       (빈 값이면 bundle 오버라이드 기능 비활성 — 코드 기본값만 사용)
     - app_version: 이미지 태그/sha 등 에이전트 버전 문자열. version vector 스탬프용.
@@ -56,7 +56,7 @@ class Settings:
     cognito_user: str
     cognito_password_secret_arn: str
     cognito_user_pool_id: str
-    # M5 additive — 기본값이 있어 기존 생성 코드(위치·키워드 인자)는 영향 없음.
+    # 기본값이 있어 생성 코드(위치·키워드 인자)에 영향이 없다.
     config_bundle_param: str = ""
     app_version: str = DEFAULT_APP_VERSION
 

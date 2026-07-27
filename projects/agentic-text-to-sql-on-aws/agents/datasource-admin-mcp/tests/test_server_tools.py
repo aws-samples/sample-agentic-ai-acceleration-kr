@@ -40,7 +40,7 @@ def test_get_entity_returns_none_when_absent(repo: FakeRepository) -> None:
 
 
 def test_embedding_stripped_from_responses(repo: FakeRepository) -> None:
-    # payload 경량화 계약(§8.3): 응답에서 embedding 제거.
+    # payload 경량화 계약: 응답에서 embedding 제거.
     server.put_entity("term", "revenue", {"term": "매출", "embedding": [0.1] * 1024})
     assert "embedding" in repo.store[("term", "revenue")]  # 저장은 유지
 
@@ -128,7 +128,7 @@ def test_put_entity_rejects_unknown_type() -> None:
     assert "ValueError" in result["message"]
 
 
-# --- reject (M5 §9.4) ---------------------------------------------------------
+# --- reject -------------------------------------------------------------------
 
 
 def test_reject_entity_records_reason_and_status(repo: FakeRepository) -> None:
@@ -179,7 +179,7 @@ def test_reject_strips_embedding(repo: FakeRepository) -> None:
 
 
 def test_rejected_status_accepted_by_real_repository() -> None:
-    # M5 additive 검증: VALID_STATUSES 에 rejected 가 있어야 실 repository put 이 성공한다.
+    # VALID_STATUSES 에 rejected 가 있어야 실 repository put 이 성공한다.
     from semantic_layer.repository import SemanticRepository
 
     from .fakes import fake_embedder
@@ -205,7 +205,7 @@ def test_rejected_status_accepted_by_real_repository() -> None:
     assert stored[0]["status"] == {"S": "rejected"}
 
 
-# --- mine_candidates (M5 §9.4) ------------------------------------------------
+# --- mine_candidates ----------------------------------------------------------
 
 
 def test_mine_candidates_returns_contract_shape(monkeypatch, repo: FakeRepository) -> None:
@@ -275,7 +275,7 @@ def test_mine_candidates_error_is_normalized(monkeypatch, repo: FakeRepository) 
 
 
 def test_datasource_entity_type_accepted_by_real_repository() -> None:
-    # M4 additive 검증: VALID_ENTITY_TYPES 에 datasource 가 포함돼야 put 이 성공한다.
+    # VALID_ENTITY_TYPES 에 datasource 가 포함돼야 put 이 성공한다.
     from semantic_layer.repository import SemanticRepository
 
     from .fakes import fake_embedder

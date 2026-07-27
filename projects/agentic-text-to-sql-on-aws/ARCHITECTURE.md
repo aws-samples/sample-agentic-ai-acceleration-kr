@@ -26,7 +26,7 @@ Admin과 Manager는 admin panel을 공유하되 Cognito group + 화면 권한으
 |---|---|---|---|
 | D1 | IaC | **CDK (TypeScript)** | aws-samples 표준, AgentCore alpha L2 constructs(Runtime/Memory/Gateway/Evaluator/Policy) 존재, ECS·OpenSearch·Neptune·Cognito를 단일 스택 체계로 관리 |
 | D2 | Neptune 도입 시점 | **Day-1 포함** | AWS 공식 text-to-SQL 레퍼런스(2026-04 ML Blog)의 GraphRAG(Neptune 그래프 순회 + OpenSearch 벡터) 패턴 채택. 용어 관계·join path의 multi-hop 해석 담당 |
-| D3 | 프로젝트 성격 | **코어 우선 풀 구현** | 5계층 + admin panel + 평가 파이프라인 전체를 배포 가능한 형태로 구현. 마일스톤은 내부 단계로만 사용 |
+| D3 | 프로젝트 성격 | **코어 우선 풀 구현** | 5계층 + admin panel + 평가 파이프라인 전체를 배포 가능한 형태로 구현. 내부 구현 순서는 산출물에 노출하지 않는다 |
 | D4 | Phase 1 데이터 소스 | **Aurora PostgreSQL + Redshift Serverless** | 둘 다 Data API 기반(드라이버·커넥션 풀 불필요). 셀프 매니지드 MySQL/PostgreSQL 직접 연결은 후속 확장 |
 | D5 | 프론트엔드 | **AG-UI protocol + CopilotKit** | AgentCore Runtime의 AG-UI 네이티브 지원(SSE `/invocations`), interrupt 이벤트로 clarification 폼 렌더링이 프로토콜 레벨에서 해결 |
 | D6 | Long-term memory 위치 | **Orchestration layer 소속 (개인화 레이어)** | long-term memory = 사용자별 동적·경험적 지식(선호, 과거 쿼리 패턴). semantic layer = 조직 공유·정적 도메인 지식. 상호보완이며 병합하지 않음 |
@@ -273,22 +273,21 @@ Manager 승인 큐 (admin panel): 후보 검토 → 승인 시 status: published
   - **semantic 후보 승인 큐**: Track B가 채굴한 용어/동의어/join-path/few-shot 후보를
     검토·승인/반려 (승인 시 candidate → published → 동기화 파이프라인 반영)
 
-## 7. 구현 마일스톤 (내부 단계)
+## 7. 구현 범위
 
-| 단계 | 범위 | 완료 기준 |
-|---|---|---|
-| M1 | 코어 파이프라인 E2E | CDK로 인프라 배포, Aurora 샘플 데이터에 자연어 질의 → SQL → 결과 스트리밍 (semantic layer 최소형: OpenSearch만) |
-| M2 | Semantic layer 완성 + clarification | Neptune 그래프·DynamoDB CRUD·interrupt 기반 재요청 폼 E2E |
-| M3 | Tool/보안 완성 | Gateway·Identity·Policy(Cedar)·Redshift 소스 추가·다층 SQL 가드레일 전체 |
-| M4 | Admin panel | 데이터 소스 등록·semantic 큐레이션·권한 관리·디버깅 화면 |
-| M5 | 개선 파이프라인 | Track A: custom evaluator·online eval·Insights→Recommendations→config bundle→A/B / Track B: semantic 후보 채굴→승인 큐→published 반영 |
+이 문서의 설계(§1~§6)는 전부 구현되어 있다: 코어 파이프라인(자연어 질의 → SQL → 결과
+스트리밍), semantic layer(DynamoDB·OpenSearch·Neptune + clarification), 도구/보안
+평면(Gateway·Identity·Cedar·Redshift·다층 SQL 가드레일), admin panel, 개선 파이프라인
+(Track A: custom evaluator·online eval·Recommendations→config bundle 승격 / Track B:
+semantic 후보 채굴→승인 큐→published 반영). 단, A/B 트래픽 분할은 §8 리스크 완화대로
+수동 bundle 전환 폴백으로 구현되어 있다(README Preview 상태 참고).
 
 ## 8. 리스크 및 완화
 
 | 리스크 | 완화 |
 |---|---|
-| Preview 기능 의존 (Optimization, Registry 등) | README에 상태 명시, M5로 후치, 각 기능에 폴백 서술 (예: A/B 없이 수동 bundle 전환) |
-| Strands AG-UI 통합이 community-maintained | M1에서 통합 검증 스파이크 우선 수행. 폴백: raw SSE + 자체 이벤트 매핑 |
+| Preview 기능 의존 (Optimization, Registry 등) | README에 상태 명시, 각 기능에 폴백 서술 (예: A/B 없이 수동 bundle 전환 — 현재 구현) |
+| Strands AG-UI 통합이 community-maintained | 통합 검증 스파이크 우선 수행. 폴백: raw SSE + 자체 이벤트 매핑 |
 | interrupt 재개의 상태 영속성 | `AgentCoreMemorySessionManager` 명시적 사용, 재개 시나리오 통합 테스트 필수 |
 | 도구 노출 모델 혼선 (Gateway target vs Runtime MCP) | §4.3 기준으로 단일화: Gateway가 유일한 도구 평면 |
 | Neptune 운영 복잡도·비용 | CDK로 최소 인스턴스 구성, cleanup 문서 필수, semantic 검색 인터페이스를 저장소 중립으로 설계 |

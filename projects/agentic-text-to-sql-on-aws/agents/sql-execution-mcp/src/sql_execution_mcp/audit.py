@@ -29,7 +29,7 @@ def sql_hash(sql: str) -> str:
 def log_rejected(sql: str, rule: str, reason: str, datasource: str = "aurora") -> None:
     """거부된 쿼리를 structured JSON 한 줄로 기록.
 
-    ``datasource`` 는 M3에서 추가된 필드(기본 aurora — 기존 호출 하위호환).
+    ``datasource`` 는 실행 대상 데이터소스(기본 aurora — 기존 호출 하위호환).
     """
     record = {
         "event": "sql_rejected",

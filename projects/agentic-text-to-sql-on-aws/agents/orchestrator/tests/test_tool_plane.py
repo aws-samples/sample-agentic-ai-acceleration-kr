@@ -234,7 +234,7 @@ def test_create_tool_clients_gateway(monkeypatch):
 
 
 def test_create_tool_clients_gateway_uses_user_token_for_obo(monkeypatch):
-    """M4 OBO: user_access_token 이 오면 M2M 토큰 대신 그 토큰을 Bearer 로 쓴다."""
+    """OBO: user_access_token 이 오면 M2M 토큰 대신 그 토큰을 Bearer 로 쓴다."""
     import orchestrator.mcp_client as mc
 
     captured = {"m2m_called": False}

@@ -1,7 +1,7 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 /**
- * GET /api/metrics/summary — AgentCore Runtime 메트릭 요약 카드 (§8.4).
+ * GET /api/metrics/summary — AgentCore Runtime 메트릭 요약 카드.
  *
  * 네임스페이스는 `AWS/Bedrock-AgentCore`(AgentCore 벤디드 메트릭). 차원 조합은 리소스/버전에
  * 따라 달라지므로 **metric math `SEARCH()`** 로 네임스페이스 전체를 합산한다. 차원 이름을

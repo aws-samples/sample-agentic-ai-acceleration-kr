@@ -5,7 +5,7 @@ Manager·Admin 페르소나가 semantic 지식을 큐레이션·승인하고, �
 web 페이지와 API routes 가 한 Next.js(App Router) 앱에 함께 들어 있으며 ECS Fargate(ARM64) +
 전용 ALB 로 호스팅됩니다.
 
-> M4 범위. 인터페이스 계약은 `docs/m2-m3-interface-contract.md` **§8** 이 단일 진실 원천입니다.
+> 전체 설계 배경은 리포지토리 루트의 `ARCHITECTURE.md` 를 참고하세요.
 
 ## 아키텍처 요약
 
@@ -29,13 +29,13 @@ Next.js API routes (Node 런타임)
          · cloudwatch-logs : 세션 목록·이벤트 타임라인
 ```
 
-### 왜 semantic 쓰기를 MCP 로 우회하나 (§8.0)
+### 왜 semantic 쓰기를 MCP 로 우회하나
 
 admin web 은 **DynamoDB 를 직접 쓰지 않습니다.** 모든 쓰기를 Gateway MCP 경유로 통일하면
 
 1. DynamoDB 단일 쓰기 지점이 유지되고(dual-write 금지 원칙),
 2. Cedar 가 도구 단위로 Manager/Admin 인가를 강제하며,
-3. M3 에서 이월된 **사용자별 JWT On-Behalf-Of** 가 admin 경로에서 실현됩니다.
+3. **사용자별 JWT On-Behalf-Of** 로 실제 사용자 신원이 도구 평면까지 전파됩니다.
 
 Cognito 사용자·그룹 관리와 Cedar·CloudWatch 조회는 도구 평면이 아닌 **관리 평면**이므로
 MCP 를 거치지 않고 task role 의 SDK 직접 호출로 처리합니다(읽기 위주 · 최소 권한).

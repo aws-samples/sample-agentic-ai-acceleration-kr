@@ -1,16 +1,16 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 /**
- * 평가·개선 파이프라인 공통 헬퍼 (§9.6).
+ * 평가·개선 파이프라인 공통 헬퍼.
  *
  * 설계 근거
  * --------
  * - **Preview API 방어**: Evaluations 는 GA 지만 Configuration Bundle·Recommendations 는
- *   Preview 다(§9.0). SDK 응답 형태가 바뀌어도 화면이 죽지 않도록 route 는 여기 매퍼를 거쳐
+ *   Preview 다. SDK 응답 형태가 바뀌어도 화면이 죽지 않도록 route 는 여기 매퍼를 거쳐
  *   snake_case 로 정규화하고, 알 수 없는 필드는 조용히 버린다.
- * - **활성 bundle 은 SSM 포인터가 단일 원천** (§9.1). 승격/롤백은 SSM PutParameter 하나로
+ * - **활성 bundle 은 SSM 포인터가 단일 원천**. 승격/롤백은 SSM PutParameter 하나로
  *   끝나고, orchestrator 는 TTL 캐시로 그 포인터를 읽는다. admin 은 A/B 트래픽 분할을
- *   제공하지 않으므로(§9.0) 수동 전환 폴백임을 화면에 명시한다.
+ *   제공하지 않으므로 수동 전환 폴백임을 화면에 명시한다.
  * - **로그 그룹 ARN 은 DescribeLogGroups 로 조회**한다. 계정 ID 를 env 로 받거나 STS 를
  *   추가로 호출하지 않기 위해(권한·env 표면 최소화) 이미 쓰는 logs 권한을 재사용한다.
  */
@@ -48,7 +48,7 @@ export function normalizeHours(raw: unknown, fallback = 24): number {
   return Math.min(Math.floor(value), 168);
 }
 
-/** 리소스 이름 규칙(§9.3): 언더스코어만 사용 — 하이픈은 서비스 검증에서 거부된다. */
+/** 리소스 이름 규칙: 언더스코어만 사용 — 하이픈은 서비스 검증에서 거부된다. */
 export function underscoreName(prefix: string, epochMs: number): string {
   return `${prefix}_${Math.floor(epochMs / 1000)}`;
 }
@@ -199,7 +199,7 @@ export async function readActiveBundle(): Promise<ActiveBundlePointer | null> {
   }
 }
 
-/** 활성 bundle 버전의 `components["orchestrator"].configuration` (§9.1 논리 키). 없으면 null. */
+/** 활성 bundle 버전의 `components["orchestrator"].configuration` (논리 키). 없으면 null. */
 export async function readActiveBundleConfiguration(): Promise<Record<string, unknown> | null> {
   const pointer = await readActiveBundle();
   if (!pointer) return null;
@@ -222,7 +222,7 @@ export async function readActiveBundleConfiguration(): Promise<Record<string, un
   }
 }
 
-/** 활성 bundle 의 system_prompt (없으면 빈 문자열 — §9.6 "빈 값 처리"). */
+/** 활성 bundle 의 system_prompt (없으면 빈 문자열). */
 export async function readActiveSystemPrompt(): Promise<string> {
   const configuration = await readActiveBundleConfiguration();
   const prompt = configuration?.system_prompt;

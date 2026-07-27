@@ -60,8 +60,8 @@ done
 # --- OpenSearch 인덱싱 ---
 uv run index-schema-docs
 
-# --- M3: Redshift Serverless seed (2번째 데이터 소스, Aurora 와 동일 데이터셋) ---
-# base-outputs.json 에 Redshift 출력이 있으면(M3 배포됨) 적재한다. 없으면 skip(M1/M2 호환).
+# --- Redshift Serverless seed (2번째 데이터 소스, Aurora 와 동일 데이터셋) ---
+# base-outputs.json 에 Redshift 출력이 있으면 적재한다. 없으면 skip.
 RS_WORKGROUP="$(jq_out RedshiftWorkgroupName 2>/dev/null || echo null)"
 RS_RO_SECRET="$(jq_out RedshiftRoSecretArn 2>/dev/null || echo null)"
 if [[ -n "$RS_WORKGROUP" && "$RS_WORKGROUP" != "null" ]]; then
@@ -83,10 +83,10 @@ if [[ -n "$RS_WORKGROUP" && "$RS_WORKGROUP" != "null" ]]; then
     attempt=$((attempt + 1))
   done
 else
-  echo "[seed] Redshift 출력 없음 — redshift seed skip (M1/M2 호환)."
+  echo "[seed] Redshift 출력 없음 — redshift seed skip."
 fi
 
-# --- M2: semantic layer seed (DynamoDB → Streams → OpenSearch/Neptune 동기화) ---
+# --- semantic layer seed (DynamoDB → Streams → OpenSearch/Neptune 동기화) ---
 # semantic-outputs.json 이 있으면(Semantic 스택 배포됨) DynamoDB 에 용어/fewshot/스키마
 # 엔티티를 적재한다. OSIS·graph-sync Lambda 가 파생 저장소로 전파한다(최종 일관성).
 SEMANTIC_OUT="$INFRA/semantic-outputs.json"
@@ -98,7 +98,7 @@ if [[ -f "$SEMANTIC_OUT" ]]; then
   uv run seed-semantic
   echo "[seed] semantic layer 적재 완료 (동기화는 수 초 내 전파)."
 else
-  echo "[seed] semantic-outputs.json 없음 — semantic seed skip (M1 호환)."
+  echo "[seed] semantic-outputs.json 없음 — semantic seed skip."
 fi
 
 echo "[seed] 완료: Aurora 데이터 + OpenSearch 인덱스."

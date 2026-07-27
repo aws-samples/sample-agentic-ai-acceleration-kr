@@ -1,7 +1,7 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 /**
- * GET /api/cedar/policies — Cedar 정책 **read-only** 조회 (§8.4).
+ * GET /api/cedar/policies — Cedar 정책 **read-only** 조회.
  *
  * 정책은 CDK(gateway 스택)가 소유하는 IaC 산출물이다. 콘솔에서 편집하면 다음 배포에 덮여
  * 드리프트가 되므로 admin panel 은 조회만 제공하고 화면에서 편집 불가를 명시한다.

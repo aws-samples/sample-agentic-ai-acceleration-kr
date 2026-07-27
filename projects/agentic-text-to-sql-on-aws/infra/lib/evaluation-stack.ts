@@ -25,7 +25,7 @@ export interface EvaluationStackProps extends StackProps {
 }
 
 /**
- * AgenticT2SqlEvaluationStack — M5 Track A(평가 파이프라인) 인프라.
+ * AgenticT2SqlEvaluationStack — Track A(평가 파이프라인) 인프라.
  *
  * 구성:
  *  1) EX(Execution Accuracy) code-based evaluator Lambda (`agentic-t2sql-ex-evaluator`)
@@ -119,7 +119,7 @@ export class AgenticT2SqlEvaluationStack extends Stack {
 
     // ───────────────── 3) online eval 실행 role ─────────────────
     // L2 OnlineEvaluationConfig 는 executionRole 미지정 시 role 을 자동 생성하지만,
-    // §9.3 이 이름(`agentic-t2sql-eval-exec-role`)을 계약으로 고정했고 admin panel 이
+    // 이 이름(`agentic-t2sql-eval-exec-role`)을 config 계약으로 고정했고 admin panel 이
     // ARN 을 env 로 소비하므로 여기서 명시적으로 만들어 주입한다.
     // 권한 구성은 L2 의 createExecutionRole 과 동일 집합을 리소스 스코프로 재현했다
     // (aws-cdk-lib 2.262 online-evaluation.js / perms.js 기준).
@@ -150,7 +150,7 @@ export class AgenticT2SqlEvaluationStack extends Stack {
           },
         },
       }),
-      // ⚠️ IAM role description 은 Latin-1 만 허용 — 한국어 불가(M4 배포 실측).
+      // ⚠️ IAM role description 은 Latin-1 만 허용 — 한국어 불가(배포 실측).
       description: 'Execution role for Bedrock AgentCore online evaluation (agentic text-to-sql)',
     });
 
@@ -254,13 +254,13 @@ export class AgenticT2SqlEvaluationStack extends Stack {
       description: 'Orchestrator 트레이스 상시 평가 (Correctness · ToolSelectionAccuracy · EX)',
     });
     // ⚠️ 생성 시점 검증이 실행 role 권한을 확인하므로(위 실측), 정책이 role 에 적용된 뒤에
-    //    config 가 생성되도록 명시적 의존을 건다(M4 GatewayTarget policyDependable 과 동일 사상).
+    //    config 가 생성되도록 명시적 의존을 건다(GatewayTarget policyDependable 과 동일 사상).
     if (lambdaAccess.policyDependable) {
       this.onlineEvalConfig.node.addDependency(lambdaAccess.policyDependable);
     }
 
     // ───────────────── 5) SSM 활성 bundle 포인터 ─────────────────
-    // bundle 승격 = 이 파라미터 전환(§9.1). 초기값은 빈 값 — orchestrator 는 빈 값/실패 시
+    // bundle 승격 = 이 파라미터 전환. 초기값은 빈 값 — orchestrator 는 빈 값/실패 시
     // 코드 기본값(system_prompt·model_id)으로 폴백한다(AGENTREL04).
     // ⚠️ 값은 admin panel 의 승격 API 가 갱신하므로, CFN 이 이후 배포에서 초기값으로
     //    되돌리지 않도록 이 파라미터를 손대지 않는다(값 변경은 런타임 소관).
@@ -271,7 +271,7 @@ export class AgenticT2SqlEvaluationStack extends Stack {
       tier: ssm.ParameterTier.STANDARD,
     });
 
-    // ───────────────────────── Outputs (evaluation-outputs.json, §9.8) ─────────────────────────
+    // ───────────────────────── Outputs (evaluation-outputs.json) ─────────────────────────
     new CfnOutput(this, 'ExecutionEvaluatorId', {
       value: this.executionEvaluator.evaluatorId,
       description: 'EX(Execution Accuracy) custom evaluator ID',

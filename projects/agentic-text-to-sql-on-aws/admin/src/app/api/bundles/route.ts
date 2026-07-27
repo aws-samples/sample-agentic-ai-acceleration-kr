@@ -1,10 +1,10 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 /**
- * GET  /api/bundles — ListConfigurationBundles + SSM 활성 포인터 (§9.6)
+ * GET  /api/bundles — ListConfigurationBundles + SSM 활성 포인터
  * POST /api/bundles — CreateConfigurationBundle (최초 생성, 현재 프롬프트 스냅샷)
  *
- * components 의 키는 runtime ARN 이 아니라 **논리 키 `"orchestrator"`** 다(§9.1 — 자기 ARN
+ * components 의 키는 runtime ARN 이 아니라 **논리 키 `"orchestrator"`** 다(자기 ARN
  * 자기참조 회피, 문서 예제와 의도적 편차). orchestrator 는 SSM 포인터로 이 키를 읽는다.
  *
  * 활성 포인터(SSM)는 별도 리소스라 bundle 목록 조회 실패와 독립적으로 처리한다 —

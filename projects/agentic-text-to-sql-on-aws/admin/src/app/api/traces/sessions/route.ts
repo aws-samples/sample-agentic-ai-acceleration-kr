@@ -1,7 +1,7 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 /**
- * GET /api/traces/sessions — 최근 세션(로그 스트림) 목록 (§8.4).
+ * GET /api/traces/sessions — 최근 세션(로그 스트림) 목록.
  *
  * AgentCore Runtime 은 세션 단위로 로그 스트림을 만든다. `RUNTIME_LOG_GROUP_PREFIX` 하위
  * 로그 그룹들을 훑어 최근 스트림을 모아 "세션 목록"으로 제시한다. X-Ray BatchGetTraces 는

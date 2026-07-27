@@ -1,6 +1,6 @@
 """CandidateMiner 단위 테스트 (fake logs client + fake repository, AWS 호출 없음).
 
-§9.4 계약: mine_candidates 는 orchestrator 의 ``t2sql_query_record`` 로그에서
+mine_candidates 는 orchestrator 의 ``t2sql_query_record`` 로그에서
 fewshot/term 후보를 candidate 로 적재하고, 이미 있는 entity_id 는 skip 한다.
 """
 
@@ -263,7 +263,7 @@ def test_existing_entity_is_skipped_regardless_of_status():
 
 
 def test_rejected_candidate_is_not_re_mined():
-    """반려한 후보가 배치 재실행으로 되살아나지 않아야 한다(§9.1)."""
+    """반려한 후보가 배치 재실행으로 되살아나지 않아야 한다."""
     events = [(GROUP, NOW_MS, record_line("월별 매출", "SELECT 1"))]
     miner, repo, _ = make_miner(events)
     miner.mine()

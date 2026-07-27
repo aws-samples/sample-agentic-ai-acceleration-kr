@@ -26,7 +26,7 @@ const TABS: Array<{ key: TabKey; label: string; adminOnly?: boolean }> = [
   { key: 'curation', label: 'Semantic 큐레이션' },
   { key: 'approvals', label: '승인 큐' },
   { key: 'datasources', label: '데이터 소스' },
-  // M5 — 평가(배치·온라인)·개선 추천·config bundle 승격 (Manager 이상).
+  // 평가(배치·온라인)·개선 추천·config bundle 승격 (Manager 이상).
   { key: 'evaluation', label: '평가·개선' },
   { key: 'iam', label: '권한 관리', adminOnly: true },
   { key: 'dashboard', label: '대시보드' },

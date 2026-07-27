@@ -92,7 +92,7 @@ def test_retrieval_hit_to_dict_shape() -> None:
         {"hits": {"hits": [{"_score": 1.0, "_source": {"doc_type": "table", "table": "t"}}]}}
     )
     d = hits[0].to_dict()
-    # M2: additive 필드 포함(기존 필드는 유지 — 하위호환).
+    # 용어/few-shot 전용 필드 포함(기존 필드는 유지 — 하위호환).
     assert {"doc_type", "table", "column", "description", "ddl_snippet", "score"} <= set(d.keys())
     assert set(d.keys()) == {
         "doc_type",
@@ -154,7 +154,7 @@ def test_retriever_search_embeds_and_queries() -> None:
     assert hits[0].table == "customers"
 
 
-# ── M2: 용어/few-shot hybrid 쿼리 빌더 ───────────────────────────────────
+# ── 용어/few-shot hybrid 쿼리 빌더 ───────────────────────────────────────
 
 
 def test_build_semantic_hybrid_query_fields_and_filter() -> None:
@@ -187,7 +187,7 @@ def test_build_semantic_hybrid_query_no_published_filter() -> None:
     assert "post_filter" not in body
 
 
-# ── M2: 용어/few-shot 결과 정규화 ────────────────────────────────────────
+# ── 용어/few-shot 결과 정규화 ────────────────────────────────────────────
 
 
 def test_normalize_semantic_hits_term() -> None:
@@ -307,7 +307,7 @@ def test_semantic_term_retriever_search() -> None:
     assert hits[0].term == "최근 사용자"
 
 
-# ── M2: Neptune join-path 순회 (GraphTraverser) ─────────────────────────
+# ── Neptune join-path 순회 (GraphTraverser) ─────────────────────────────
 
 
 def test_build_join_path_query_shape() -> None:
@@ -365,7 +365,7 @@ def test_graph_traverser_graceful_degrade_on_error() -> None:
     assert traverser.find_join_paths(["orders", "customers"]) == []
 
 
-# ── M2: CompositeRetriever 병합·join_paths 부착 ─────────────────────────
+# ── CompositeRetriever 병합·join_paths 부착 ─────────────────────────────
 
 
 class _FakeRetriever:

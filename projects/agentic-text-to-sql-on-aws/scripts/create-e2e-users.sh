@@ -4,7 +4,7 @@
 # 생성 대상 (레벨5·6 E2E 전제):
 #   - e2e-user@example.com     : 그룹 없음(일반 인증 사용자) — Cedar 광역 permit 경로 검증
 #   - e2e-denied@example.com   : Denied 그룹 — Cedar forbid-wins 검증 (그룹 없으면 생성)
-#   - e2e-manager@example.com  : Manager 그룹 — M4 admin 큐레이션·승인 경로 검증
+#   - e2e-manager@example.com  : Manager 그룹 — admin 큐레이션·승인 경로 검증
 #
 # 비밀번호는 Secrets Manager `agentic-t2sql/e2e/user-password` 에 보관한다.
 #   - 시크릿이 없으면 랜덤 강력 비밀번호를 생성해 시크릿으로 저장한다.

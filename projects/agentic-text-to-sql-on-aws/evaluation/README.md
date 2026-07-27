@@ -5,8 +5,7 @@ Evaluations 의 custom **code-based evaluator** Lambda(`agentic-t2sql-ex-evaluat
 gold 질의 세트(`goldset-v1.jsonl`)를 제공합니다.
 
 > CLAUDE.md 의 "Tool layer 에 Lambda 금지" 제약의 **명시적 예외**입니다 —
-> code-based evaluator 는 Evaluations 서비스 규격상 Lambda 여야 합니다
-> (`docs/m2-m3-interface-contract.md` §9.1).
+> code-based evaluator 는 Evaluations 서비스 규격상 Lambda 여야 합니다.
 
 > AWS 배포(Lambda·Evaluator·OnlineEvaluationConfig 생성)는 CDK(`infra/lib/evaluation-stack.ts`)
 > 담당입니다. 이 패키지는 코드와 로컬 단위 테스트까지 제공합니다.
@@ -31,7 +30,8 @@ Lambda handler 진입점: **`evaluation.handler.handler`** (런타임 Python 3.1
 ## Execution Accuracy(EX) 판정 로직
 
 1. `evaluationInput.sessionSpans` 에서 orchestrator 가 남긴 `t2sql_query_record`
-   JSON(§9.5)을 찾아 `(question, sql, status, version)` 을 복원합니다.
+   JSON 구조화 로그를 찾아 `(question, sql, status, version)` 을 복원합니다
+   (형식은 `agents/orchestrator/README.md` 참고).
    마커가 없으면 `gen_ai.*` / `db.statement` 계열 속성으로 폴백합니다
    (스팬 스키마가 다양하므로 body·attributes·logs 를 모두 방어적으로 훑습니다).
 2. `goldset-v1.jsonl` 에서 질문을 매칭합니다 — 정규화(공백·대소문자·구두점 제거) 후

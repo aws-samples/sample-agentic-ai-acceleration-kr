@@ -44,7 +44,7 @@ class StreamTranslator:
         # clarification interrupt 가 표면화되면 True. 상위(app.py)가 이를 보고
         # 정상 RUN_FINISHED 로 스트림을 닫고 재개는 새 요청으로 처리한다.
         self.clarification_pending: bool = False
-        # M5 additive: 마지막 run_sql 호출 SQL (t2sql_query_record 로그용).
+        # 마지막 run_sql 호출 SQL (t2sql_query_record 로그용).
         # 이벤트 방출에는 영향이 없는 관측 전용 필드다.
         self.last_sql: str | None = None
 

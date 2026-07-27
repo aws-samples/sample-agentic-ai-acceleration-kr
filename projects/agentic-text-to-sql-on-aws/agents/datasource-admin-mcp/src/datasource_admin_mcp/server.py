@@ -5,17 +5,18 @@ stateless streamable-HTTP. ``FastMCP(host="0.0.0.0", stateless_http=True)`` +
 ``mcp.run(transport="streamable-http")``.
 
 도구 10종:
-  §8.3 (M4): list_entities / get_entity / put_entity / publish_entity / unpublish_entity
-             register_datasource / test_datasource / crawl_schema
-  §9.4 (M5): reject_entity / mine_candidates   — 개선 파이프라인 Track B
+  큐레이션·승인: list_entities / get_entity / put_entity / publish_entity /
+                unpublish_entity / reject_entity
+  데이터소스:    register_datasource / test_datasource / crawl_schema
+  개선 파이프라인(Track B): mine_candidates
 
 admin web 은 DynamoDB 를 직접 쓰지 않고 **사용자 JWT → Gateway MCP → 이 서버**를 경유한다
-(§8.0: semantic 쓰기 경로 단일화 + Cedar 인가 강제 + 사용자별 OBO 실현).
+(semantic 쓰기 경로 단일화 + Cedar 인가 강제 + 사용자별 OBO 실현).
 
 모든 도구는 dict 를 반환하고 실패는 ``{"status":"error","message":"타입: 메시지"}`` 로
 정규화한다. 시크릿 값은 절대 로깅·응답하지 않는다.
 
-주의(CLAUDE.md M2 학습): 도구 함수 어노테이션에 **지연 임포트 타입을 쓰지 않는다.**
+주의: 도구 함수 어노테이션에 **지연 임포트 타입을 쓰지 않는다.**
 ``from __future__ import annotations`` 하에서 스키마 생성 시 모듈 전역에서 평가되기 때문.
 """
 

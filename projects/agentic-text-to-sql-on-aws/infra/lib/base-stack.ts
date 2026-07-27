@@ -42,26 +42,26 @@ export class AgenticT2SqlBaseStack extends Stack {
   public readonly ecrSqlMcp: ecr.IRepository;
   public readonly ecrSemanticMcp: ecr.IRepository;
   public readonly ecrUi: ecr.IRepository;
-  /** M4: datasource-admin-mcp 이미지 리포 */
+  /** datasource-admin-mcp 이미지 리포 */
   public readonly ecrAdminMcp: ecr.IRepository;
-  /** M4: admin web(Next.js) 이미지 리포 */
+  /** admin web(Next.js) 이미지 리포 */
   public readonly ecrAdminWeb: ecr.IRepository;
 
   public readonly orchestratorRole: iam.Role;
   public readonly sqlMcpRole: iam.Role;
   public readonly semanticMcpRole: iam.Role;
   public readonly uiTaskRole: iam.Role;
-  /** M4: datasource-admin-mcp Runtime 실행 role */
+  /** datasource-admin-mcp Runtime 실행 role */
   public readonly adminMcpRole: iam.Role;
-  /** M4: admin web ECS task role (관리 평면 AWS SDK 직접 호출) */
+  /** admin web ECS task role (관리 평면 AWS SDK 직접 호출) */
   public readonly adminWebTaskRole: iam.Role;
 
   public readonly userPool: cognito.UserPool;
   public readonly userPoolClient: cognito.UserPoolClient;
-  /** M3: E2E·orchestrator 용 M2M(USER_PASSWORD_AUTH) 테스트 클라이언트 */
+  /** E2E·orchestrator 용 M2M(USER_PASSWORD_AUTH) 테스트 클라이언트 */
   public readonly m2mClient: cognito.UserPoolClient;
 
-  // ───────────── M3: Redshift Serverless (2번째 데이터 소스) ─────────────
+  // ───────────── Redshift Serverless (2번째 데이터 소스) ─────────────
   public readonly redshiftWorkgroup: redshiftserverless.CfnWorkgroup;
   public readonly redshiftRoSecret: secretsmanager.ISecret;
   /** Redshift workgroup ARN (sql-mcp Data API grant·env 주입) */
@@ -132,7 +132,7 @@ export class AgenticT2SqlBaseStack extends Stack {
       removalPolicy: RemovalPolicy.DESTROY,
     });
 
-    // ───────────────────────── Redshift Serverless (2번째 데이터 소스, M3) ─────────────────────────
+    // ───────────────────────── Redshift Serverless (2번째 데이터 소스) ─────────────────────────
     // ⚠️ Redshift Serverless workgroup 은 3개 AZ 에 걸친 서브넷을 요구한다(문서: serverless-usage-
     //    considerations / getting-started-cluster-in-vpc). base VPC 는 maxAzs:2 라 부족하고, 이미
     //    배포된 VPC 의 AZ 수를 늘리면 파괴적 교체가 발생하므로, Redshift 전용 3-AZ VPC 를 별도로 만든다.
@@ -216,7 +216,7 @@ export class AgenticT2SqlBaseStack extends Stack {
       removalPolicy: RemovalPolicy.DESTROY,
     });
 
-    // ───────────────────────── ECR 리포 (M1 4개 + M4 2개) ─────────────────────────
+    // ───────────────────────── ECR 리포 (코어 4개 + admin panel 2개) ─────────────────────────
     const makeRepo = (idSuffix: string, repoName: string): ecr.Repository =>
       new ecr.Repository(this, `Ecr${idSuffix}`, {
         repositoryName: repoName,
@@ -230,12 +230,12 @@ export class AgenticT2SqlBaseStack extends Stack {
     this.ecrSqlMcp = makeRepo('SqlMcp', config.ecrRepos.sqlExecutionMcp);
     this.ecrSemanticMcp = makeRepo('SemanticMcp', config.ecrRepos.semanticRetrievalMcp);
     this.ecrUi = makeRepo('Ui', config.ecrRepos.ui);
-    // M4: admin panel 2종(관리 도구 MCP + admin web)
+    // admin panel 2종(관리 도구 MCP + admin web)
     this.ecrAdminMcp = makeRepo('AdminMcp', config.ecrRepos.datasourceAdminMcp);
     this.ecrAdminWeb = makeRepo('AdminWeb', config.ecrRepos.adminWeb);
 
     // ───────────────────────── Cognito user pool + client + groups ─────────────────────────
-    // M1 은 프로비저닝만. Admin/Manager 그룹은 admin panel 페르소나 분리를 위한 골격.
+    // Admin/Manager 그룹으로 admin panel 페르소나를 분리한다.
     this.userPool = new cognito.UserPool(this, 'UserPool', {
       userPoolName: `${prefix}-users`,
       selfSignUpEnabled: false,
@@ -271,7 +271,7 @@ export class AgenticT2SqlBaseStack extends Stack {
       description: '매니저: semantic 큐레이션, 평가 리뷰/승인',
     });
 
-    // M3: E2E·orchestrator(서비스 위임) 용 M2M 클라이언트.
+    // E2E·orchestrator(서비스 위임) 용 M2M 클라이언트.
     // USER_PASSWORD_AUTH(ADMIN_NO_SRP 아님) 를 켜서 클라이언트 API 로 AccessToken 을 받는다.
     // Gateway 인바운드 JWT authorizer 의 allowedClients 에 이 client id 가 포함돼야 한다
     // (gateway-stack 이 base.m2mClient 를 참조). generateSecret false — public client.
@@ -281,8 +281,8 @@ export class AgenticT2SqlBaseStack extends Stack {
       authFlows: { userPassword: true, userSrp: false },
     });
 
-    // ───────────────────────── AgentCore Memory (STM only, M1) ─────────────────────────
-    // 장기 메모리 전략(LTM)은 M1 범위 밖. STM raw event 보존 30일.
+    // ───────────────────────── AgentCore Memory (STM only) ─────────────────────────
+    // 단기 메모리만 사용한다(장기 메모리 전략은 미도입). STM raw event 보존 30일.
     this.memory = new agentcore.Memory(this, 'Memory', {
       memoryName: `${prefix.replace(/-/g, '_')}_memory`,
       description: 'Short-term conversation memory for the orchestrator agent',
@@ -320,7 +320,7 @@ export class AgenticT2SqlBaseStack extends Stack {
     );
     this.agentRoSecret.grantRead(this.sqlMcpRole);
 
-    // sql-mcp: Redshift Data API + GetCredentials + RS read-only 시크릿 read (M3, datasource="redshift").
+    // sql-mcp: Redshift Data API + GetCredentials + RS read-only 시크릿 read (datasource="redshift").
     // ⚠️ workgroup id(UUID) 미상이라 redshift-data 액션은 계정/리전 스코프로 제한(base 의 runtime ARN
     //    패턴과 동일 사상). GetCredentials 는 workgroup/* 로 제한(계정 내 사실상 이 1개).
     this.sqlMcpRole.addToPolicy(
@@ -395,11 +395,11 @@ export class AgenticT2SqlBaseStack extends Stack {
         ],
       }),
     );
-    // Memory 접근. M1 은 STM 만이므로 event 쓰기 + STM 읽기 액션만 부여(LTM record 액션 제외).
+    // Memory 접근. STM 만 사용하므로 event 쓰기 + STM 읽기 액션만 부여(LTM record 액션 제외).
     this.memory.grantWrite(this.orchestratorRole);
     this.memory.grantReadShortTermMemory(this.orchestratorRole);
 
-    // M3 gateway 모드: 서비스 계정(Cognito M2M) 비밀번호 시크릿 read + Gateway MCP 호출.
+    // gateway 모드: 서비스 계정(Cognito M2M) 비밀번호 시크릿 read + Gateway MCP 호출.
     // (cognito-idp initiate_auth 는 클라이언트 API 라 IAM 권한 불필요.)
     this.orchestratorRole.addToPolicy(
       new iam.PolicyStatement({
@@ -420,7 +420,7 @@ export class AgenticT2SqlBaseStack extends Stack {
       }),
     );
 
-    // ── M5: bundle 기반 프롬프트/모델 오버라이드(§9.5) ──
+    // ── bundle 기반 프롬프트/모델 오버라이드 ──
     // orchestrator 는 세션 시작 시 SSM 활성 bundle 포인터를 읽고(TTL 60s), 지정된 bundle
     // 버전의 components["orchestrator"] 에서 system_prompt/model_id 를 오버라이드한다.
     // ⚠️ 순환 회피: SSM 파라미터는 evaluation 스택 소유(base→evaluation 역참조는 사이클)이므로
@@ -475,7 +475,7 @@ export class AgenticT2SqlBaseStack extends Stack {
       }),
     );
 
-    // ───────────────────────── M4: datasource-admin-mcp 실행 role ─────────────────────────
+    // ───────────────────────── datasource-admin-mcp 실행 role ─────────────────────────
     // 관리 도구 평면(큐레이션·승인·데이터소스 등록/테스트·스키마 크롤). semantic 쓰기의 단일
     // 지점이므로 DynamoDB RW 를 갖는다.
     //
@@ -562,10 +562,10 @@ export class AgenticT2SqlBaseStack extends Stack {
       }),
     );
 
-    // ── M5 Track B: 후보 채굴기(mine_candidates) 의 orchestrator 로그 읽기 ──
+    // ── Track B: 후보 채굴기(mine_candidates) 의 orchestrator 로그 읽기 ──
     // orchestrator 가 남기는 `t2sql_query_record` JSON 을 CloudWatch 에서 수집한다.
     // ⚠️ logs:DescribeLogGroups 는 Runtime L2 가 이미 계정 내 log-group:* 로 자동 부여하므로
-    //    (리소스 수준 권한 미지원 액션 — M4 admin-web 실측) 여기서는 중복 부여하지 않고
+    //    (리소스 수준 권한 미지원 액션 — admin-web 실측) 여기서는 중복 부여하지 않고
     //    실제 내용 읽기(FilterLogEvents)만 runtime 프리픽스로 제한해 추가한다.
     this.adminMcpRole.addToPolicy(
       new iam.PolicyStatement({
@@ -577,10 +577,11 @@ export class AgenticT2SqlBaseStack extends Stack {
       }),
     );
 
-    // ───────────────────────── M4: admin web ECS task role ─────────────────────────
+    // ───────────────────────── admin web ECS task role ─────────────────────────
     // admin panel 의 "관리 평면" 직접 호출용(도구 평면과 무관): Cognito 사용자·그룹 관리,
     // Cedar 정책 read-only 조회, CloudWatch·X-Ray 관측 조회. 큐레이션/데이터소스 작업은
-    // 사용자 JWT → Gateway MCP 경로이므로 여기에 DynamoDB 권한을 두지 않는다(§8.0).
+    // 사용자 JWT → Gateway MCP 경로이므로 여기에 DynamoDB 권한을 두지 않는다
+    // (semantic 쓰기는 admin-mcp 단일 지점 — admin/README.md 참고).
     this.adminWebTaskRole = new iam.Role(this, 'AdminWebTaskRole', {
       roleName: `${prefix}-admin-web-task-role`,
       assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
@@ -642,7 +643,7 @@ export class AgenticT2SqlBaseStack extends Stack {
       }),
     );
     // ⚠️ logs:DescribeLogGroups 는 계정 수준 액션이라 특정 로그 그룹 프리픽스 ARN 으로
-    //    스코프할 수 없다(요청 리소스가 `log-group::log-stream:` 로 평가됨 — M4 운영 실측,
+    //    스코프할 수 없다(요청 리소스가 `log-group::log-stream:` 로 평가됨 — 운영 실측,
     //    AccessDenied). 목록 조회만 계정 내 log-group:* 로 허용하고, 실제 내용 읽기
     //    (스트림·이벤트)는 runtime 프리픽스로 계속 제한한다.
     this.adminWebTaskRole.addToPolicy(
@@ -667,7 +668,7 @@ export class AgenticT2SqlBaseStack extends Stack {
         ],
       }),
     );
-    // M5: StartBatchEvaluation 은 **호출자 자격증명**으로 트레이스 로그를 Insights 질의한다
+    // StartBatchEvaluation 은 **호출자 자격증명**으로 트레이스 로그를 Insights 질의한다
     // (배포 실측: query 권한 없으면 "The evaluation execution role is missing required
     // CloudWatch Logs query permissions" ValidationException — 별도 role 파라미터 없음).
     // runtime 로그 그룹 + CloudWatch 스팬 저장소(aws/spans)로 스코프해 부여한다.
@@ -682,7 +683,7 @@ export class AgenticT2SqlBaseStack extends Stack {
         ],
       }),
     );
-    // M5: 배치 평가 결과는 서비스가 **호출자(FAS) 자격증명**으로 평가 결과 로그 그룹을
+    // 배치 평가 결과는 서비스가 **호출자(FAS) 자격증명**으로 평가 결과 로그 그룹을
     // 만들어 기록한다(배포 실측: "FAS credentials do not have permission to create
     // CloudWatch log groups" → 이어서 "... to set log group retention policy").
     // evaluations 프리픽스로 스코프해 생성·쓰기·보존정책 액션을 부여한다.
@@ -701,7 +702,7 @@ export class AgenticT2SqlBaseStack extends Stack {
       }),
     );
 
-    // ───────────────────────── M5: admin web 평가·bundle 관리 권한 (§9.6) ─────────────────────────
+    // ───────────────────────── admin web 평가·bundle 관리 권한 ─────────────────────────
     // Track A 화면(평가 실행·결과 조회·추천·bundle 승격)이 관리 평면 API 를 직접 호출한다.
     //
     // ⚠️ 리소스 스코프 주의: evaluation 스택이 만드는 evaluator/online-eval-config 는
@@ -751,7 +752,7 @@ export class AgenticT2SqlBaseStack extends Stack {
         resources: ['*'],
       }),
     );
-    // bundle 승격/롤백 = SSM 활성 포인터 전환(§9.1). 이 파라미터 1개로만 제한한다.
+    // bundle 승격/롤백 = SSM 활성 포인터 전환. 이 파라미터 1개로만 제한한다.
     // ⚠️ 순환 회피: 파라미터는 evaluation 스택 소유 → 이름 규칙으로 ARN 조립.
     this.adminWebTaskRole.addToPolicy(
       new iam.PolicyStatement({
@@ -829,7 +830,7 @@ export class AgenticT2SqlBaseStack extends Stack {
     new CfnOutput(this, 'EcrSqlMcpUri', { value: this.ecrSqlMcp.repositoryUri });
     new CfnOutput(this, 'EcrSemanticMcpUri', { value: this.ecrSemanticMcp.repositoryUri });
     new CfnOutput(this, 'EcrUiUri', { value: this.ecrUi.repositoryUri });
-    // ── M4: admin panel 이미지 리포 ──
+    // ── admin panel 이미지 리포 ──
     new CfnOutput(this, 'EcrAdminMcpUri', {
       value: this.ecrAdminMcp.repositoryUri,
       description: 'datasource-admin-mcp ECR 리포 URI',
@@ -846,7 +847,7 @@ export class AgenticT2SqlBaseStack extends Stack {
       exportName: `${prefix}-m2m-client-id`,
     });
 
-    // ── M3: Redshift Serverless outputs ──
+    // ── Redshift Serverless outputs ──
     new CfnOutput(this, 'RedshiftWorkgroupName', {
       value: config.redshiftWorkgroupName,
       description: 'Redshift Serverless workgroup 이름 (Redshift Data API workgroupName)',

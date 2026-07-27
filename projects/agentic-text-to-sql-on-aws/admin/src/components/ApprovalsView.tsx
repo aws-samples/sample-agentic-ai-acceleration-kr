@@ -6,7 +6,7 @@
  * 승인 큐 화면 (화면 3) — Manager 이상.
  *
  * candidate 엔티티를 목록으로 보고, 상세(payload)를 확인한 뒤 **승인(publish)** 하거나
- * 사유를 남겨 **반려(reject)** 한다 (M5 §9.1 — status 에 `rejected` additive).
+ * 사유를 남겨 **반려(reject)** 한다 (status 가 `rejected` 로 전환).
  * 반려된 항목은 승인 큐에서 사라지고 파생 저장소(OpenSearch·Neptune)에도 노출되지 않으며,
  * "반려 목록" 탭에서 이력을 확인하고 필요하면 다시 승인(발행)해 되살릴 수 있다.
  */

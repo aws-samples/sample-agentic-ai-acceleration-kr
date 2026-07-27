@@ -8,7 +8,7 @@
 
 > multiset 을 쓰는 이유: 단순 set 이면 중복 행이 다른 두 결과가 같다고 판정된다.
 
-## 경량 SQL 방어 (§9.1 4중 방어의 보조)
+## 경량 SQL 방어 (READ-ONLY 4중 방어의 보조)
 sqlglot 의존 없이 표준 lib 만 사용한다(Lambda 의존성 zip 회피). 최후 방어선은
 read-only(agent_ro) DB grant 이며, 여기서는 명백한 위반만 조기에 막는다.
 - 단일 statement (문자열 리터럴/주석 밖의 `;` 로 분리되는 두 번째 statement 금지)

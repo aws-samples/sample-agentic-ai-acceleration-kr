@@ -2,7 +2,7 @@
 
 /**
  * GET  /api/semantic/entities/{type}/{id} — MCP `get_entity` (상세 조회, 편집 폼 프리필용)
- * PUT  /api/semantic/entities/{type}/{id} — MCP `put_entity`(status=candidate 기본, §8.4)
+ * PUT  /api/semantic/entities/{type}/{id} — MCP `put_entity`(status=candidate 기본)
  *
  * 쓰기는 항상 candidate 로 들어가고, 발행은 별도 publish 경로를 거친다(승인 워크플로 분리).
  * `actor` 인자에는 JWT username 을 실어 감사 기록을 남긴다.

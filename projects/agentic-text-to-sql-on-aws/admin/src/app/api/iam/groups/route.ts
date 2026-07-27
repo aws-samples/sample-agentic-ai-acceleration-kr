@@ -3,7 +3,7 @@
 /**
  * GET /api/iam/groups — 사용자 풀의 그룹 목록 (Admin 전용).
  *
- * 그룹 지정 드롭다운을 실제 풀 상태로 채우기 위한 보조 경로다(§8.4 iam/* 계열).
+ * 그룹 지정 드롭다운을 실제 풀 상태로 채우기 위한 보조 경로다(iam/* 계열).
  */
 
 import { ListGroupsCommand } from '@aws-sdk/client-cognito-identity-provider';

@@ -28,7 +28,7 @@ export interface SemanticStackProps extends StackProps {
 }
 
 /**
- * AgenticT2SqlSemanticStack — M2 semantic layer 저장·동기화 배관.
+ * AgenticT2SqlSemanticStack — semantic layer 저장·동기화 배관.
  *
  * 포함:
  *  - DynamoDB(system-of-record, Streams NEW_AND_OLD_IMAGES)

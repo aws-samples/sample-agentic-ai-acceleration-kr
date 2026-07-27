@@ -29,7 +29,7 @@ DEFAULT_SECRET_PREFIX = "agentic-t2sql/datasource/"
 # 내장(built-in) 데이터소스 — env 로 커넥터를 만들 수 있는 소스.
 BUILTIN_DATASOURCES = ("aurora", "redshift")
 
-# 지원 엔진(§8.3 시그니처).
+# 지원 엔진(register_datasource 시그니처 — README 참고).
 VALID_ENGINES = ("aurora-postgresql", "redshift-serverless")
 
 # 등록 시크릿에 반드시 있어야 하는 키(엔진 공통 최소 집합).

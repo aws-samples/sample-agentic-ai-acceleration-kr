@@ -1,7 +1,7 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 /**
- * Gateway MCP 클라이언트 — semantic 쓰기 경로의 단일 통로 (§8.0 / §8.3).
+ * Gateway MCP 클라이언트 — semantic 쓰기 경로의 단일 통로.
  *
  * 설계 근거
  * --------
@@ -9,7 +9,7 @@
  * `사용자 JWT Bearer → Gateway MCP → datasource-admin-mcp` 경로로 흐른다. 그 결과
  *   (1) DynamoDB 단일 쓰기 지점 유지,
  *   (2) Cedar 가 Manager/Admin 인가를 도구 단위로 강제,
- *   (3) 사용자별 JWT On-Behalf-Of(M3 이월 부채)가 admin 경로에서 실현된다.
+ *   (3) 사용자별 JWT On-Behalf-Of 가 admin 경로에서 실현된다.
  *
  * 도구명 규약
  * ----------
@@ -27,7 +27,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { ADMIN_MCP_TARGET, requiredEnv } from './env';
 
-/** §8.3 / §9.4 datasource-admin-mcp 도구명 (프리픽스 없는 순수 이름). */
+/** datasource-admin-mcp 도구명 (프리픽스 없는 순수 이름). */
 export type AdminToolName =
   | 'list_entities'
   | 'get_entity'
@@ -37,7 +37,7 @@ export type AdminToolName =
   | 'register_datasource'
   | 'test_datasource'
   | 'crawl_schema'
-  // M5 additive (§9.4) — 반려·후보 채굴.
+  // 반려·후보 채굴.
   | 'reject_entity'
   | 'mine_candidates';
 
@@ -87,7 +87,7 @@ function parseToolResult(raw: unknown): McpToolResult {
  * 사용자 AccessToken(Bearer)으로 Gateway MCP 도구를 1회 호출한다.
  *
  * @param accessToken 사용자 Cognito AccessToken (OBO — 서비스 계정 토큰 아님)
- * @param tool §8.3 도구명
+ * @param tool datasource-admin-mcp 도구명
  * @param args 도구 인자 (actor 는 호출자가 JWT username 으로 채워 넘긴다)
  */
 export async function callAdminTool(

@@ -5,15 +5,15 @@
 #   1) AgenticT2SqlBaseStack     → base-outputs.json     (VPC/Aurora/OpenSearch/ECR/Cognito/Memory/IAM)
 #   2) AgenticT2SqlSemanticStack → semantic-outputs.json (DynamoDB/Neptune/OSIS/graph-sync Lambda)
 #   3) [이미지 빌드·푸시: scripts/build-and-push.sh]  ← Base 완료 후, Runtime 전에 필수
-#                                                     (M4: datasource-admin-mcp 이미지 포함)
+#                                                     (datasource-admin-mcp 이미지 포함)
 #   4) [seed: scripts/seed.sh]                        ← Runtime 전에 데이터 적재
-#   5) AgenticT2SqlRuntimeStack → runtime-outputs.json (AgentCore Runtime 4개, M4 admin-mcp 포함)
+#   5) AgenticT2SqlRuntimeStack → runtime-outputs.json (AgentCore Runtime 4개, admin-mcp 포함)
 #   6) AgenticT2SqlGatewayStack → gateway-outputs.json (Gateway·Cedar·Identity + admin target)
 #   7) [Cedar 2-phase] scripts/deploy.sh gateway-scoped
 #                                 ← admin target 도구 동기화 후 action 스코프 정책으로 갱신
-#                                   (M3 학습: action 목록 정책은 target 생성 전 검증 실패)
+#                                   (action 목록 정책은 target 생성 전에는 검증에 실패한다)
 #   8) AgenticT2SqlEvaluationStack → evaluation-outputs.json
-#                                 (M5: EX evaluator Lambda·AgentCore Evaluator·online eval·
+#                                 (EX evaluator Lambda·AgentCore Evaluator·online eval·
 #                                  SSM 활성 bundle 포인터. Base+Runtime 이후, Admin 이전)
 #   9) [UI / admin-web 이미지 빌드·푸시]
 #  10) AgenticT2SqlUiStack      → ui-outputs.json     (ECS Fargate + ALB)
@@ -26,7 +26,7 @@
 #   scripts/deploy.sh runtime        # Runtime 스택만
 #   scripts/deploy.sh gateway        # Gateway 스택만 (Runtime 이후, Cedar phase 1)
 #   scripts/deploy.sh gateway-scoped # Gateway 재배포 (Cedar phase 2 — action 스코프 활성)
-#   scripts/deploy.sh evaluation     # Evaluation 스택만 (Runtime 이후, Admin 이전 — M5)
+#   scripts/deploy.sh evaluation     # Evaluation 스택만 (Runtime 이후, Admin 이전)
 #   scripts/deploy.sh ui             # UI 스택만
 #   scripts/deploy.sh admin          # Admin panel 스택만 (Gateway·Evaluation 이후)
 #
@@ -60,7 +60,7 @@ case "$TARGET" in
   gateway-scoped)
             deploy_stack AgenticT2SqlGatewayStack  gateway-outputs.json \
               -c cedarActionScoping=true ;;
-  # M5: 평가 파이프라인(EX evaluator Lambda + AgentCore Evaluator + online eval + SSM 포인터).
+  # 평가 파이프라인(EX evaluator Lambda + AgentCore Evaluator + online eval + SSM 포인터).
   evaluation)
             deploy_stack AgenticT2SqlEvaluationStack evaluation-outputs.json ;;
   ui)       deploy_stack AgenticT2SqlUiStack       ui-outputs.json ;;

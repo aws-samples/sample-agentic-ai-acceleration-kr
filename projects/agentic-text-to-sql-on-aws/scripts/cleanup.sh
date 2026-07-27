@@ -6,7 +6,7 @@
 # 이 스크립트는 `agentic-t2sql*` 접두어 리소스와 AgenticT2Sql* 스택만 대상으로 한다.
 #
 # 삭제 순서(생성의 역순 — 의존성):
-#   1) AgenticT2SqlAdminStack    (admin panel Fargate + ALB, M4)
+#   1) AgenticT2SqlAdminStack    (admin panel Fargate + ALB)
 #   2) AgenticT2SqlUiStack
 #   3) AgenticT2SqlGatewayStack  (Gateway/Cedar PolicyEngine)
 #   4) AgenticT2SqlRuntimeStack
@@ -63,7 +63,7 @@ if aws secretsmanager describe-secret --secret-id "$E2E_SECRET" --region "$REGIO
     --force-delete-without-recovery --region "$REGION" >/dev/null
 fi
 
-# M4: admin panel 이 register_datasource 로 만든 데이터소스 시크릿(스택 밖 생성) 정리.
+# admin panel 이 register_datasource 로 만든 데이터소스 시크릿(스택 밖 생성) 정리.
 for arn in $(aws secretsmanager list-secrets --region "$REGION" \
     --filters Key=name,Values="agentic-t2sql/datasource/" \
     --query 'SecretList[].ARN' --output text 2>/dev/null); do

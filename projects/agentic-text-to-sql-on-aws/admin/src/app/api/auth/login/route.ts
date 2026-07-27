@@ -1,11 +1,11 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 /**
- * POST /api/auth/login — Cognito USER_PASSWORD_AUTH 로그인 (§8.4).
+ * POST /api/auth/login — Cognito USER_PASSWORD_AUTH 로그인.
  *
  * 비밀번호는 서버(이 route)에서만 다루고 저장하지 않는다. 발급된 AccessToken 은 클라이언트가
  * sessionStorage 에 보관하고 이후 모든 API 호출의 `Authorization: Bearer` 로 전달한다
- * (그 토큰이 그대로 Gateway MCP OBO 에 재사용된다 — §8.0).
+ * (그 토큰이 그대로 Gateway MCP OBO 에 재사용된다.)
  *
  * NEW_PASSWORD_REQUIRED 등 challenge 응답은 그대로 전달해 클라이언트가 안내한다.
  */

@@ -1,6 +1,6 @@
 """AgentCore Memory (STM) 세션 매니저 생성.
 
-M1 은 short-term memory 만 사용한다: 세션별 대화 히스토리 영속화.
+현재는 short-term memory 만 사용한다: 세션별 대화 히스토리 영속화.
 `AgentCoreMemorySessionManager` 는 `bedrock_agentcore.memory.integrations.strands` 소속.
 SDK 의존성은 지연 임포트한다.
 """

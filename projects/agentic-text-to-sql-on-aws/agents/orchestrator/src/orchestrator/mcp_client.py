@@ -2,16 +2,16 @@
 
 두 가지 도구 평면(tool plane) 모드를 지원한다(config.Settings.tool_plane_mode):
 
-- **direct** (M1 기본): Gateway 없이 Runtime MCP 서버에 직접 연결(streamable-HTTP).
+- **direct** (기본): Gateway 없이 Runtime MCP 서버에 직접 연결(streamable-HTTP).
   엔드포인트: https://bedrock-agentcore.{region}.amazonaws.com/runtimes/{ARN}/invocations?qualifier=DEFAULT
   (ARN URL 인코딩). SigV4 서명은 공식 `mcp-proxy-for-aws` 의 `aws_iam_streamablehttp_client`
   로 처리한다(서명 서비스명: `bedrock-agentcore`). sql/semantic 각각 클라이언트 1개.
-- **gateway** (M3): 단일 Gateway MCP 엔드포인트가 모든 도구를 집약한다. Cognito M2M
+- **gateway**: 단일 Gateway MCP 엔드포인트가 모든 도구를 집약한다. Cognito M2M
   (USER_PASSWORD_AUTH)으로 AccessToken 을 받아 `Authorization: Bearer` 헤더로 전달한다.
   클라이언트 1개에서 도구를 받아 이름 suffix 로 sql/semantic 을 분류한다.
 
-  gateway 모드 인증은 기본적으로 orchestrator 의 **서비스 계정 위임**(M3 범위)이다.
-  M4 additive: 호출자가 사용자 AccessToken(`forwardedProps.userAccessToken`)을 넘기면
+  gateway 모드 인증은 기본적으로 orchestrator 의 **서비스 계정 위임**이다.
+  호출자가 사용자 AccessToken(`forwardedProps.userAccessToken`)을 넘기면
   그 토큰을 Bearer 로 사용해 **사용자 위임(On-Behalf-Of)** 으로 동작한다 — Cedar 가
   실제 사용자 그룹으로 인가를 평가한다. 토큰 값은 로깅하지 않는다.
 
@@ -221,7 +221,7 @@ def create_tool_clients(settings: Any, user_access_token: str | None = None) -> 
 
     require_mcp_arns() 로 필수 env 가 검증된 뒤 호출되는 것을 전제로 한다.
 
-    `user_access_token` (M4 additive): gateway 모드에서 값이 있으면 M2M 서비스 토큰 대신
+    `user_access_token`: gateway 모드에서 값이 있으면 M2M 서비스 토큰 대신
     이 사용자 토큰을 Bearer 로 사용한다(On-Behalf-Of). 없으면 기존 서비스 계정 위임 그대로.
     direct 모드에서는 무시된다(SigV4 경로).
     """

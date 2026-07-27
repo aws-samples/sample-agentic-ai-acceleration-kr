@@ -3,7 +3,7 @@
 goldset 은 패키지에 동봉된 JSONL(`goldset/goldset-v1.jsonl`) 이며 각 라인은
 ``{"id","question","sql","datasource"}`` 형태다. 파일명이 곧 버전(`goldset-v1`).
 
-매칭 전략 (§9.1 EX):
+매칭 전략 (EX — execution accuracy):
 1. 정규화(공백·대소문자·구두점 제거) 후 **완전일치**
 2. 실패 시 **부분 매칭** (정규화 문자열의 포함 관계, 가장 긴 후보 우선)
 

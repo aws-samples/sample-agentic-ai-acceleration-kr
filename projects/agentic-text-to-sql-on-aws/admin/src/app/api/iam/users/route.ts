@@ -4,8 +4,8 @@
  * GET  /api/iam/users — Cognito 사용자 목록 + 각 사용자의 그룹
  * POST /api/iam/users — 사용자 생성(AdminCreateUser) + 선택적 초기 그룹 지정
  *
- * **Admin 전용** (§8.4). 사용자·그룹 관리는 도구 평면이 아닌 관리 평면이므로 MCP 를 거치지 않고
- * admin web task role 의 cognito-idp 직접 호출로 처리한다 (§8.0).
+ * **Admin 전용**. 사용자·그룹 관리는 도구 평면이 아닌 관리 평면이므로 MCP 를 거치지 않고
+ * admin web task role 의 cognito-idp 직접 호출로 처리한다.
  */
 
 import {

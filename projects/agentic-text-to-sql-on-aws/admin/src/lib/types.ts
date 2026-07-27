@@ -2,7 +2,7 @@
 
 /** admin web 클라이언트·서버가 공유하는 도메인 타입. */
 
-/** semantic 엔티티 타입 (§8.3 — repository VALID_ENTITY_TYPES + M4 additive `datasource`). */
+/** semantic 엔티티 타입 (repository VALID_ENTITY_TYPES + `datasource`). */
 export const ENTITY_TYPES = ['term', 'fewshot', 'table', 'column', 'join', 'datasource'] as const;
 export type EntityType = (typeof ENTITY_TYPES)[number];
 
@@ -10,7 +10,7 @@ export type EntityType = (typeof ENTITY_TYPES)[number];
 export const CURATION_TYPES = ['term', 'fewshot', 'join', 'table', 'column'] as const;
 
 /**
- * 엔티티 상태 — candidate(후보) → published(발행) / rejected(반려, M5 §9.1 additive).
+ * 엔티티 상태 — candidate(후보) → published(발행) / rejected(반려).
  * rejected 는 파생 저장소(OpenSearch·Neptune)에 노출되지 않는다(`status != published` 경로).
  */
 export const STATUSES = ['candidate', 'published', 'rejected'] as const;
@@ -33,7 +33,7 @@ export const STATUS_LABEL: Record<string, string> = {
   rejected: '반려됨',
 };
 
-/** DynamoDB semantic 엔티티 (§8.3 list_entities 반환 항목). */
+/** DynamoDB semantic 엔티티 (list_entities 반환 항목). */
 export interface SemanticEntity {
   pk: string;
   sk: string;
@@ -47,7 +47,7 @@ export interface SemanticEntity {
   [key: string]: unknown;
 }
 
-/** 데이터 소스 엔진 (§8.3 register_datasource). */
+/** 데이터 소스 엔진 (register_datasource). */
 export const DATASOURCE_ENGINES = ['aurora-postgresql', 'redshift-serverless'] as const;
 export type DatasourceEngine = (typeof DATASOURCE_ENGINES)[number];
 
@@ -104,7 +104,7 @@ export interface ApiEnvelope {
 }
 
 // ----------------------------------------------------------------------------
-// M5 — 평가·개선 파이프라인 (§9.6)
+// 평가·개선 파이프라인
 // ----------------------------------------------------------------------------
 
 /** 평가자 요약 (GET /api/eval/evaluators — builtin + custom). */
@@ -147,7 +147,7 @@ export interface BatchEvaluationItem {
   error_details?: string[];
 }
 
-/** 개선 추천 종류 (§9.6 POST /api/recommendations). */
+/** 개선 추천 종류 (POST /api/recommendations). */
 export const RECOMMENDATION_TYPES = ['SYSTEM_PROMPT', 'TOOL_DESCRIPTION'] as const;
 export type RecommendationTypeKey = (typeof RECOMMENDATION_TYPES)[number];
 

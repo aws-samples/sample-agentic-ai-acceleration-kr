@@ -14,7 +14,11 @@ SELECT/WITH(CTE) 전용 SQLGlot AST allow-list를 통과한 read-only 쿼리만 
 - 거부: `{"status":"rejected","reason":"...","rule":"..."}`
 - 실행오류: `{"status":"error","message":"..."}` (오케스트레이터 self-correction 루프가 `message` 사용)
 
-#### datasource 라우팅 (M3)
+> **하위호환 규칙**: 위 응답 필드(`status`/`columns`/`rows`/`row_count`/`truncated`/`reason`/
+> `rule`/`message`)와 `status` 유효값은 **제거·개명하지 않는다**. 확장은 신규 필드 추가
+> (additive only)로만 한다 — 기존 소비자(오케스트레이터·평가 파이프라인)가 무시해도 안전해야 한다.
+
+#### datasource 라우팅
 
 `datasource`로 실행 대상을 선택한다. 기본값 `"aurora"`(기존 호출 하위호환).
 

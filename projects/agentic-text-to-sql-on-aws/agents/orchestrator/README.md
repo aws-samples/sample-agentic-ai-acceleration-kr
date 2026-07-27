@@ -12,7 +12,7 @@ intent ──▶ schema_linking ──▶ sql_generation ──▶ execution ─
                                      └──(rejected/error, 최대 N회)──┘
 ```
 
-- **intent**: 질의 의도 해석. 모호하면 `request_clarification` 도구로 사용자에게 되물음(M2 clarification), 명확하면 최선 해석으로 진행
+- **intent**: 질의 의도 해석. 모호하면 `request_clarification` 도구로 사용자에게 되물음(clarification), 명확하면 최선 해석으로 진행
 - **schema_linking**: `search_schema`(semantic-retrieval-mcp) 호출로 관련 테이블/컬럼 컨텍스트 수집
 - **sql_generation**: 스키마 컨텍스트 기반 PostgreSQL SELECT 생성
 - **execution**: `run_sql`(sql-execution-mcp) 호출. `rejected`/`error` 시 오류를 되먹여
@@ -54,8 +54,10 @@ uv run ruff check .
 | `TOOL_PLANE_MODE` | 도구 평면: `direct`(기본) \| `gateway` (아래 절 참고) |
 | `GATEWAY_URL` | (gateway 모드) Gateway MCP 엔드포인트 URL |
 | `COGNITO_CLIENT_ID` / `COGNITO_USER` / `COGNITO_PASSWORD_SECRET_ARN` / `COGNITO_USER_POOL_ID` | (gateway 모드) Cognito M2M 인증. 비밀번호는 Secrets Manager ARN 으로 전달 |
+| `CONFIG_BUNDLE_PARAM` | 활성 Configuration Bundle 포인터를 담은 SSM 파라미터 이름. 비우면 기능 비활성(코드 기본값) |
+| `APP_VERSION` | 구조화 로그의 `version.agent` 라벨 (기본 `dev`) |
 
-## 도구 평면(tool plane) 모드 — direct ↔ gateway (M3)
+## 도구 평면(tool plane) 모드 — direct ↔ gateway
 
 오케스트레이터는 MCP 도구를 두 경로로 접근할 수 있으며 `TOOL_PLANE_MODE` 로 전환한다.
 설정만 바꾸면 파이프라인(Graph/Agent) 코드는 그대로 동작한다.
@@ -72,10 +74,12 @@ uv run ruff check .
   `Authorization: Bearer <token>` 헤더로 전달한다. 토큰은 만료 5분 전까지 microVM 내 캐시에서
   재사용한다. 비밀번호는 `COGNITO_PASSWORD_SECRET_ARN`(Secrets Manager)에서 읽어 LLM/로그에
   노출하지 않는다.
-- **⚠️ 한계 — 서비스 계정 위임**: gateway 모드 인증은 오케스트레이터의 **서비스 계정** 자격으로
-  Gateway 에 접근한다(M3 범위). **사용자별 JWT 전파(On-Behalf-Of)** — 최종 사용자 신원을
-  도구 계층까지 흘려 per-user 인가/감사에 쓰는 것 — 는 **M4+ 로 미룬다**. 따라서 현재 gateway
-  모드에서 Cedar 정책은 오케스트레이터 서비스 계정 principal 기준으로 평가된다.
+- **사용자 위임(On-Behalf-Of)**: 호출자가 `forwardedProps.userAccessToken`(Cognito
+  AccessToken)을 넘기면 M2M 서비스 토큰 대신 그 토큰을 Bearer 로 사용해, 최종 사용자 신원이
+  도구 계층까지 전파된다(Cedar 인가·감사가 사용자 principal 기준으로 평가됨).
+- **⚠️ 한계 — 기본은 서비스 계정 위임**: 토큰이 없으면 오케스트레이터의 **서비스 계정** 자격으로
+  Gateway 에 접근하고, Cedar 정책은 그 서비스 계정 principal 기준으로 평가된다. 채팅 UI 에는
+  로그인이 없으므로 기본 경로가 여기에 해당한다.
 
 ## 컨테이너 빌드 (ARM64)
 
@@ -110,7 +114,7 @@ AgentCore Runtime 규격: `0.0.0.0:8080`, `POST /invocations`(SSE), `GET /ping`,
 요청 페이로드(RunAgentInput)에서 `threadId`→sessionId, `forwardedProps.actorId`(또는 `state.actorId`)
 →actorId 를 추출해 AgentCore Memory 세션을 격리한다.
 
-## clarification (재요청) 흐름 (M2)
+## clarification (재요청) 흐름
 
 질의가 모호하면(기간·지표 정의·대상 미지정 등) intent 단계가 `request_clarification` 도구를
 호출해 Strands **interrupt** 를 발생시킨다. 실행이 그 지점에서 정지하고, 오케스트레이터는
@@ -148,6 +152,41 @@ AgentCore Runtime 규격: `0.0.0.0:8080`, `POST /invocations`(SSE), `GET /ping`,
   (microVM 교체 등)로 재개할 수 없으면 `RUN_ERROR` 대신 질문을 다시 하도록 안내하는 안내 메시지 +
   `RUN_FINISHED` 로 마무리한다(로그 코드 `CLARIFICATION_EXPIRED`). 단일 Agent 모드도 동일 CUSTOM 계약을 따른다.
 
+## 구조화 로그 `t2sql_query_record` (관측·평가·후보 채굴의 단일 원천)
+
+실행이 끝날 때(성공/실패/clarification 모두) stdout 에 아래 1줄을 남긴다. AgentCore Runtime
+은 stdout 만 CloudWatch 로 보내므로 앱 모듈에서 stdout 핸들러를 명시한다.
+
+```
+t2sql_query_record {"question": "...", "sql": "SELECT ...", "status": "ok",
+                    "session_id": "...", "version": {"bundle": "default", "agent": "dev"}}
+```
+
+| 필드 | 의미 |
+|---|---|
+| `question` | 사용자 질의 원문 (없으면 `null`) |
+| `sql` | 마지막으로 실행 시도한 SQL (없으면 `null`) |
+| `status` | `ok` \| `error` \| `clarification` |
+| `session_id` | 실행 세션 ID (AgentCore runtimeSessionId) |
+| `version.bundle` | 적용된 Configuration Bundle 라벨 `"<bundleId>@<versionId>"`, 미적용 시 `"default"` |
+| `version.agent` | `APP_VERSION` 값 (기본 `dev`) |
+
+- **소비자**: 평가(EX evaluator)의 스팬 파싱과 후보 채굴(`mine_candidates`)이 이 마커를
+  `FilterLogEvents` 로 찾는다. 따라서 **마커 문자열과 위 필드는 제거·개명하지 않는다** —
+  확장은 신규 필드 추가(additive only)로만 한다.
+- 로깅 실패는 요청 흐름을 막지 않는다(예외 흡수).
+
+## 활성 Configuration Bundle 오버라이드
+
+`CONFIG_BUNDLE_PARAM` 이 설정돼 있으면 SSM 파라미터
+(`{"bundleId": "...", "versionId": "..."}`)를 읽고 해당 bundle 버전의
+`components["orchestrator"]["configuration"]` 에서 `system_prompt` / `model_id` 를 가져와
+코드 기본값을 오버라이드한다. bundle 승격은 곧 **이 SSM 포인터 전환**이다.
+
+- warm microVM 이 매 요청마다 control-plane 을 호출하지 않도록 모듈 레벨 TTL 캐시(60초)를 둔다.
+- **어떤 실패도 경고 로그 + 코드 기본값 폴백**이다 — bundle 조회가 에이전트 가용성을 떨어뜨리지
+  않는다.
+
 ## 보안 참고
 
 - SQL 안전은 **sql-execution-mcp 도구 핸들러**(SQLGlot AST allow-list + read-only DB 사용자)가
@@ -156,6 +195,5 @@ AgentCore Runtime 규격: `0.0.0.0:8080`, `POST /invocations`(SSE), `GET /ping`,
 
 ## 범위 밖 (후속)
 
-- 사용자별 JWT 전파(On-Behalf-Of) — gateway 모드는 현재 서비스 계정 위임만 지원 (M4+)
-- Long-term memory / 개인화 (M2+)
+- Long-term memory / 개인화 — 현재는 short-term memory(세션 히스토리)만 사용
 - clarification 재개의 microVM 간 영속화 — 현재는 microVM 로컬 캐시(같은 VM 내)만 지원

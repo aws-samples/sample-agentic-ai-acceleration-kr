@@ -149,7 +149,7 @@ def _redshift_connector(status: str = "FINISHED"):
 
 
 def test_redshift_always_passes_secret_arn() -> None:
-    # M3 학습: SecretArn 없으면 IAM 매핑 사용자로 실행돼 권한 부족.
+    # SecretArn 없으면 IAM 매핑 사용자로 실행돼 권한 부족.
     connector, client = _redshift_connector()
     connector.test_connection()
     assert client.kwargs[0]["SecretArn"] == "arn:rs-secret"

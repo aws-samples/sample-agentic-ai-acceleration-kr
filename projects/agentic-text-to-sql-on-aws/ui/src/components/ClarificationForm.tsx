@@ -6,7 +6,7 @@ import { useMemo, useState } from 'react';
 
 /**
  * ============================================================================
- * ClarificationForm — clarification(재요청) 인터랙티브 폼 (M2)
+ * ClarificationForm — clarification(재요청) 인터랙티브 폼
  * ============================================================================
  * orchestrator 가 정보 부족 시 방출하는 AG-UI CUSTOM 이벤트(name="clarification_request")의
  * value 스키마를 렌더한다. 사용자가 폼을 제출하면 동일 threadId 로 재실행되며

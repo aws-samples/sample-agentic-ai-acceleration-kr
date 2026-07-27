@@ -13,7 +13,7 @@ import {
 
 /**
  * ============================================================================
- * ClarificationHost — clarification 이벤트 수신 + 재실행 트리거 (M2)
+ * ClarificationHost — clarification 이벤트 수신 + 재실행 트리거
  * ============================================================================
  * 흐름(확정 계약):
  *  1. orchestrator 가 정보 부족 시 CUSTOM 이벤트(name="clarification_request")를 방출하고

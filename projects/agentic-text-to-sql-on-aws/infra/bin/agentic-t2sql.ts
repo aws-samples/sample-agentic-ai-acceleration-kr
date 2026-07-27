@@ -61,7 +61,7 @@ const runtime = new AgenticT2SqlRuntimeStack(app, 'AgenticT2SqlRuntimeStack', {
 });
 runtime.addStackDependency(semantic);
 
-// 3.5) Gateway 스택: Gateway·Cedar·Identity (M3). base(Cognito)·runtime(MCP ARN) 참조.
+// 3.5) Gateway 스택: Gateway·Cedar·Identity. base(Cognito)·runtime(MCP ARN) 참조.
 //      runtime 이후 배포(runtime→gateway 역참조 없음 → 사이클 없음). UI 와 무관.
 const gateway = new AgenticT2SqlGatewayStack(app, 'AgenticT2SqlGatewayStack', {
   env,
@@ -73,7 +73,7 @@ const gateway = new AgenticT2SqlGatewayStack(app, 'AgenticT2SqlGatewayStack', {
   sqlMcpRuntime: runtime.sqlMcpRuntime,
   semanticMcpRuntime: runtime.semanticMcpRuntime,
   adminMcpRuntime: runtime.adminMcpRuntime,
-  description: 'Agentic Text-to-SQL — Gateway·Cedar·Identity (M3 tool plane + M4 admin target)',
+  description: 'Agentic Text-to-SQL — Gateway·Cedar·Identity (tool plane + admin target)',
 });
 gateway.addStackDependency(runtime);
 
@@ -89,7 +89,7 @@ const ui = new AgenticT2SqlUiStack(app, 'AgenticT2SqlUiStack', {
 });
 ui.addStackDependency(runtime);
 
-// 4.5) Evaluation 스택: M5 Track A(평가 파이프라인). base(Aurora·agent_ro) + runtime
+// 4.5) Evaluation 스택: Track A(평가 파이프라인). base(Aurora·agent_ro) + runtime
 //      (orchestrator 트레이스 소스) 참조. admin 이 이 스택의 출력을 env 로 소비하므로
 //      admin 보다 먼저 배포된다(evaluation→{base,runtime}, admin→evaluation 단방향).
 const evaluation = new AgenticT2SqlEvaluationStack(app, 'AgenticT2SqlEvaluationStack', {
@@ -99,11 +99,11 @@ const evaluation = new AgenticT2SqlEvaluationStack(app, 'AgenticT2SqlEvaluationS
   agentRoSecret: base.agentRoSecret,
   orchestratorRuntime: runtime.orchestratorRuntime,
   description:
-    'Agentic Text-to-SQL — Evaluations (EX evaluator Lambda, online eval, active-bundle pointer, M5)',
+    'Agentic Text-to-SQL — Evaluations (EX evaluator Lambda, online eval, active-bundle pointer)',
 });
 evaluation.addStackDependency(runtime);
 
-// 5) Admin 스택: admin panel(Next.js) ECS Fargate + 전용 ALB (M4).
+// 5) Admin 스택: admin panel(Next.js) ECS Fargate + 전용 ALB.
 //    base(VPC·ECR·Cognito·task role) + gateway(gatewayUrl·policyEngineId) 참조 →
 //    gateway 이후 배포(admin→gateway 단방향, 역참조 없음 → 사이클 없음).
 const admin = new AgenticT2SqlAdminStack(app, 'AgenticT2SqlAdminStack', {
@@ -116,14 +116,14 @@ const admin = new AgenticT2SqlAdminStack(app, 'AgenticT2SqlAdminStack', {
   m2mClient: base.m2mClient,
   gateway: gateway.gateway,
   policyEngine: gateway.policyEngine,
-  // M5: 평가·bundle 관리 화면용 참조(evaluation 이후 배포).
+  // 평가·bundle 관리 화면용 참조(evaluation 이후 배포).
   executionEvaluator: evaluation.executionEvaluator,
   onlineEvalConfig: evaluation.onlineEvalConfig,
   activeBundleParamName: evaluation.activeBundleParam.parameterName,
   orchestratorLogGroupName: evaluation.orchestratorLogGroupName,
   orchestratorServiceName: evaluation.orchestratorServiceName,
   evalExecutionRoleArn: evaluation.evalExecutionRole.roleArn,
-  description: 'Agentic Text-to-SQL — Admin panel (ECS Fargate + public ALB, M4 + M5 평가 화면)',
+  description: 'Agentic Text-to-SQL — Admin panel (ECS Fargate + public ALB, 평가 화면 포함)',
 });
 admin.addStackDependency(gateway);
 admin.addStackDependency(evaluation);

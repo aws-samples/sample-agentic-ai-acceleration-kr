@@ -38,7 +38,7 @@ SYSTEM_PROMPT = """\
 - `run_sql` 이 `rejected`/`error` 를 반환하면, 오류 메시지를 근거로 쿼리를 수정해 재실행합니다.
 - 스키마가 불확실하면 `search_schema` 를 재호출해 컨텍스트를 보강한 뒤 재작성합니다.
 
-## 모호한 질의 (M2 정책 — clarification)
+## 모호한 질의 (clarification 정책)
 - 질의가 모호하면(기간·지표 정의·대상 미지정 등) 곧바로 가정하지 말고,
   `request_clarification` 도구가 있을 때 **한 번** 호출해 사용자에게 되물으세요.
   응답을 받으면 그 해석으로 진행합니다.

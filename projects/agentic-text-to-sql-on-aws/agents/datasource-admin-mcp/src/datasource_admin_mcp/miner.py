@@ -1,4 +1,4 @@
-"""semantic 후보 채굴기 (개선 파이프라인 Track B — docs/m2-m3-interface-contract.md §9.1).
+"""semantic 후보 채굴기 (개선 파이프라인 Track B).
 
 orchestrator 가 실행 종료 시 남기는 구조화 로그(``t2sql_query_record {JSON}``)를 CloudWatch
 Logs 에서 읽어 semantic 후보를 만든다.
@@ -14,7 +14,7 @@ Logs 에서 읽어 semantic 후보를 만든다.
 -------------
 entity_id 는 질문(또는 토큰) 해시라서 재실행 시 같은 값이 나온다. put 전에 ``get_entity`` 로
 존재를 확인해 **status 무관(rejected 포함)** 이면 skip 한다 — 반려한 후보가 배치 재실행으로
-되살아나지 않게 하는 장치(§9.1).
+되살아나지 않게 하는 장치다.
 
 boto3 logs 클라이언트와 repository 는 생성자로 주입 가능하다(단위 테스트용 fake).
 """

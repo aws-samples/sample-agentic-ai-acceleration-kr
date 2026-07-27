@@ -2,12 +2,12 @@
 
 /**
  * GET  /api/eval/runs  — ListBatchEvaluations
- * POST /api/eval/runs  — StartBatchEvaluation (§9.6)
+ * POST /api/eval/runs  — StartBatchEvaluation
  *
  * 데이터 소스는 orchestrator Runtime 로그 그룹(CloudWatch Logs)이다 — 별도 데이터셋 업로드 없이
- * 실제 트래픽 트레이스를 평가한다(§9.1). 기본 평가자는 EX(custom) + Builtin.Correctness.
+ * 실제 트래픽 트레이스를 평가한다. 기본 평가자는 EX(custom) + Builtin.Correctness.
  *
- * 이름 규칙: `admin_eval_<epoch>` — 서비스가 **언더스코어만** 허용하므로 하이픈을 쓰지 않는다(§9.3).
+ * 이름 규칙: `admin_eval_<epoch>` — 서비스가 **언더스코어만** 허용하므로 하이픈을 쓰지 않는다.
  * 비동기 작업이라 응답은 batchEvaluationId·status(PENDING) 까지이고, 진행 상황은 목록·상세로 본다.
  */
 
@@ -39,7 +39,7 @@ export const dynamic = 'force-dynamic';
 /** 목록 상한 — 관리 화면 규모상 최근 50건이면 충분하다(페이지네이션 UI 미도입). */
 const MAX_RUNS = 50;
 
-/** 기본 builtin 평가자 (§9.6 — EX + Correctness). */
+/** 기본 builtin 평가자 (EX + Correctness). */
 const DEFAULT_BUILTIN_EVALUATOR = 'Builtin.Correctness';
 
 export async function GET(request: Request) {
@@ -107,9 +107,9 @@ export async function POST(request: Request) {
       },
     };
 
-    // 실행 role 은 온라인 평가와 동일한 role 을 재사용한다(§9.3). 설치된 SDK 의 데이터플레인
+    // 실행 role 은 온라인 평가와 동일한 role 을 재사용한다. 설치된 SDK 의 데이터플레인
     // 요청 스키마에는 이 멤버가 없어 직렬화 시 무시되지만, 서비스가 추가하면 그대로 전달되도록
-    // additive 로 붙여 둔다(계약 §9.6 유지 — 미설정이어도 호출은 성공해야 한다).
+    // additive 로 붙여 둔다(미설정이어도 호출은 성공해야 한다).
     const payload: StartBatchEvaluationCommandInput = EVAL_EXECUTION_ROLE_ARN
       ? ({
           ...input,

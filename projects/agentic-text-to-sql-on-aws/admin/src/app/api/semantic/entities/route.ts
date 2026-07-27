@@ -1,7 +1,7 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 /**
- * GET /api/semantic/entities?type=&status= — MCP `list_entities` (사용자 토큰 OBO, §8.4).
+ * GET /api/semantic/entities?type=&status= — MCP `list_entities` (사용자 토큰 OBO).
  */
 
 import { handle } from '@/lib/api';

@@ -13,7 +13,7 @@ hybrid(vector+BM25) 검색과 Neptune 그래프 순회로 반환한다.
   "doc_type": "table"|"column"|"term"|"fewshot",
   "table": str|null, "column": str|null,
   "description": str|null, "ddl_snippet": str|null, "score": float,
-  # M2 additive 필드 (용어/few-shot·join path 시에만 채워짐, 그 외 null):
+  # 용어/few-shot·join path 히트에서만 채워짐, 그 외 null:
   "term": str|null, "synonyms": [str]|null, "sql_fragment": str|null,
   "join_paths": [str]|null
 }]}
@@ -44,14 +44,14 @@ hybrid(vector+BM25) 검색과 Neptune 그래프 순회로 반환한다.
 
 | 클래스 | 역할 |
 |---|---|
-| `OpenSearchHybridRetriever` | 스키마 메타데이터(`t2sql-schema-docs`) hybrid 검색 (M1) |
-| `SemanticTermRetriever` | 비즈니스 용어/few-shot(`t2sql-semantic`) hybrid 검색 (M2) |
-| `GraphTraverser` | Neptune(neptunedata openCypher) join-path 순회 (M2) |
-| `CompositeRetriever` | 위 셋을 결합 — 스키마+용어+join path를 한 번에 (M2) |
+| `OpenSearchHybridRetriever` | 스키마 메타데이터(`t2sql-schema-docs`) hybrid 검색 |
+| `SemanticTermRetriever` | 비즈니스 용어/few-shot(`t2sql-semantic`) hybrid 검색 |
+| `GraphTraverser` | Neptune(neptunedata openCypher) join-path 순회 |
+| `CompositeRetriever` | 위 셋을 결합 — 스키마+용어+join path를 한 번에 |
 
 - **graceful degrade**: Neptune 미배포/오류 시 `GraphTraverser`는 빈 리스트+warning 로그만
-  남기고 검색 전체는 정상 동작. `SEMANTIC_INDEX`·graph env가 모두 없으면 M1과 동일하게
-  `OpenSearchHybridRetriever` 단독으로 동작.
+  남기고 검색 전체는 정상 동작. `SEMANTIC_INDEX`·graph env가 모두 없으면
+  `OpenSearchHybridRetriever` 단독(스키마 검색만)으로 동작.
 
 ## AgentCore Runtime MCP 호스팅 규격 (2026-07 검증)
 
@@ -87,5 +87,5 @@ uv run python -m semantic_retrieval_mcp.server
 | `AWS_REGION` | 리전 (기본 `us-west-2`) |
 
 > `SEMANTIC_INDEX`·`SEMANTIC_GRAPH_ENABLED`/`GRAPH_ENDPOINT`가 모두 없으면 스키마 검색
-> 단독(M1 호환)으로 동작한다. `SEMANTIC_INDEX`가 있으면 용어/few-shot을 결합하고,
+> 단독으로 동작한다. `SEMANTIC_INDEX`가 있으면 용어/few-shot을 결합하고,
 > 추가로 graph가 켜지면 join path까지 채운다.
