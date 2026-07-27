@@ -81,6 +81,7 @@ flowchart TB
     l2 -- "MCP (Gateway 경유, SigV4 streamable-http)" --> l3
     l3 --> l4
     l3 -- "Data API (read-only 자격증명)" --> l5
+    l4 ~~~ l5
 ```
 
 - **UI**는 AgentCore를 직접 호출하지 않습니다. Fargate의 서버사이드 프록시(`/api/copilotkit`)가 SigV4 서명을 붙여 Runtime의 `/invocations`(SSE)로 전달합니다.
