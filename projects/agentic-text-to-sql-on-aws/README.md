@@ -44,31 +44,18 @@ Amazon Bedrock AgentCore 기반의 agentic Text-to-SQL 솔루션입니다. 사�
 
 ## 아키텍처 (5계층)
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│ [1] UI Layer — Next.js + CopilotKit (ECS Fargate + ALB)      │
-│     브라우저 ↔ 서버사이드 프록시(SigV4) ↔ AgentCore Runtime   │
-│     AG-UI SSE 이벤트(TEXT_MESSAGE_*/TOOL_CALL_*/STEP_*)        │
-└───────────────┬──────────────────────────────────────────────┘
-                │ POST /invocations (AG-UI, SigV4)
-┌───────────────▼──────────────────────────────────────────────┐
-│ [2] Orchestration — Strands Graph (AgentCore Runtime + Memory)│
-│     intent → schema_linking → sql_generation → execution      │
-│              → synthesis   (execution 실패 시 self-correction) │
-└───────────────┬───────────────────────────┬──────────────────┘
-                │ MCP (SigV4 streamable-http)│
-┌───────────────▼───────────┐   ┌───────────▼──────────────────┐
-│ [3] Tool — MCP servers     │   │ [4] Semantic layer            │
-│  (AgentCore Runtime 호스팅)│   │  DynamoDB(원본, 버전·상태)     │
-│  · sql-execution-mcp       │   │   └Streams→ OpenSearch(hybrid)│
-│  · semantic-retrieval-mcp  │   │   └Streams→ Neptune(join path)│
-│    (VPC 모드 — Neptune 접근)│   │  candidate/published 분리     │
-└───────────────┬───────────┘   └───────────────────────────────┘
-                │ RDS Data API (read-only 자격증명)
-┌───────────────▼──────────────────────────────────────────────┐
-│ [5] Data — Aurora PostgreSQL Serverless v2 (Data API)         │
-│     + Redshift Serverless (datasource="redshift")             │
-└──────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    l1["[1] UI Layer — Next.js + CopilotKit (ECS Fargate + ALB)<br/>브라우저 ↔ 서버사이드 프록시(SigV4) ↔ AgentCore Runtime<br/>AG-UI SSE 이벤트 (TEXT_MESSAGE_* / TOOL_CALL_* / STEP_*)"]
+    l2["[2] Orchestration — Strands Graph (AgentCore Runtime + Memory)<br/>intent → schema_linking → sql_generation → execution → synthesis<br/>(execution 실패 시 self-correction 루프)"]
+    l3["[3] Tool — MCP servers (AgentCore Runtime 호스팅)<br/>· sql-execution-mcp<br/>· semantic-retrieval-mcp (VPC 모드 — Neptune 접근)<br/>· datasource-admin-mcp"]
+    l4["[4] Semantic layer<br/>DynamoDB(원본, 버전·상태)<br/>└ Streams → OpenSearch(hybrid) / Neptune(join path)<br/>candidate/published/rejected 분리"]
+    l5["[5] Data — Aurora PostgreSQL Serverless v2<br/>+ Redshift Serverless (datasource=&quot;redshift&quot;)<br/>(Data API, read-only)"]
+
+    l1 -- "POST /invocations (AG-UI, SigV4)" --> l2
+    l2 -- "MCP (Gateway 경유, SigV4 streamable-http)" --> l3
+    l3 --> l4
+    l3 -- "Data API (read-only 자격증명)" --> l5
 ```
 
 - **UI**는 AgentCore를 직접 호출하지 않습니다. Fargate의 서버사이드 프록시(`/api/copilotkit`)가 SigV4 서명을 붙여 Runtime의 `/invocations`(SSE)로 전달합니다.

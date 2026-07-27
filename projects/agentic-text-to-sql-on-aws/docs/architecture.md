@@ -38,26 +38,29 @@ Admin과 Manager는 admin panel을 공유하되 Cognito group + 화면 권한으
 
 ## 3. 전체 아키텍처
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│ Part 3. Admin Panel (ECS Fargate: Web + API)                        │
-│  데이터소스 등록 │ semantic 큐레이션 │ 권한 관리 │ 대시보드 │ 디버깅   │
-└──────────┬──────────────────────────────────────────────────────────┘
-           │ 관리                                    Part 2. 개선 파이프라인
-┌──────────▼──────────────────────────────┐   ┌──────────────────────────┐
-│ Part 1. Core (5 Layers)                 │   │ OTEL → CloudWatch GenAI  │
-│                                         │   │ Evaluations (custom EX·  │
-│ [1] UI: ECS Fargate + CopilotKit        │──▶│  trajectory·LLM-judge)   │
-│     AG-UI(SSE) ↔ AgentCore Runtime      │   │ Online eval → Insights   │
-│ [2] Orchestration: Strands Graph        │   │ → Recommendations        │
-│     on AgentCore Runtime + Memory       │◀──│ → Configuration Bundle   │
-│ [3] Tool: AgentCore Gateway(MCP)        │   │ → A/B (Gateway 분할)     │
-│     + Identity + Policy(Cedar)          │   └──────────────────────────┘
-│ [4] Semantic: OpenSearch + Neptune      │
-│     + DynamoDB                          │
-│ [5] Data: Aurora PG + Redshift          │
-│     (Data API, read-only)               │
-└─────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph part3["Part 3. Admin Panel (ECS Fargate: Web + API)"]
+        admin["데이터소스 등록 · semantic 큐레이션 · 권한 관리 · 대시보드 · 디버깅"]
+    end
+
+    subgraph part1["Part 1. Core (5 Layers)"]
+        ui["[1] UI — ECS Fargate + CopilotKit<br/>AG-UI(SSE) ↔ AgentCore Runtime"]
+        orch["[2] Orchestration — Strands Graph<br/>on AgentCore Runtime + Memory"]
+        tool["[3] Tool — AgentCore Gateway(MCP)<br/>+ Identity + Policy(Cedar)"]
+        semantic["[4] Semantic — OpenSearch + Neptune + DynamoDB"]
+        data["[5] Data — Aurora PG + Redshift<br/>(Data API, read-only)"]
+        ui --> orch --> tool --> semantic
+        tool --> data
+    end
+
+    subgraph part2["Part 2. 개선 파이프라인"]
+        eval["OTEL → CloudWatch GenAI Observability<br/>Evaluations (custom EX · LLM-judge · online eval)<br/>→ Recommendations → Configuration Bundle 승격"]
+    end
+
+    admin -- 관리 --> part1
+    orch -- 트레이스 --> eval
+    eval -- 승인된 설정 반영 --> orch
 ```
 
 ## 4. 레이어별 설계
@@ -90,21 +93,21 @@ Admin과 Manager는 admin panel을 공유하되 Cognito group + 화면 권한으
   MCP 서버들(§4.3)도 동일한 컨테이너 파이프라인 공유.
 - **패턴**: Strands **Graph** — 결정적·감사 가능한 골격. 노드 전이가 코드로 인코딩되어 테스트·버전 관리 가능.
 
-```
-intent 분석/명확화 ──(모호)──▶ interrupt(사용자 재요청)
-        │
-        ▼
-schema linking (semantic layer 검색: OpenSearch hybrid + Neptune 순회)
-        ▼
-SQL 생성 (few-shot 예시 + 비즈니스 용어 컨텍스트 주입)
-        ▼
-AST 검증 (SQLGlot allow-list) ──(실패)──▶ self-correction 루프 (최대 N회)
-        ▼
-실행 (Gateway 경유 SQL 실행 도구)  ──(오류)──▶ self-correction 루프
-        ▼
-결과 분석/시각화 (AgentCore Code Interpreter: pandas 집계·차트)
-        ▼
-자연어 내러티브 합성
+```mermaid
+flowchart TB
+    intent["intent 분석/명확화"]
+    interrupt["interrupt (사용자 재요청)"]
+    linking["schema linking<br/>(semantic layer 검색: OpenSearch hybrid + Neptune 순회)"]
+    gen["SQL 생성<br/>(few-shot 예시 + 비즈니스 용어 컨텍스트 주입)"]
+    ast["AST 검증 (SQLGlot allow-list)"]
+    exec["실행 (Gateway 경유 SQL 실행 도구)"]
+    viz["결과 분석/시각화<br/>(AgentCore Code Interpreter: pandas 집계·차트)"]
+    synth["자연어 내러티브 합성"]
+
+    intent -- 모호 --> interrupt
+    intent --> linking --> gen --> ast --> exec --> viz --> synth
+    ast -- "실패 (self-correction, 최대 N회)" --> gen
+    exec -- "오류 (self-correction)" --> gen
 ```
 
 - **Memory**:
@@ -174,29 +177,21 @@ AWS 공식 GraphRAG 레퍼런스 패턴 + WrenAI MDL의 "코드로 버전 관리
 
 ### 5.1 Track A — 에이전트 개선 (AgentCore Optimization 네이티브)
 
-```
-OTEL 트레이스 → CloudWatch GenAI Observability 대시보드
-     │
-     ▼
-AgentCore Evaluations
-  ├─ custom code-based evaluator: Execution Accuracy — 생성 SQL을 read-only 실행,
-  │    gold SQL 결과셋과 정규화 비교 (judge 비용 없음)
-  │    ※ AgentCore Evaluations의 code-based evaluator는 서비스 규격상 Lambda로 구현됨
-  │      (tool layer의 "Lambda 미사용" 결정과 무관한 Evaluations 서비스 요구사항)
-  ├─ trajectory evaluator: 도구 시퀀스 준수(schema-link→generate→validate→execute)
-  ├─ LLM-as-judge: 내러티브 품질·안전성
-  └─ Online evaluation: 라이브 트레이스 샘플링 상시 채점
-     │
-     ▼
-Insights: failure/intent/trajectory 패턴 분석 (silent failure 탐지)
-     ▼
-Recommendations: system prompt·tool description 개선안 자동 생성
-     ▼
-Configuration Bundle: 개선안을 불변 버전 스냅샷으로 반영 (재배포 없이 적용, branch/diff)
-     ▼
-A/B Testing: Gateway 트래픽 분할, 통계적 유의성 확인 → Manager가 admin panel에서 승격 승인
-     ▼
-적용 대상: AgentCore Runtime(프롬프트·모델), Gateway(tool description)
+```mermaid
+flowchart TB
+    otel["OTEL 트레이스 → CloudWatch GenAI Observability 대시보드"]
+    subgraph evals["AgentCore Evaluations"]
+        ex["custom code-based evaluator: Execution Accuracy<br/>생성 SQL을 read-only 실행, gold SQL 결과셋과 정규화 비교 (judge 비용 없음)<br/>※ 서비스 규격상 Lambda로 구현 — tool layer 'Lambda 미사용' 결정과 무관"]
+        judge["LLM-as-judge: 내러티브 품질·안전성 (builtin Correctness · ToolSelectionAccuracy)"]
+        online["Online evaluation: 라이브 트레이스 샘플링 상시 채점"]
+    end
+    insights["Insights: failure/intent/trajectory 패턴 분석 (silent failure 탐지)"]
+    reco["Recommendations: system prompt·tool description 개선안 자동 생성"]
+    bundle["Configuration Bundle: 개선안을 불변 버전 스냅샷으로 반영<br/>(재배포 없이 적용, branch/diff)"]
+    ab["A/B Testing: Gateway 트래픽 분할 → Manager가 admin panel에서 승격 승인<br/>(분할 API 미제공 시 수동 전량 전환 폴백)"]
+    apply["적용 대상: AgentCore Runtime(프롬프트·모델), Gateway(tool description)"]
+
+    otel --> evals --> insights --> reco --> bundle --> ab --> apply
 ```
 
 ### 5.2 Track B — Semantic layer 보강 (지식 채굴 루프)
@@ -204,29 +199,19 @@ A/B Testing: Gateway 트래픽 분할, 통계적 유의성 확인 → Manager가
 semantic layer는 Manager 수동 입력만으로 성장하지 않는다. 운영 데이터에서
 semantic 지식 후보를 채굴해 Manager 승인 큐로 보내는 자동 루프를 둔다.
 
-```
-소스 1. 실패 클러스터 (Insights/트레이스 분석)
-  · schema linking이 매칭 실패한 사용자 표현 반복 등장
-    → 동의어 후보 (예: "VIP 고객"이 어떤 용어와도 안 붙음 → 신규 용어/동의어 제안)
-  · 특정 테이블 조합에서 join 오류 반복
-    → Neptune join-path 엣지 보강 후보
-     │
-소스 2. 성공 사례 (online eval 고득점 트레이스)
-  · EX 통과 + 사용자 긍정 피드백을 받은 (NLQ, SQL) 쌍
-    → few-shot example 후보로 자동 수확
-     │
-소스 3. 사용자 상호작용
-  · clarification 폼에서 사용자가 고른 해석 (예: "최근" → 3개월 선택이 우세)
-    → 용어 기본값 조정 후보
-  · 결과 화면 thumbs-up/down 피드백
-     │
-     ▼
-후보 생성기 (트레이스 분석 배치): DynamoDB에 status: candidate 로 기록
-  (candidate는 OpenSearch/Neptune에 동기화되지 않음 — 에이전트에 미노출)
-     ▼
-Manager 승인 큐 (admin panel): 후보 검토 → 승인 시 status: published
-     ▼
-§4.4 동기화 파이프라인 경유 OpenSearch·Neptune 반영 → 이후 질의부터 에이전트가 사용
+```mermaid
+flowchart TB
+    s1["소스 1. 실패 클러스터 (트레이스 분석)<br/>· schema linking 매칭 실패 표현 반복 → 동의어 후보<br/>· 특정 테이블 조합 join 오류 반복 → Neptune join-path 보강 후보"]
+    s2["소스 2. 성공 사례 (online eval 고득점 트레이스)<br/>· EX 통과 + 긍정 피드백 (NLQ, SQL) 쌍 → few-shot 후보 수확"]
+    s3["소스 3. 사용자 상호작용<br/>· clarification 폼 선택 우세 → 용어 기본값 조정 후보<br/>· 결과 화면 thumbs-up/down 피드백"]
+    miner["후보 생성기 (트레이스 분석 배치)<br/>DynamoDB에 status: candidate 로 기록<br/>(candidate는 OpenSearch/Neptune에 미동기화 — 에이전트에 미노출)"]
+    queue["Manager 승인 큐 (admin panel)<br/>후보 검토 → 승인 시 status: published / 반려 시 rejected + 사유"]
+    sync["§4.4 동기화 파이프라인 경유 OpenSearch·Neptune 반영<br/>→ 이후 질의부터 에이전트가 사용"]
+
+    s1 --> miner
+    s2 --> miner
+    s3 --> miner
+    miner --> queue --> sync
 ```
 
 - **자동 반영은 하지 않는다**: LLM이 채굴한 후보를 사람 검토 없이 semantic layer에

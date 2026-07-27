@@ -6,10 +6,10 @@ UI(CopilotKit)와 스트리밍 통신한다.
 
 ## 파이프라인 (Strands Graph)
 
-```
-intent ──▶ schema_linking ──▶ sql_generation ──▶ execution ──▶ synthesis
-                                     ▲                 │
-                                     └──(rejected/error, 최대 N회)──┘
+```mermaid
+flowchart LR
+    intent --> schema_linking --> sql_generation --> execution --> synthesis
+    execution -- "rejected/error (최대 N회)" --> sql_generation
 ```
 
 - **intent**: 질의 의도 해석. 모호하면 `request_clarification` 도구로 사용자에게 되물음(clarification), 명확하면 최선 해석으로 진행
@@ -121,17 +121,18 @@ AgentCore Runtime 규격: `0.0.0.0:8080`, `POST /invocations`(SSE), `GET /ping`,
 `CUSTOM(clarification_request)` 이벤트로 UI 에 폼을 요청한 뒤 정상 `RUN_FINISHED` 로 스트림을
 닫는다(연결을 열어둔 채 대기하지 않음). 사용자가 폼을 채워 보내면 **새 HTTP 요청**으로 재개된다.
 
-```
-[1차 요청] 모호한 질의
-   └─ intent → request_clarification(interrupt)
-        └─ CUSTOM(clarification_request) 방출 → RUN_FINISHED (스트림 종료)
-                (실행 세션은 microVM 로컬 캐시에 보존)
+```mermaid
+sequenceDiagram
+    participant UI
+    participant Orchestrator
 
-[UI] clarification_request.value 로 폼 렌더 → 사용자 입력
-
-[2차 요청] forwardedProps.clarificationResponse = {interruptId, values}
-   └─ 캐시에서 같은 세션(Graph/Agent)을 찾아 interruptResponse 로 재개
-        └─ schema_linking → sql_generation → execution → synthesis → RUN_FINISHED
+    UI->>Orchestrator: [1차 요청] 모호한 질의
+    Note over Orchestrator: intent → request_clarification(interrupt)<br/>실행 세션은 microVM 로컬 캐시에 보존
+    Orchestrator-->>UI: CUSTOM(clarification_request) 방출 → RUN_FINISHED (스트림 종료)
+    Note over UI: clarification_request.value 로 폼 렌더 → 사용자 입력
+    UI->>Orchestrator: [2차 요청] forwardedProps.clarificationResponse = {interruptId, values}
+    Note over Orchestrator: 캐시에서 같은 세션(Graph/Agent)을 찾아 interruptResponse 로 재개<br/>schema_linking → sql_generation → execution → synthesis
+    Orchestrator-->>UI: 결과 스트리밍 → RUN_FINISHED
 ```
 
 - `CUSTOM(clarification_request)` 의 `value`:

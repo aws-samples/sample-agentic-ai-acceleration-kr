@@ -9,24 +9,16 @@ web 페이지와 API routes 가 한 Next.js(App Router) 앱에 함께 들어 있
 
 ## 아키텍처 요약
 
-```
-브라우저 (로그인 → AccessToken 을 sessionStorage 보관)
-   │  모든 API 호출에 Authorization: Bearer <AccessToken>
-   ▼
-Next.js API routes (Node 런타임)
-   ├─ aws-jwt-verify 로 AccessToken 검증 → cognito:groups 로 인가
-   │     · Manager|Admin 아니면 403, 미인증 401
-   │     · iam/* 는 Admin 그룹만
-   │
-   ├─ [쓰기 평면] 사용자 Bearer 토큰을 **그대로** 전달 (On-Behalf-Of)
-   │     → Gateway MCP (GATEWAY_URL) → datasource-admin-mcp___<tool>
-   │       semantic 엔티티 CRUD·발행, 데이터 소스 등록·테스트·크롤
-   │
-   └─ [읽기 관리 평면] admin web task role 의 AWS SDK v3 직접 호출
-         · cognito-idp   : 사용자·그룹 관리
-         · agentcore-control : Cedar 정책 조회(read-only)
-         · cloudwatch    : 메트릭 요약 (GetMetricData)
-         · cloudwatch-logs : 세션 목록·이벤트 타임라인
+```mermaid
+flowchart TB
+    browser["브라우저<br/>(로그인 → AccessToken 을 sessionStorage 보관)"]
+    api["Next.js API routes (Node 런타임)<br/>aws-jwt-verify 로 AccessToken 검증 → cognito:groups 로 인가<br/>· Manager|Admin 아니면 403, 미인증 401 · iam/* 는 Admin 그룹만"]
+    mcp["[쓰기 평면] Gateway MCP (GATEWAY_URL)<br/>→ datasource-admin-mcp___&lt;tool&gt;<br/>semantic 엔티티 CRUD·발행, 데이터 소스 등록·테스트·크롤"]
+    sdk["[읽기 관리 평면] admin web task role 의 AWS SDK v3 직접 호출<br/>· cognito-idp: 사용자·그룹 관리<br/>· agentcore-control: Cedar 정책 조회(read-only)<br/>· cloudwatch: 메트릭 요약 (GetMetricData)<br/>· cloudwatch-logs: 세션 목록·이벤트 타임라인"]
+
+    browser -- "Authorization: Bearer &lt;AccessToken&gt;" --> api
+    api -- "사용자 Bearer 토큰을 그대로 전달 (On-Behalf-Of)" --> mcp
+    api --> sdk
 ```
 
 ### 왜 semantic 쓰기를 MCP 로 우회하나

@@ -10,16 +10,14 @@
 
 ## 아키텍처 요약
 
-```
-브라우저 (CopilotKit v2 · CopilotKitProvider + CopilotChat)
-   │  POST /api/copilotkit  (X-Session-Id 헤더)
-   ▼
-Next.js 서버 사이드 프록시 (route handler, Node 런타임)
-   │  CopilotRuntime(v2) → AG-UI 에이전트(@ag-ui/client HttpAgent) → SigV4 서명 fetch
-   ▼
-AgentCore Runtime /invocations  (SSE, text/event-stream)
-   Accept: text/event-stream
-   X-Amzn-Bedrock-AgentCore-Runtime-Session-Id: <세션 UUID>
+```mermaid
+flowchart TB
+    browser["브라우저<br/>(CopilotKit v2 · CopilotKitProvider + CopilotChat)"]
+    proxy["Next.js 서버 사이드 프록시 (route handler, Node 런타임)<br/>CopilotRuntime(v2) → AG-UI 에이전트(@ag-ui/client HttpAgent) → SigV4 서명 fetch"]
+    runtime["AgentCore Runtime /invocations (SSE, text/event-stream)<br/>Accept: text/event-stream<br/>X-Amzn-Bedrock-AgentCore-Runtime-Session-Id: &lt;세션 UUID&gt;"]
+
+    browser -- "POST /api/copilotkit (X-Session-Id 헤더)" --> proxy
+    proxy --> runtime
 ```
 
 - CopilotKit **v2 진입점**(`@copilotkit/runtime/v2`, `@copilotkit/react-core/v2`)을 사용합니다.
