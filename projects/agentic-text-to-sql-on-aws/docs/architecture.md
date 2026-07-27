@@ -2,7 +2,7 @@
 
 > 이 솔루션의 설계 결정과 근거를 설명한다. 배포·사용 방법은 루트 [README](../README.md),
 > Well-Architected 점검 현황은 [well-architected-checklist.md](./well-architected-checklist.md),
-> 인터랙티브 다이어그램은 [architecture-review.html](./architecture-review.html) 참고.
+> 인터랙티브 3D 다이어그램은 [architecture-explorer.html](./architecture-explorer.html) 참고.
 > AgentCore 일부 기능은 Preview 이므로 상태 변화를 재확인할 것(README Preview 상태 참고).
 
 ## 1. 개요
@@ -31,7 +31,7 @@ Admin과 Manager는 admin panel을 공유하되 Cognito group + 화면 권한으
 | D3 | 프로젝트 성격 | **코어 우선 풀 구현** | 5계층 + admin panel + 평가 파이프라인 전체를 배포 가능한 형태로 구현 |
 | D4 | 데이터 소스 | **Aurora PostgreSQL + Redshift Serverless** | 둘 다 Data API 기반(드라이버·커넥션 풀 불필요). 셀프 매니지드 MySQL/PostgreSQL 직접 연결은 후속 확장 |
 | D5 | 프론트엔드 | **AG-UI protocol + CopilotKit** | AgentCore Runtime의 AG-UI 네이티브 지원(SSE `/invocations`), interrupt 이벤트로 clarification 폼 렌더링이 프로토콜 레벨에서 해결 |
-| D6 | Long-term memory 위치 | **Orchestration layer 소속 (개인화 레이어)** | long-term memory = 사용자별 동적·경험적 지식(선호, 과거 쿼리 패턴). semantic layer = 조직 공유·정적 도메인 지식. 상호보완이며 병합하지 않음 |
+| D6 | Long-term memory 위치 | **Orchestration layer 소속 (개인화 레이어)** | long-term memory = 사용자별 동적·경험적 지식(선호, 과거 쿼리 패턴). semantic layer = 조직 공유·정적 도메인 지식. 상호보완이며 병합하지 않음. ※ 현재 구현은 short-term만 사용, LTM은 향후 과제(§4.2) |
 | D7 | 도구 노출 모델 | **Runtime 호스팅 MCP 서버만 (Lambda 미사용)** | 모든 도구는 AgentCore Runtime에 MCP 서버로 호스팅 후 Gateway MCP target 등록. 예외: Evaluations code-based evaluator는 서비스 규격상 Lambda |
 | D8 | 리전 | **us-west-2** | AgentCore 기능 제공 리전 |
 | D9 | Runtime 배포 방식 | **컨테이너(ECR) 방식** | 에이전트·MCP 서버 모두 Dockerfile 기반 ARM64 이미지를 ECR에 푸시해 배포. 로컬 빌드는 docker 기본, 문제 시 **finch** 폴백 |
@@ -40,11 +40,11 @@ Admin과 Manager는 admin panel을 공유하되 Cognito group + 화면 권한으
 
 ```mermaid
 flowchart TB
-    subgraph part3["Part 3. Admin Panel (ECS Fargate: Web + API)"]
+    subgraph subsystem3["Subsystem 3. Admin Panel (ECS Fargate: Web + API)"]
         admin["데이터소스 등록 · semantic 큐레이션 · 권한 관리 · 대시보드 · 디버깅"]
     end
 
-    subgraph part1["Part 1. Core (5 Layers)"]
+    subgraph subsystem1["Subsystem 1. Core (5 Layers)"]
         ui["[1] UI — ECS Fargate + CopilotKit<br/>AG-UI(SSE) ↔ AgentCore Runtime"]
         orch["[2] Orchestration — Strands Graph<br/>on AgentCore Runtime + Memory"]
         tool["[3] Tool — AgentCore Gateway(MCP)<br/>+ Identity + Policy(Cedar)"]
@@ -54,11 +54,11 @@ flowchart TB
         tool --> data
     end
 
-    subgraph part2["Part 2. 개선 파이프라인"]
+    subgraph subsystem2["Subsystem 2. 개선 파이프라인"]
         eval["OTEL → CloudWatch GenAI Observability<br/>Evaluations (custom EX · LLM-judge · online eval)<br/>→ Recommendations → Configuration Bundle 승격"]
     end
 
-    admin -- 관리 --> part1
+    admin -- 관리 --> subsystem1
     orch -- 트레이스 --> eval
     eval -- 승인된 설정 반영 --> orch
 ```
@@ -70,20 +70,20 @@ flowchart TB
 - **호스팅**: Next.js 웹앱, ECS Fargate + ALB.
 - **프로토콜**: AG-UI. 브라우저는 AgentCore를 직접 호출하지 않는다(SigV4/OAuth 불가).
   Fargate 내 서버 사이드(CopilotKit Runtime)가 Cognito 토큰을 검증·전달하는 프록시 역할.
-- **스트리밍**: AgentCore Runtime의 AG-UI 네이티브 지원 사용
-  (`bedrock-agentcore[ag-ui]`의 `AGUIApp` 엔트리포인트, SSE `/invocations`).
+- **스트리밍**: `BedrockAgentCoreApp` 엔트리포인트(SSE `/invocations`) 위에서 orchestrator가
+  AG-UI wire-format 이벤트를 직접 방출한다 (`AGUIApp` 일체형 경로 대신 raw SSE + 자체 이벤트
+  매핑 — 당초 폴백안이 현재 구현).
   `TEXT_MESSAGE_*`(텍스트 델타), `TOOL_CALL_*`(도구 진행 표시), `STATE_SNAPSHOT/DELTA`(멀티 에이전트 상태) 이벤트 렌더링.
 - **재요청(clarification) 흐름** — 핵심 요구사항:
   1. 에이전트가 정보 부족 인지 → Strands `context.interrupt({name, reason: {폼 스키마}})` 호출로 일시 정지
   2. AG-UI interrupt 이벤트(ui 스펙 + fields)가 SSE로 전달
   3. CopilotKit이 date-range picker 등 인터랙티브 폼 렌더링
   4. 사용자 응답 → 동일 `runtimeSessionId`로 재호출, interrupt id에 keyed된 응답 전달
-  5. session manager가 상태 복원 → 중단 지점부터 재개
-- ⚠️ `runtimeSessionId`는 동일 microVM으로의 라우팅 affinity만 보장하며,
-  중단 지점의 워크플로 상태를 자동 복원하지 않는다. **`AgentCoreMemorySessionManager`(또는 S3SessionManager)로
-  대화·interrupt 상태를 명시적으로 영속화**하는 것이 재개 정확성의 필수 조건이다.
-- ⚠️ Strands AG-UI 통합 패키지는 community-maintained. 구현 초기에 통합 테스트로 검증하고,
-  실패 시 폴백은 raw SSE + 자체 이벤트 매핑.
+  5. 동일 microVM의 모듈 레벨 세션 캐시(runner + MCP 클라이언트, LRU)가 중단 지점부터 재개
+- ⚠️ `runtimeSessionId`는 동일 microVM으로의 라우팅 affinity만 보장한다.
+  `AgentCoreMemorySessionManager`는 Strands Graph(multiagent) 세션 영속화를 지원하지 않으므로
+  재개는 microVM 세션 캐시로 처리하고, microVM 교체 시에는 `CLARIFICATION_EXPIRED`로
+  재질의를 안내한다 (알려진 한계).
 
 ### 4.2 Orchestration Layer
 
@@ -99,21 +99,23 @@ flowchart TB
     interrupt["interrupt (사용자 재요청)"]
     linking["schema linking<br/>(semantic layer 검색: OpenSearch hybrid + Neptune 순회)"]
     gen["SQL 생성<br/>(few-shot 예시 + 비즈니스 용어 컨텍스트 주입)"]
-    ast["AST 검증 (SQLGlot allow-list)"]
-    exec["실행 (Gateway 경유 SQL 실행 도구)"]
-    viz["결과 분석/시각화<br/>(AgentCore Code Interpreter: pandas 집계·차트)"]
-    synth["자연어 내러티브 합성"]
+    exec["실행 (SQL 실행 도구 — AST 검증(SQLGlot allow-list)은 도구 내부에서 수행)"]
+    synth["결과 분석·자연어 내러티브 합성"]
 
     intent -- 모호 --> interrupt
-    intent --> linking --> gen --> ast --> exec --> viz --> synth
-    ast -- "실패 (self-correction, 최대 N회)" --> gen
-    exec -- "오류 (self-correction)" --> gen
+    intent --> linking --> gen --> exec --> synth
+    exec -- "검증 실패·실행 오류 (self-correction, 최대 N회)" --> gen
 ```
 
+- AST 검증은 orchestrator Graph 노드가 아니라 `sql-execution-mcp`의 `run_sql` 내부에서
+  수행된다(LLM 밖 강제 — §4.5 다층 안전장치). 결과 시각화용 AgentCore Code Interpreter는
+  현재 미사용 — 결과 표는 synthesis의 GFM markdown으로 렌더링하며, Code Interpreter 기반
+  차트 생성은 향후 과제.
 - **Memory**:
-  - Short-term: 대화 히스토리(멀티턴, "그럼 작년은?" 류 후속 질문)
-  - Long-term: User Preferences 전략(선호 차트·집계 방식) + custom 전략(사용자별 용어 사용 패턴, 자주 쓰는 테이블).
-    namespace는 `/strategy/{memoryStrategyId}/actor/{actorId}/...` 계층으로 사용자 격리.
+  - Short-term: 대화 히스토리(멀티턴, "그럼 작년은?" 류 후속 질문) — **현재 구현 범위**.
+  - Long-term (향후 과제): User Preferences 전략(선호 차트·집계 방식) + custom 전략(사용자별
+    용어 사용 패턴, 자주 쓰는 테이블). namespace는 `/strategy/{memoryStrategyId}/actor/{actorId}/...`
+    계층으로 사용자 격리. 설계 위치는 D6 그대로 orchestration layer.
 
 ### 4.3 Tool Layer
 
@@ -151,7 +153,8 @@ AWS 공식 GraphRAG 레퍼런스 패턴 + WrenAI MDL의 "코드로 버전 관리
     파생 인덱스는 언제든 원본에서 전체 재구축(backfill) 가능.
   - `status: candidate` 레코드는 동기화하지 않고 `published`만 인덱스에 반영 (§5.2 참조).
   - 최종 일관성(수 초 지연)은 큐레이션 워크플로 특성상 허용. admin UI에 동기화 상태 표시.
-- semantic 정의는 MDL식 YAML 스키마로 export/import 가능하게 하여 리뷰·버전 관리를 지원.
+- (향후 과제) semantic 정의의 MDL식 YAML export/import — 리뷰·버전 관리 지원.
+  현재 버전 관리는 DynamoDB 항목 단위 `VERSION#n` 이력으로 수행한다.
 - 예시 시나리오: Manager가 "'최근 사용자' = 최근 3개월 활동 사용자" 용어를 등록하면
   DynamoDB에 `{name, definition, synonyms: ["액티브 유저", ...], sql_fragment, maps_to: [{table, column}]}` 저장 →
   OpenSearch에는 임베딩+키워드 문서로("요즘 들어온 유저" 같은 미등록 표현도 hybrid 검색으로 매칭),
@@ -170,7 +173,7 @@ AWS 공식 GraphRAG 레퍼런스 패턴 + WrenAI MDL의 "코드로 버전 관리
   4. 거부된 쿼리 전수 감사 로깅
 - 샘플 데이터: seed 고정 생성기 제공 (레포 컨벤션).
 
-## 5. Part 2 — 점진적 개선 파이프라인
+## 5. Subsystem 2 — 점진적 개선 파이프라인
 
 개선 루프의 산출물은 **두 트랙**이다. 에이전트의 행동을 바꾸는 것(Track A)과
 에이전트가 참조하는 지식을 보강하는 것(Track B). 두 트랙 모두 Manager 승인을 거친다.
@@ -203,16 +206,19 @@ semantic 지식 후보를 채굴해 Manager 승인 큐로 보내는 자동 루�
 flowchart TB
     s1["소스 1. 실패 클러스터 (트레이스 분석)<br/>· schema linking 매칭 실패 표현 반복 → 동의어 후보<br/>· 특정 테이블 조합 join 오류 반복 → Neptune join-path 보강 후보"]
     s2["소스 2. 성공 사례 (online eval 고득점 트레이스)<br/>· EX 통과 + 긍정 피드백 (NLQ, SQL) 쌍 → few-shot 후보 수확"]
-    s3["소스 3. 사용자 상호작용<br/>· clarification 폼 선택 우세 → 용어 기본값 조정 후보<br/>· 결과 화면 thumbs-up/down 피드백"]
+    s3["소스 3. 사용자 상호작용 (향후 과제)<br/>· clarification 폼 선택 우세 → 용어 기본값 조정 후보<br/>· 결과 화면 thumbs-up/down 피드백"]
     miner["후보 생성기 (트레이스 분석 배치)<br/>DynamoDB에 status: candidate 로 기록<br/>(candidate는 OpenSearch/Neptune에 미동기화 — 에이전트에 미노출)"]
     queue["Manager 승인 큐 (admin panel)<br/>후보 검토 → 승인 시 status: published / 반려 시 rejected + 사유"]
     sync["§4.4 동기화 파이프라인 경유 OpenSearch·Neptune 반영<br/>→ 이후 질의부터 에이전트가 사용"]
 
     s1 --> miner
     s2 --> miner
-    s3 --> miner
+    s3 -. 향후 .-> miner
     miner --> queue --> sync
 ```
+
+- 현재 채굴 구현(`mine_candidates`)은 소스 1·2(성공/실패 질의 로그 `t2sql_query_record`)를
+  사용한다. 소스 3(UI thumbs-up/down 피드백)은 UI 피드백 수집 기능과 함께 향후 과제.
 
 - **자동 반영은 하지 않는다**: LLM이 채굴한 후보를 사람 검토 없이 semantic layer에
   넣으면 지식 오염(poisoning) 경로가 된다 (Well-Architected AGENTSEC01 — semantic layer는
@@ -231,22 +237,24 @@ flowchart TB
 지속 개선 루프가 있는 시스템은 "무엇이 바뀌어서 좋아졌나/나빠졌나"를 항상 답할 수 있어야 한다.
 독립적으로 진화하는 버전 축 6개를 정의하고, 모든 트레이스에 **version vector**를 스탬핑한다.
 
-| 축 | 버저닝 방식 |
-|---|---|
-| ① Configuration Bundle | AgentCore 네이티브 (불변 스냅샷, branch/diff) |
-| ② Semantic layer | 항목 단위 `VERSION#n`(DynamoDB) + **스냅샷**: 승인 이벤트마다 MDL YAML export를 S3 버전 저장(+git). 롤백 = 이전 YAML import |
-| ③ 평가셋 | evalset 버전 필수. 스코어는 항상 "evalset vN에서 X%"로 병기, 버전 간 직접 비교 금지 (Track B로 성장하므로 착시 방지) |
-| ④ Evaluator | 채점 로직·judge 프롬프트에 semantic version |
-| ⑤ 에이전트 코드/컨테이너 | git + ECR 이미지 태그 + Runtime 버전 |
-| ⑥ 데이터 소스 스키마 | 주기 크롤링으로 **schema fingerprint**(sha256) 갱신. 변경 감지 시 영향받는 semantic 항목 자동 `stale` 플래그 → Manager 승인 큐 (Track B의 4번째 소스) |
+| 축 | 버저닝 방식 | 구현 상태 |
+|---|---|---|
+| ① Configuration Bundle | AgentCore 네이티브 (불변 스냅샷, branch/diff) | ✅ 구현 (SSM 포인터 승격/롤백) |
+| ② Semantic layer | 항목 단위 `VERSION#n`(DynamoDB). 스냅샷(승인 이벤트마다 MDL YAML export를 S3 버전 저장, 롤백 = 이전 YAML import)은 향후 과제 | 🔶 항목 버전만 구현 |
+| ③ 평가셋 | evalset 버전 필수(goldset-v1). 스코어는 항상 "evalset vN에서 X%"로 병기, 버전 간 직접 비교 금지 (Track B로 성장하므로 착시 방지) | ✅ 구현 |
+| ④ Evaluator | 채점 로직·judge 프롬프트에 semantic version | ✅ 구현 |
+| ⑤ 에이전트 코드/컨테이너 | git + ECR 이미지 태그 + Runtime 버전 | ✅ 구현 |
+| ⑥ 데이터 소스 스키마 | 주기 크롤링으로 **schema fingerprint**(sha256) 갱신. 변경 감지 시 영향받는 semantic 항목 자동 `stale` 플래그 → Manager 승인 큐 (Track B의 4번째 소스) | 향후 과제 |
 
-- **Version vector**: 각 질의 트레이스의 OTEL span attribute에
-  `{bundle, semantic_snapshot, evalset, evaluator, agent, schema_fingerprint}` 기록.
+- **Version vector**: 각 질의 트레이스에 버전 축을 스탬핑한다. 현재 구현은
+  `t2sql_query_record` 로그에 `{bundle, agent}` 2축을 기록하며,
+  나머지 축(`semantic_snapshot`, `evalset`, `evaluator`, `schema_fingerprint`)의 스탬핑은
+  해당 축 구현과 함께 확장한다.
   → 귀인(스코어 변화를 축별 분해), 재현(질의 시점의 세계 복원), 공정한 A/B(동일 조건 트래픽만 비교).
 - **변경 규율**: 한 번에 한 축만. admin panel 승인 큐에서 "진행 중 A/B 실험이 있으면
   semantic 승인 시 경고/보류" 가드 적용.
 
-## 6. Part 3 — Admin Panel
+## 6. Subsystem 3 — Admin Panel
 
 - **호스팅**: ECS Fargate (web app + API server), Cognito 인증, Admin/Manager group 분리.
 - **기능**:
@@ -261,20 +269,29 @@ flowchart TB
 
 ## 7. 구현 범위
 
-이 문서의 설계(§1~§6)는 전부 구현되어 있다: 코어 파이프라인(자연어 질의 → SQL → 결과
+핵심 경로는 전부 구현되어 있다: 코어 파이프라인(자연어 질의 → SQL → 결과
 스트리밍), semantic layer(DynamoDB·OpenSearch·Neptune + clarification), 도구/보안
 평면(Gateway·Identity·Cedar·Redshift·다층 SQL 가드레일), admin panel, 개선 파이프라인
 (Track A: custom evaluator·online eval·Recommendations→config bundle 승격 / Track B:
-semantic 후보 채굴→승인 큐→published 반영). 단, A/B 트래픽 분할은 §8 리스크 완화대로
-수동 bundle 전환 폴백으로 구현되어 있다(README Preview 상태 참고).
+semantic 후보 채굴→승인 큐→published 반영).
+
+문서 내 "향후 과제"로 명시한 항목은 구현 범위에서 제외된다:
+
+- Long-term memory (§4.2 — 현재 STM만)
+- Code Interpreter 기반 결과 시각화 (§4.2 — 현재 markdown 표 렌더링)
+- MDL YAML export/import 및 semantic 스냅샷 (§4.4, §5.3 ②축)
+- Track B 소스 3 — 사용자 thumbs-up/down 피드백 채굴 (§5.2)
+- Schema fingerprint 크롤링·stale 플래그 (§5.3 ⑥축)
+- A/B 트래픽 분할 — §8 리스크 완화대로 수동 bundle 전환 폴백으로 구현 (README Preview 상태 참고)
+- Insights·Registry (Preview — README 상태 참고)
 
 ## 8. 리스크 및 완화
 
 | 리스크 | 완화 |
 |---|---|
 | Preview 기능 의존 (Optimization, Registry 등) | README에 상태 명시, 각 기능에 폴백 서술 (예: A/B 없이 수동 bundle 전환 — 현재 구현) |
-| Strands AG-UI 통합이 community-maintained | 통합 검증 스파이크 우선 수행. 폴백: raw SSE + 자체 이벤트 매핑 |
-| interrupt 재개의 상태 영속성 | `AgentCoreMemorySessionManager` 명시적 사용, 재개 시나리오 통합 테스트 필수 |
+| Strands AG-UI 통합이 community-maintained | 폴백(raw SSE + 자체 이벤트 매핑)으로 구현 — §4.1 |
+| interrupt 재개의 상태 영속성 | microVM 세션 캐시(LRU) + `CLARIFICATION_EXPIRED` graceful 처리 (`AgentCoreMemorySessionManager`는 Graph 세션 미지원 — §4.1), 재개 시나리오 통합 테스트 |
 | 도구 노출 모델 혼선 (Gateway target vs Runtime MCP) | §4.3 기준으로 단일화: Gateway가 유일한 도구 평면 |
 | Neptune 운영 복잡도·비용 | CDK로 최소 인스턴스 구성, cleanup 문서 필수, semantic 검색 인터페이스를 저장소 중립으로 설계 |
 | Data API의 DML/DDL 실행 가능성 | AST allow-list + read-only 자격증명 이중 방어, 거부 쿼리 감사 로깅 |

@@ -9,7 +9,7 @@ E2E 스모크 테스트(레벨 1~7, `scripts/e2e-smoke.sh`)가 전체 경로를 
    핵심 결정 D1~D9, 5계층 설계, 개선 파이프라인(Track A/B), 버저닝 전략(§5.3), 리스크.
 2. `docs/well-architected-checklist.md` — Agentic AI Lens 기반 구현 체크리스트.
    구현을 변경할 때 해당 항목을 점검·갱신한다.
-3. `docs/architecture-review.html` — 인터랙티브 아키텍처 다이어그램.
+3. `docs/architecture-explorer.html` — 인터랙티브 3D 아키텍처 탐색기 (three.js).
    구조 변경 시 이 다이어그램도 갱신할 것.
 4. 각 컴포넌트 README — 도구 시그니처·env var·로컬 개발 방법 (인터페이스 계약의 원천).
 
