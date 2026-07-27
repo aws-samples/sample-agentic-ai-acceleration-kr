@@ -5,7 +5,7 @@ Manager·Admin 페르소나가 semantic 지식을 큐레이션·승인하고, �
 web 페이지와 API routes 가 한 Next.js(App Router) 앱에 함께 들어 있으며 ECS Fargate(ARM64) +
 전용 ALB 로 호스팅됩니다.
 
-> 전체 설계 배경은 리포지토리 루트의 `ARCHITECTURE.md` 를 참고하세요.
+> 전체 설계 배경은 `../docs/architecture.md` 를 참고하세요.
 
 ## 아키텍처 요약
 

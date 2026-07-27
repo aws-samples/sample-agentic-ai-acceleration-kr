@@ -1,7 +1,7 @@
 """semantic layer system-of-record CRUD (DynamoDB, 단일 쓰기 지점).
 
 semantic 지식(term/fewshot/table/column/join)을 DynamoDB 한 테이블에 저장하고
-항목 단위로 버전을 관리한다(ARCHITECTURE §4.4 / §5.3 ② 축). dual-write 금지 —
+항목 단위로 버전을 관리한다(docs/architecture.md §4.4 / §5.3 ② 축). dual-write 금지 —
 DynamoDB 만 쓰고, 파생 저장소(OpenSearch/Neptune)는 Streams 로 단방향 동기화된다.
 
 키 설계

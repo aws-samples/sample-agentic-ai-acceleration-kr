@@ -40,7 +40,7 @@ export interface GatewayStackProps extends StackProps {
  *           runtime 이후에 배포된다(runtime→gateway 역참조 없음 → 사이클 없음).
  *
  * ⚠️ tool layer Lambda 금지 제약 준수: 도구는 Runtime 호스팅 MCP 서버이고, Gateway 는 그
- *    MCP 서버를 target 으로 집약하는 단일 도구 평면이다(ARCHITECTURE.md §4.3).
+ *    MCP 서버를 target 으로 집약하는 단일 도구 평면이다(docs/architecture.md §4.3).
  */
 export class AgenticT2SqlGatewayStack extends Stack {
   public readonly gateway: agentcore.Gateway;

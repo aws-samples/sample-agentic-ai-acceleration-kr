@@ -8,7 +8,7 @@ semantic 큐레이션·승인과 데이터소스 등록/점검/스키마 크롤�
 admin web API는 DynamoDB를 **직접 쓰지 않는다**. 모든 큐레이션·승인·데이터소스 작업은
 `사용자 JWT Bearer → Gateway MCP → datasource-admin-mcp → SemanticRepository` 경로다.
 
-1. DynamoDB **단일 쓰기 지점** 유지 (dual-write 금지 — ARCHITECTURE §4.4)
+1. DynamoDB **단일 쓰기 지점** 유지 (dual-write 금지 — docs/architecture.md §4.4)
 2. **Cedar**가 Manager/Admin 인가를 도구 평면에서 강제
 3. **사용자별 JWT On-Behalf-Of** 전파를 admin 경로에서 실현
 

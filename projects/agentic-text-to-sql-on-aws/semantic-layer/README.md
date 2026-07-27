@@ -3,7 +3,7 @@
 agentic Text-to-SQL 솔루션의 **semantic layer**(비즈니스 용어·동의어·few-shot·
 스키마 메타)를 관리하는 패키지입니다. 쓰기는 **DynamoDB 한 곳**에서만 하고
 (dual-write 금지), 파생 저장소(Neptune 그래프)로는 **DynamoDB Streams** 를 통해
-단방향 동기화합니다. (ARCHITECTURE §4.4 / §5.3)
+단방향 동기화합니다. (docs/architecture.md §4.4 / §5.3)
 
 > AWS에 실제 쓰기/동기화를 수행하는 실행(seed, Lambda 배포)은 배포 담당이 맡습니다.
 > 이 패키지는 코드와 로컬 단위 테스트까지 제공합니다.

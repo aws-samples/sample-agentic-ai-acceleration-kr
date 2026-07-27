@@ -12,7 +12,7 @@
  *                @ag-ui/client 의 HttpAgent 가 SSE 파싱을 내부적으로 처리한다.
  *                (기본값 · orchestrator 는 ag_ui_strands 로 표준 이벤트 생성 확정)
  *  - 'raw-sse' : HttpAgent 통합에 문제가 생겼을 때의 폴백. RawSSEAgent 가 동일한 표준
- *                AG-UI SSE 를 직접 파싱해 통과시킨다. (ARCHITECTURE.md §8 리스크 완화)
+ *                AG-UI SSE 를 직접 파싱해 통과시킨다. (docs/architecture.md §8 리스크 완화)
  *
  * 두 어댑터 모두 SigV4 서명 fetch(sigv4Fetch)를 사용하므로 전송 계층은 동일하다.
  */

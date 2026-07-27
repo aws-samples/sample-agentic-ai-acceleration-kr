@@ -1,7 +1,9 @@
-# agentic-text-to-sql-on-aws — 아키텍처 설계 문서
+# agentic-text-to-sql-on-aws — 아키텍처 문서
 
-> 2026-07-26 기준 설계 확정본. 리서치(AgentCore 서비스 카탈로그 / Text-to-SQL 패턴 / UI 스트리밍 표준 / 레포 컨벤션)와
-> 동료 검토(Codex) 결과를 반영했다. 구현 시점에 Preview → GA 상태 변화를 반드시 재확인할 것.
+> 이 솔루션의 설계 결정과 근거를 설명한다. 배포·사용 방법은 루트 [README](../README.md),
+> Well-Architected 점검 현황은 [well-architected-checklist.md](./well-architected-checklist.md),
+> 인터랙티브 다이어그램은 [architecture-review.html](./architecture-review.html) 참고.
+> AgentCore 일부 기능은 Preview 이므로 상태 변화를 재확인할 것(README Preview 상태 참고).
 
 ## 1. 개요
 
@@ -20,18 +22,18 @@ Amazon Bedrock AgentCore 기반의 프로덕션급 agentic Text-to-SQL 솔루션
 
 Admin과 Manager는 admin panel을 공유하되 Cognito group + 화면 권한으로 분리한다.
 
-## 2. 확정된 핵심 결정
+## 2. 핵심 설계 결정
 
 | # | 결정 사항 | 선택 | 근거 |
 |---|---|---|---|
-| D1 | IaC | **CDK (TypeScript)** | aws-samples 표준, AgentCore alpha L2 constructs(Runtime/Memory/Gateway/Evaluator/Policy) 존재, ECS·OpenSearch·Neptune·Cognito를 단일 스택 체계로 관리 |
+| D1 | IaC | **CDK (TypeScript)** | aws-samples 표준, AgentCore L2 constructs(Runtime/Memory/Gateway/Evaluator/Policy) 존재, ECS·OpenSearch·Neptune·Cognito를 단일 스택 체계로 관리 |
 | D2 | Neptune 도입 시점 | **Day-1 포함** | AWS 공식 text-to-SQL 레퍼런스(2026-04 ML Blog)의 GraphRAG(Neptune 그래프 순회 + OpenSearch 벡터) 패턴 채택. 용어 관계·join path의 multi-hop 해석 담당 |
-| D3 | 프로젝트 성격 | **코어 우선 풀 구현** | 5계층 + admin panel + 평가 파이프라인 전체를 배포 가능한 형태로 구현. 내부 구현 순서는 산출물에 노출하지 않는다 |
-| D4 | Phase 1 데이터 소스 | **Aurora PostgreSQL + Redshift Serverless** | 둘 다 Data API 기반(드라이버·커넥션 풀 불필요). 셀프 매니지드 MySQL/PostgreSQL 직접 연결은 후속 확장 |
+| D3 | 프로젝트 성격 | **코어 우선 풀 구현** | 5계층 + admin panel + 평가 파이프라인 전체를 배포 가능한 형태로 구현 |
+| D4 | 데이터 소스 | **Aurora PostgreSQL + Redshift Serverless** | 둘 다 Data API 기반(드라이버·커넥션 풀 불필요). 셀프 매니지드 MySQL/PostgreSQL 직접 연결은 후속 확장 |
 | D5 | 프론트엔드 | **AG-UI protocol + CopilotKit** | AgentCore Runtime의 AG-UI 네이티브 지원(SSE `/invocations`), interrupt 이벤트로 clarification 폼 렌더링이 프로토콜 레벨에서 해결 |
 | D6 | Long-term memory 위치 | **Orchestration layer 소속 (개인화 레이어)** | long-term memory = 사용자별 동적·경험적 지식(선호, 과거 쿼리 패턴). semantic layer = 조직 공유·정적 도메인 지식. 상호보완이며 병합하지 않음 |
 | D7 | 도구 노출 모델 | **Runtime 호스팅 MCP 서버만 (Lambda 미사용)** | 모든 도구는 AgentCore Runtime에 MCP 서버로 호스팅 후 Gateway MCP target 등록. 예외: Evaluations code-based evaluator는 서비스 규격상 Lambda |
-| D8 | 리전/브랜치 | **us-west-2** / `feature/agentic-text-to-sql` | 사용자 지정 |
+| D8 | 리전 | **us-west-2** | AgentCore 기능 제공 리전 |
 | D9 | Runtime 배포 방식 | **컨테이너(ECR) 방식** | 에이전트·MCP 서버 모두 Dockerfile 기반 ARM64 이미지를 ECR에 푸시해 배포. 로컬 빌드는 docker 기본, 문제 시 **finch** 폴백 |
 
 ## 3. 전체 아키텍처
@@ -74,7 +76,7 @@ Admin과 Manager는 admin panel을 공유하되 Cognito group + 화면 권한으
   3. CopilotKit이 date-range picker 등 인터랙티브 폼 렌더링
   4. 사용자 응답 → 동일 `runtimeSessionId`로 재호출, interrupt id에 keyed된 응답 전달
   5. session manager가 상태 복원 → 중단 지점부터 재개
-- ⚠️ **Codex 검토 반영**: `runtimeSessionId`는 동일 microVM으로의 라우팅 affinity만 보장하며,
+- ⚠️ `runtimeSessionId`는 동일 microVM으로의 라우팅 affinity만 보장하며,
   중단 지점의 워크플로 상태를 자동 복원하지 않는다. **`AgentCoreMemorySessionManager`(또는 S3SessionManager)로
   대화·interrupt 상태를 명시적으로 영속화**하는 것이 재개 정확성의 필수 조건이다.
 - ⚠️ Strands AG-UI 통합 패키지는 community-maintained. 구현 초기에 통합 테스트로 검증하고,
@@ -236,9 +238,8 @@ Manager 승인 큐 (admin panel): 후보 검토 → 승인 시 status: published
 
 - 오프라인 평가셋: 자사(샘플) 스키마 기반 NLQ↔gold SQL 커스텀 세트. BIRD/Spider 2.0의 EX·VES 지표 개념 차용.
   Track B에서 수확·승인된 (NLQ, SQL) 쌍은 평가셋으로도 승격 가능 — 평가셋 자체도 점진 성장.
-- ⚠️ **GA/Preview 상태 주의**: 조사 시점 기준 Optimization(Insights/Recommendations/Experiments)은 Preview.
-  Policy·Evaluations는 출처 간 Preview/GA 표기가 상충(가격 페이지 Preview vs 검토자 GA 판단) —
-  **구현 착수 시 최신 문서로 재확인**하고 README에 상태를 정직하게 표기할 것.
+- ⚠️ **GA/Preview 상태 주의**: AgentCore Optimization(Insights/Recommendations/Experiments)은
+  Preview 다. 각 기능의 현재 사용 여부·폴백은 README 의 "Preview 기능 상태"를 참고.
 
 ## 5.3 버저닝 전략 (횡단 관심사)
 
@@ -303,11 +304,10 @@ semantic 후보 채굴→승인 큐→published 반영). 단, A/B 트래픽 분�
 - **코드 스타일**: 복잡해지는 모듈은 OOP로 가독성 있게 구성 (예: 도구 검증기·데이터 소스 커넥터는
   추상 base class + 구현체 패턴).
 - **기본 리전**: `us-west-2` (오레곤).
-- 작업 브랜치: `feature/agentic-text-to-sql` (main에서 분기).
 
-## 10. 향후 확장 — demo/ 실습 구조 (구현은 나중, 설계에 반영)
+## 10. 향후 확장 — demo/ 실습 구조
 
-솔루션 배포 후 개발자가 시나리오별로 실습할 수 있는 `demo/` 폴더를 둔다.
+솔루션 배포 후 개발자가 시나리오별로 실습할 수 있는 `demo/` 폴더를 둘 수 있다.
 각 데모는 Jupyter notebook으로 데이터·설정을 주입하며 번호 순으로 경험한다.
 
 ```
@@ -318,12 +318,4 @@ demo/
 ```
 
 - 각 notebook은 배포된 리소스(스택 output)를 읽어 동작하는 self-contained 실습이어야 한다.
-- 코어 구현 시 admin API·semantic layer API를 notebook에서도 호출 가능하게 설계해 둔다 (인증 포함).
-
-## 11. 레포 컨벤션 준수 사항
-
-- 한국어 README 본문 (+ 필요 시 README.en.md), 루트 README 프로젝트 테이블에 행 추가
-- 시크릿은 `.example` 파일 + .gitignore
-- 보안 참고 섹션 + 리소스 정리(cleanup) 섹션 필수
-- Python은 uv
-- 이 프로젝트는 다른 sibling 프로젝트와 별개이며 그 선례를 따를 의무는 없다 (필요 시 참고만)
+- admin API·semantic layer API는 notebook에서도 호출 가능하게 설계되어 있다 (인증 포함).

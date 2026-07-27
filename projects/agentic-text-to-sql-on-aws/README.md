@@ -34,12 +34,12 @@ Amazon Bedrock AgentCore 기반의 agentic Text-to-SQL 솔루션입니다. 사�
 - **Configuration Bundle 승격**: 프롬프트·모델 설정을 불변 버전 스냅샷으로 관리하고, 승격 = SSM `/agentic-t2sql/active-bundle` 포인터 전환. orchestrator가 60초 TTL 캐시로 반영하며 실패·빈 값이면 코드 기본값으로 폴백합니다(재배포 없는 전환·롤백).
 - **semantic 지식 채굴**: orchestrator의 구조화 로그(`t2sql_query_record` — 질문·SQL·상태·version vector)를 `mine_candidates` 도구가 채굴해 성공 질의는 few-shot 후보로, 실패 질의의 반복 표현은 용어 후보로 candidate 적재 → 승인 큐 유입 → Manager 승인 시 published 전파. 자동 반영은 하지 않으며(poisoning 방어), rejected 이력이 있는 후보는 재채굴하지 않습니다.
 
-설계 전체는 [`ARCHITECTURE.md`](./ARCHITECTURE.md), 구현 체크리스트는 [`docs/well-architected-checklist.md`](./docs/well-architected-checklist.md)를 참고하세요.
+설계 전체는 [`docs/architecture.md`](./docs/architecture.md), 구현 체크리스트는 [`docs/well-architected-checklist.md`](./docs/well-architected-checklist.md)를 참고하세요.
 
 > **Preview 기능 상태 (2026-07-27 확인, us-west-2 라이브 검증)**:
 > - **AgentCore Evaluations**(custom evaluator·code-based Lambda·배치/온라인 평가): API 실존·동작 확인 → **네이티브 사용**.
 > - **Configuration Bundle · Recommendations**: API 실존·응답 확인, 단 서비스 발표 기준 **Preview**(AgentCore Optimization) → 사용하되 admin 화면에 Preview임을 명시하고 호출 실패는 안내로 graceful degrade.
-> - **A/B Testing(Gateway 트래픽 분할)**: 안정 API 표면 미확인 → **미구현, 수동 bundle 전환 폴백**(SSM 포인터 + online eval 전후 비교, `ARCHITECTURE.md` §8 리스크 완화).
+> - **A/B Testing(Gateway 트래픽 분할)**: 안정 API 표면 미확인 → **미구현, 수동 bundle 전환 폴백**(SSM 포인터 + online eval 전후 비교, `docs/architecture.md` §8 리스크 완화).
 > - **Agent Registry**: 범위 밖(미사용).
 
 ## 아키텍처 (5계층)
@@ -101,8 +101,7 @@ agentic-text-to-sql-on-aws/
 ├── admin/                         # admin panel — Next.js web + API (Cognito 인증·JWT OBO)
 ├── sample-data/                   # 결정적 샘플 데이터 생성기 + seed/인덱싱 스크립트 (uv)
 ├── scripts/                       # 배포·seed·E2E·cleanup 스크립트
-├── docs/                          # 아키텍처 리뷰 다이어그램 · Well-Architected 체크리스트
-├── ARCHITECTURE.md                # 설계 문서 (단일 진실 원천)
+├── docs/                          # 아키텍처 문서 · 인터랙티브 다이어그램 · Well-Architected 체크리스트
 └── README.md
 ```
 

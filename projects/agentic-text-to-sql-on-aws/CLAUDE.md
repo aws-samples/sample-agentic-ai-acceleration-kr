@@ -5,7 +5,7 @@ E2E 스모크 테스트(레벨 1~7, `scripts/e2e-smoke.sh`)가 전체 경로를 
 
 ## 필독 문서
 
-1. `ARCHITECTURE.md` — 전체 설계 문서(단일 진실 원천). 페르소나(Admin/Manager/User),
+1. `docs/architecture.md` — 전체 설계 문서(단일 진실 원천). 페르소나(Admin/Manager/User),
    핵심 결정 D1~D9, 5계층 설계, 개선 파이프라인(Track A/B), 버저닝 전략(§5.3), 리스크.
 2. `docs/well-architected-checklist.md` — Agentic AI Lens 기반 구현 체크리스트.
    구현을 변경할 때 해당 항목을 점검·갱신한다.
@@ -31,7 +31,7 @@ E2E 스모크 테스트(레벨 1~7, `scripts/e2e-smoke.sh`)가 전체 경로를 
 
 ## 향후 과제
 
-- `demo/` Jupyter notebook 실습 구조 (ARCHITECTURE.md §10)
+- `demo/` Jupyter notebook 실습 구조 (docs/architecture.md §10)
 - CodePipeline 평가 게이트 연결 (체크리스트 AGENTOPS03), HITL·Guardrails 등 체크리스트 후속 항목
 - 채팅 UI 인증 강제(현재 admin panel 만 강제), ALB HTTPS 전환
 

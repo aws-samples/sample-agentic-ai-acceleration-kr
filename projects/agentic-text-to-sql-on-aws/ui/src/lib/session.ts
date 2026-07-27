@@ -9,7 +9,7 @@ const SESSION_STORAGE_KEY = 'agentic-t2s-session-id';
  * 프록시에 전달되고, 프록시가 AgentCore 세션 헤더로 재전달해 동일 microVM 라우팅을 유지한다.
  *
  * ⚠️ AgentCore 세션 affinity 는 워크플로 상태를 자동 복원하지 않는다. 재개 정확성은
- * 오케스트레이터의 AgentCoreMemorySessionManager 로 보장된다 (ARCHITECTURE.md §4.1).
+ * 오케스트레이터의 AgentCoreMemorySessionManager 로 보장된다 (docs/architecture.md §4.1).
  */
 export function getBrowserSessionId(): string {
   if (typeof window === 'undefined') {

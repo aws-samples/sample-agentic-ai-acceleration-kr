@@ -38,7 +38,7 @@ hybrid(vector+BM25) 검색과 Neptune 그래프 순회로 반환한다.
 동기화(DynamoDB→OSIS)와 Neptune 그래프는 **다른 컴포넌트가 생성·동기화**한다고 가정한다.
 이 서버는 **검색만** 담당한다.
 
-## 저장소 중립 설계 (ARCHITECTURE.md §8)
+## 저장소 중립 설계 (docs/architecture.md §8)
 
 추상 `SemanticRetriever` base + 구현체:
 

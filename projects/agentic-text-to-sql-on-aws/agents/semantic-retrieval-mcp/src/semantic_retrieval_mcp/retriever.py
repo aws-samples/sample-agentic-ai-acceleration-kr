@@ -1,4 +1,4 @@
-"""Semantic 검색 — 저장소 중립 인터페이스(ARCHITECTURE.md §8).
+"""Semantic 검색 — 저장소 중립 인터페이스(docs/architecture.md §8).
 
 추상 ``SemanticRetriever`` base + 구현체들:
 - ``OpenSearchHybridRetriever``: 스키마 메타데이터(``t2sql-schema-docs``) hybrid 검색.

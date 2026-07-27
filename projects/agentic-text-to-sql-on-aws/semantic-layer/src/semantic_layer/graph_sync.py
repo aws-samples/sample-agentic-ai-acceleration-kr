@@ -4,7 +4,7 @@
 변환은 AWS 호출 없이 단위 테스트 가능하고, 실행기는 boto3 ``neptunedata`` 클라이언트를
 지연 생성한다. dual-write 금지 규율에 따라 이 경로는 DynamoDB → Neptune 단방향이다.
 
-동기화 규칙 (ARCHITECTURE §4.4)
+동기화 규칙 (docs/architecture.md §4.4)
 ------------------------------
 - ``sk != "v0"`` (버전 이력) 레코드는 무시 → 빈 리스트.
 - ``INSERT``/``MODIFY`` 의 NewImage 가 ``published`` → MERGE 멱등 upsert.

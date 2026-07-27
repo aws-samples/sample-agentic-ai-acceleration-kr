@@ -41,7 +41,7 @@ export interface SemanticStackProps extends StackProps {
  * base↔semantic 순환은 없다. runtime 스택이 semantic 의 Neptune endpoint/SG 를 참조한다.
  *
  * ⚠️ tool layer Lambda 금지 제약과 무관: 아래 graph-sync Lambda 는 도구가 아니라
- *    Streams consumer(데이터 동기화 배관)이다 (ARCHITECTURE.md §4.4).
+ *    Streams consumer(데이터 동기화 배관)이다 (docs/architecture.md §4.4).
  */
 export class AgenticT2SqlSemanticStack extends Stack {
   public readonly semanticTable: dynamodb.Table;

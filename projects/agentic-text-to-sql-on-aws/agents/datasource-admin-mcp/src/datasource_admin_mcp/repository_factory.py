@@ -4,7 +4,7 @@ server 모듈 임포트 시점에 AWS 클라이언트를 만들지 않도록 첫
 (단위 테스트가 monkeypatch 로 fake 를 주입할 수 있게 하는 접점도 된다).
 
 DynamoDB 쓰기는 semantic-layer 의 ``SemanticRepository`` 하나만 사용한다 —
-dual-write 금지 / 단일 쓰기 지점 원칙(ARCHITECTURE §4.4).
+dual-write 금지 / 단일 쓰기 지점 원칙(docs/architecture.md §4.4).
 """
 
 from __future__ import annotations

@@ -3,7 +3,7 @@
 두 가지 실행 형태를 제공한다. 둘 다 동일한 시스템 프롬프트/도구/모델을 공유하며,
 stream_async 로 스트리밍하므로 stream_translator 가 그대로 처리한다.
 
-- build_graph(): ARCHITECTURE §4.2 확정 골격. 결정적 노드 전이 + self-correction 조건부 엣지.
+- build_graph(): docs/architecture.md §4.2 확정 골격. 결정적 노드 전이 + self-correction 조건부 엣지.
 - build_single_agent(): 단일 Agent + 도구 2개 폴백. 시스템 프롬프트로 파이프라인 유도.
 
 MODE 는 config.Settings.mode 로 선택한다(기본 "graph").
@@ -102,7 +102,7 @@ class OrchestratorBuilder:
         )
 
     def build_graph(self) -> Any:
-        """Strands Graph — 결정적 골격 (ARCHITECTURE §4.2).
+        """Strands Graph — 결정적 골격 (docs/architecture.md §4.2).
 
         노드:
           intent          질의 해석 (도구 없음)
