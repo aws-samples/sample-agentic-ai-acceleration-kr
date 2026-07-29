@@ -19,6 +19,8 @@ locals {
 module "vpc" {
   source = "../../modules/vpc"
 
+  aws_region               = var.aws_region
+
   project                  = var.project
   environment              = var.environment
   cidr                     = var.vpc_cidr

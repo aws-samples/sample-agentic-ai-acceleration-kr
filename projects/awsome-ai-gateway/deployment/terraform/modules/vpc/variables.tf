@@ -45,6 +45,12 @@ variable "elasticache_subnet_cidrs" {
   type        = list(string)
 }
 
+variable "aws_region" {
+  description = "AWS region (VPC Endpoint 서비스명에 사용)"
+  type        = string
+  default     = "ap-northeast-2"
+}
+
 variable "tags" {
   description = "공통 태그"
   type        = map(string)
