@@ -311,6 +311,7 @@ LLM 의 환각·재계산을 막기 위한 **deterministic-tool-first** 설계. 
 | **Minjae An** | AWS Forward Deployed DL Architect | [Email](mailto:aminjae@amazon.com) |
 | **Sue Cha** | AWS Deep Learning Architect | [Email](mailto:suecha@amazon.com) |
 | **Gonsoo Moon** | AWS Sr. AI Specialist Solutions Architect | [Email](mailto:moongons@amazon.com) |
+| **Debasish Mishra** | AWS Sr. Data Scientist | [Email](mailto:misdebas@amazon.com) |
 
 ## Contributors
 

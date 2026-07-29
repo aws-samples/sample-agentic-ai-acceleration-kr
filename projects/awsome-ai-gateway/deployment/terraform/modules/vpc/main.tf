@@ -61,3 +61,79 @@ module "vpc" {
     Module      = "vpc"
   })
 }
+
+# ==============================================================================
+# VPC Endpoints — Bedrock PrivateLink (NAT 미경유, VPC 내부 직접 연결)
+# ------------------------------------------------------------------------------
+# Pod → ENI (VPC Endpoint) → Bedrock/STS. 퍼블릭 인터넷을 경유하지 않음.
+# private_dns_enabled=true: 기존 bedrock-runtime.{region}.amazonaws.com 호출이
+# 코드 변경 없이 자동으로 VPC Endpoint 프라이빗 IP로 해석됨.
+# ==============================================================================
+
+resource "aws_security_group" "vpce_bedrock" {
+  name_prefix = "${var.project}-${var.environment}-vpce-bedrock-"
+  vpc_id      = module.vpc.vpc_id
+  description = "Allow HTTPS from private subnets to Bedrock VPC Endpoint"
+
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = var.private_subnet_cidrs
+    description = "HTTPS from Fargate pods"
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = merge(var.tags, {
+    Name = "${var.project}-${var.environment}-vpce-bedrock"
+  })
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_vpc_endpoint" "bedrock_runtime" {
+  vpc_id              = module.vpc.vpc_id
+  service_name        = "com.amazonaws.${var.aws_region}.bedrock-runtime"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = module.vpc.private_subnets
+  security_group_ids  = [aws_security_group.vpce_bedrock.id]
+  private_dns_enabled = true
+
+  tags = merge(var.tags, {
+    Name = "${var.project}-${var.environment}-vpce-bedrock-runtime"
+  })
+}
+
+resource "aws_vpc_endpoint" "bedrock" {
+  vpc_id              = module.vpc.vpc_id
+  service_name        = "com.amazonaws.${var.aws_region}.bedrock"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = module.vpc.private_subnets
+  security_group_ids  = [aws_security_group.vpce_bedrock.id]
+  private_dns_enabled = true
+
+  tags = merge(var.tags, {
+    Name = "${var.project}-${var.environment}-vpce-bedrock"
+  })
+}
+
+resource "aws_vpc_endpoint" "sts" {
+  vpc_id              = module.vpc.vpc_id
+  service_name        = "com.amazonaws.${var.aws_region}.sts"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = module.vpc.private_subnets
+  security_group_ids  = [aws_security_group.vpce_bedrock.id]
+  private_dns_enabled = true
+
+  tags = merge(var.tags, {
+    Name = "${var.project}-${var.environment}-vpce-sts"
+  })
+}
