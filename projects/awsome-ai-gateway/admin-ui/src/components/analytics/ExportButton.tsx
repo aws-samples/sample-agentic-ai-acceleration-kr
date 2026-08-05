@@ -5,6 +5,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { Download, ChevronDown } from 'lucide-react';
+import { useTranslations } from 'next-intl';
 import type { AnalyticsFilterForm } from '@/types/api';
 import { resolveMonth } from '@/lib/utils/period';
 
@@ -17,6 +18,7 @@ interface ExportButtonProps {
 type ExportFormat = 'csv' | 'json';
 
 export function ExportButton({ filter, latestMonth }: ExportButtonProps) {
+  const t = useTranslations('common');
   const [isOpen, setIsOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -88,7 +90,7 @@ export function ExportButton({ filter, latestMonth }: ExportButtonProps) {
         ].join(' ')}
       >
         <Download size={14} aria-hidden="true" />
-        {isLoading ? '내보내는 중...' : '내보내기'}
+        {isLoading ? t('loading') : t('export')}
         <ChevronDown
           size={14}
           aria-hidden="true"

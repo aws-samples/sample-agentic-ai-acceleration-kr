@@ -9,6 +9,7 @@
  * trends 가 비면 빈 상태 표시(가짜 데이터 없음).
  */
 
+import { useTranslations } from 'next-intl';
 import {
   ResponsiveContainer,
   ComposedChart,
@@ -31,21 +32,22 @@ interface CostTrendCardProps {
 }
 
 export function CostTrendCard({ trends }: CostTrendCardProps) {
-  const data = trends.map((t) => ({
+  const t = useTranslations('dashboard');
+  const data = trends.map((pt) => ({
     // MM-DD 표기 (YYYY-MM-DD → MM-DD)
-    label: t.date.length >= 10 ? t.date.slice(5) : t.date,
-    cost: Number(t.cost_usd),
-    requests: t.requests,
+    label: pt.date.length >= 10 ? pt.date.slice(5) : pt.date,
+    cost: Number(pt.cost_usd),
+    requests: pt.requests,
   }));
 
   return (
     <div className="glass glass-hover rounded-apple p-5">
-      <div className="text-sm font-semibold tracking-tight">비용 추이</div>
-      <div className="mb-3 text-xs text-muted-foreground">기간 내 일별 비용 · 요청 수</div>
+      <div className="text-sm font-semibold tracking-tight">{t('costTrendTitle')}</div>
+      <div className="mb-3 text-xs text-muted-foreground">{t('costTrendSubtitle')}</div>
 
       {data.length === 0 ? (
         <div className="flex h-[180px] items-center justify-center text-xs text-muted-foreground">
-          기간 내 집계된 사용량이 없습니다.
+          {t('costTrendEmpty')}
         </div>
       ) : (
         <ResponsiveContainer width="100%" height={200}>
@@ -83,7 +85,7 @@ export function CostTrendCard({ trends }: CostTrendCardProps) {
               labelStyle={{ color: 'hsl(var(--muted-foreground))' }}
               formatter={((value: number) => [
                 `$${Number(value).toLocaleString('en-US', { maximumFractionDigits: 2 })}`,
-                '비용',
+                t('costSeries'),
               ]) as never}
             />
             <Area

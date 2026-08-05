@@ -4,6 +4,7 @@
 
 
 import { useState } from 'react';
+import { useTranslations } from 'next-intl';
 import { AutoDowngradeConfig } from '@/components/budgets/AutoDowngradeConfig';
 import type { BudgetSummaryItem, ModelListItem } from '@/types/entities';
 
@@ -13,14 +14,15 @@ interface DowngradeSectionProps {
 }
 
 export function DowngradeSection({ teamItems, models }: DowngradeSectionProps) {
+  const t = useTranslations('budgets');
   const [showInactive, setShowInactive] = useState(false);
 
-  const hasInactive = teamItems.some(t => t.is_active === false);
-  const visibleTeams = showInactive ? teamItems : teamItems.filter(t => t.is_active !== false);
+  const hasInactive = teamItems.some(item => item.is_active === false);
+  const visibleTeams = showInactive ? teamItems : teamItems.filter(item => item.is_active !== false);
 
   return (
     <div>
-      <h2 className="text-lg font-semibold mb-3">자동 다운그레이드 설정</h2>
+      <h2 className="text-lg font-semibold mb-3">{t('autoDowngradeSection')}</h2>
       {hasInactive && (
         <div className="mb-3">
           <label className="flex items-center gap-1.5 cursor-pointer text-xs text-muted-foreground">
@@ -30,7 +32,7 @@ export function DowngradeSection({ teamItems, models }: DowngradeSectionProps) {
               onChange={e => setShowInactive(e.target.checked)}
               className="h-3.5 w-3.5 rounded border-gray-300"
             />
-            비활성 팀 포함
+            {t('includeInactiveTeams')}
           </label>
         </div>
       )}

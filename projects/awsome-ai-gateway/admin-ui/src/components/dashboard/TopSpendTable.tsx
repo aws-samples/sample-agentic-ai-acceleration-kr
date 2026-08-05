@@ -1,3 +1,5 @@
+'use client';
+
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 /**
@@ -7,6 +9,7 @@
  * 데이터가 없으면 빈 상태 문구를 표시(가짜 행 없음).
  */
 
+import { useTranslations } from 'next-intl';
 import { Table, THead, TBody, Tr, Th, Td } from '@/components/common/Table';
 
 interface TopSpendRow {
@@ -34,6 +37,7 @@ export function TopSpendTable({
   rows,
   accentVar = 'var(--chart-1)',
 }: TopSpendTableProps) {
+  const t = useTranslations('dashboard');
   return (
     <div className="glass glass-hover rounded-apple p-5">
       <div className="mb-1 text-sm font-semibold tracking-tight">{title}</div>
@@ -41,15 +45,15 @@ export function TopSpendTable({
 
       {rows.length === 0 ? (
         <div className="py-8 text-center text-xs text-muted-foreground">
-          이번 기간 집계된 데이터가 없습니다.
+          {t('noDataForPeriod')}
         </div>
       ) : (
         <Table>
           <THead>
             <Tr>
-              <Th>이름</Th>
-              <Th numeric>비용</Th>
-              <Th>예산 소진</Th>
+              <Th>{t('name')}</Th>
+              <Th numeric>{t('cost')}</Th>
+              <Th>{t('budgetSpend')}</Th>
             </Tr>
           </THead>
           <TBody>
@@ -91,7 +95,7 @@ export function TopSpendTable({
                       </span>
                     </div>
                   ) : (
-                    <span className="text-[11px] text-muted-foreground">예산 미설정</span>
+                    <span className="text-[11px] text-muted-foreground">{t('noBudgetSet')}</span>
                   )}
                 </Td>
               </Tr>

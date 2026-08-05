@@ -4,6 +4,7 @@
 
 
 import { useState, useTransition } from 'react';
+import { useTranslations } from 'next-intl';
 import {
   fetchMonitoringEvents,
   type MonitoringEventsResponse,
@@ -26,26 +27,27 @@ function eventTone(type: string): BadgeTone {
   }
 }
 
-const EVENT_LABELS: Record<string, string> = {
-  ERROR: '에러',
-  TIMEOUT: '타임아웃',
-  SLOW_REQUEST: '지연',
-  SUCCESS: '정상',
-};
-
-const FILTER_OPTIONS: { value: MonitoringEventTypeFilter; label: string }[] = [
-  { value: 'all', label: '전체' },
-  { value: 'success', label: '정상' },
-  { value: 'error', label: '에러' },
-  { value: 'timeout', label: '타임아웃' },
-  { value: 'slow', label: '지연 (첫 응답 3s 초과)' },
-  { value: 'abnormal', label: '이상 (에러/타임아웃/지연)' },
-];
-
 export function EventLog({ data: initialData }: { data: MonitoringEventsResponse }) {
+  const t = useTranslations('monitoring');
   const [filter, setFilter] = useState<MonitoringEventTypeFilter>('all');
   const [data, setData] = useState<MonitoringEventsResponse>(initialData);
   const [isPending, startTransition] = useTransition();
+
+  const EVENT_LABELS: Record<string, string> = {
+    ERROR: t('events.types.ERROR'),
+    TIMEOUT: t('events.types.TIMEOUT'),
+    SLOW_REQUEST: t('events.types.SLOW_REQUEST'),
+    SUCCESS: t('events.types.SUCCESS'),
+  };
+
+  const FILTER_OPTIONS: { value: MonitoringEventTypeFilter; label: string }[] = [
+    { value: 'all', label: t('events.filters.all') },
+    { value: 'success', label: t('events.filters.success') },
+    { value: 'error', label: t('events.filters.error') },
+    { value: 'timeout', label: t('events.filters.timeout') },
+    { value: 'slow', label: t('events.filters.slow') },
+    { value: 'abnormal', label: t('events.filters.abnormal') },
+  ];
 
   const handleFilterChange = (next: MonitoringEventTypeFilter) => {
     setFilter(next);
@@ -58,10 +60,10 @@ export function EventLog({ data: initialData }: { data: MonitoringEventsResponse
   return (
     <div className="glass rounded-apple overflow-hidden">
       <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-3 flex-wrap">
-        <h3 className="text-sm font-semibold">사용 로그 (최근 24시간)</h3>
+        <h3 className="text-sm font-semibold">{t('events.title')}</h3>
         <div className="flex items-center gap-2">
           <label htmlFor="event-type-filter" className="text-xs text-muted-foreground">
-            유형
+            {t('events.typeLabel')}
           </label>
           <select
             id="event-type-filter"
@@ -81,17 +83,17 @@ export function EventLog({ data: initialData }: { data: MonitoringEventsResponse
 
       {data.events.length === 0 ? (
         <div className="p-6">
-          <p className="text-sm text-muted-foreground">조건에 맞는 이벤트가 없습니다.</p>
+          <p className="text-sm text-muted-foreground">{t('events.empty')}</p>
         </div>
       ) : (
         <Table density="compact">
           <THead>
             <Tr>
-              <Th>시각</Th>
-              <Th>유형</Th>
-              <Th>모델</Th>
-              <Th>사용자</Th>
-              <Th>상세</Th>
+              <Th>{t('events.colTime')}</Th>
+              <Th>{t('events.colType')}</Th>
+              <Th>{t('events.colModel')}</Th>
+              <Th>{t('events.colUser')}</Th>
+              <Th>{t('events.colDetail')}</Th>
             </Tr>
           </THead>
           <TBody>

@@ -3,6 +3,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { useTranslations } from 'next-intl';
 import { Sparkles, User, ChevronDown, ChevronRight, Brain, FileDown } from 'lucide-react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -49,6 +50,7 @@ interface Props {
  * label 은 tool_call 단계에 따라 갱신(ChatLayout.applyEvent → thinkingText).
  */
 function PendingIndicator({ label }: { label: string }) {
+  const t = useTranslations('chat');
   const [elapsed, setElapsed] = useState(0);
   const startRef = useRef<number>(Date.now());
   useEffect(() => {
@@ -66,7 +68,7 @@ function PendingIndicator({ label }: { label: string }) {
       </span>
       <span>{label}</span>
       {elapsed >= 3 && (
-        <span className="text-muted-foreground/60 tabular-nums">{elapsed}초</span>
+        <span className="text-muted-foreground/60 tabular-nums">{t('elapsedSeconds', { seconds: elapsed })}</span>
       )}
     </div>
   );
@@ -78,6 +80,7 @@ function PendingIndicator({ label }: { label: string }) {
  * 표시), 완료 후엔 접어 답변에 집중. 답변(content)과 분리된 별도 영역.
  */
 function ReasoningBlock({ text, live }: { text: string; live: boolean }) {
+  const t = useTranslations('chat');
   const [open, setOpen] = useState(true);
   // 완료되면 자동 접기(스트리밍 끝난 직후 1회). live→false 전환 시.
   const wasLive = useRef(live);
@@ -94,7 +97,7 @@ function ReasoningBlock({ text, live }: { text: string; live: boolean }) {
       >
         {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         <Brain size={13} className={live ? 'animate-pulse' : ''} />
-        <span>{live ? '사고 과정 (분석 중…)' : '사고 과정'}</span>
+        <span>{live ? t('reasoning.live') : t('reasoning.done')}</span>
       </button>
       {open && (
         <div className="border-t border-border/60 px-3 py-2 text-xs leading-relaxed text-muted-foreground/90 whitespace-pre-wrap break-words max-h-60 overflow-auto">
@@ -107,6 +110,7 @@ function ReasoningBlock({ text, live }: { text: string; live: boolean }) {
 }
 
 export function MessageBubble({ message, onPlanProceed, sessionId }: Props) {
+  const t = useTranslations('chat');
   const isUser = message.role === 'user';
   const bodyRef = useRef<HTMLDivElement>(null);
 
@@ -145,7 +149,7 @@ export function MessageBubble({ message, onPlanProceed, sessionId }: Props) {
 
       <div className="flex-1 min-w-0" ref={bodyRef}>
         <div className="text-xs font-medium text-muted-foreground mb-1.5">
-          {isUser ? '나' : 'Admin Chat'}
+          {isUser ? t('you') : t('assistantName')}
           {message.createdAt && (
             <span className="ml-2 text-muted-foreground/70">
               {new Date(message.createdAt).toLocaleTimeString('ko-KR', {
@@ -181,7 +185,7 @@ export function MessageBubble({ message, onPlanProceed, sessionId }: Props) {
             {!message.content && message.heartbeats && message.heartbeats.length > 0 ? (
               <HeartbeatTimeline phases={message.heartbeats} heartbeatAt={message.heartbeatAt} />
             ) : (
-              <PendingIndicator label={message.thinkingText || '분석 중…'} />
+              <PendingIndicator label={message.thinkingText || t('analyzing')} />
             )}
           </div>
         )}
@@ -206,7 +210,7 @@ export function MessageBubble({ message, onPlanProceed, sessionId }: Props) {
             ].join(' ')}
           >
             <span className="font-semibold">
-              {message.validator.verdict === 'WARN' ? '⚠ 검증 경고' : '✗ 검증 실패'}
+              {message.validator.verdict === 'WARN' ? t('validator.warn') : t('validator.fail')}
             </span>
             <span className="ml-2">{message.validator.reason}</span>
           </div>
@@ -229,11 +233,11 @@ export function MessageBubble({ message, onPlanProceed, sessionId }: Props) {
                   title={v.chosen_sql || ''}
                 >
                   <span className="font-semibold">
-                    {ok ? '✓ 실행 검증됨' : '⚠ 검증 주의'}
+                    {ok ? t('verification.ok') : t('verification.caution')}
                   </span>
                   <span className="ml-2">
-                    후보 {v.n_valid}/{v.k}개 실행 · 결과 합의 {pct}%
-                    {v.tie ? ' · 결과 갈림(수동 확인 권장)' : ''}
+                    {t('verification.detail', { valid: v.n_valid, k: v.k, pct })}
+                    {v.tie ? t('verification.tie') : ''}
                   </span>
                 </div>
               );
@@ -252,7 +256,7 @@ export function MessageBubble({ message, onPlanProceed, sessionId }: Props) {
             ].join(' ')}
           >
             <span className="font-semibold">
-              {message.audit.verdict === 'RETRY' ? '⚠ 답변 재검증 권장' : '⚠ 수치 검토 필요'}
+              {message.audit.verdict === 'RETRY' ? t('audit.retry') : t('audit.review')}
             </span>
             <span className="ml-2">{message.audit.reason}</span>
             {message.audit.defects && message.audit.defects.length > 0 && (
@@ -263,7 +267,7 @@ export function MessageBubble({ message, onPlanProceed, sessionId }: Props) {
                     {d.body_value !== undefined && (
                       <span className="ml-1">
                         ({d.body_value}
-                        {d.ground_values && d.ground_values.length > 0 && ` ≠ 실행값 ${d.ground_values[0]}`})
+                        {d.ground_values && d.ground_values.length > 0 && t('audit.groundValue', { value: d.ground_values[0] })})
                       </span>
                     )}
                     {d.suggested_fix && <span className="ml-1 italic opacity-80">→ {d.suggested_fix}</span>}
@@ -272,7 +276,7 @@ export function MessageBubble({ message, onPlanProceed, sessionId }: Props) {
               </ul>
             )}
             <div className="mt-1.5 text-[10px] opacity-70">
-              독립 감사{message.audit.model ? ` · ${message.audit.model}` : ''} · 수치는 그대로 두고 경고만 표시
+              {t('audit.footer', { model: message.audit.model ? ` · ${message.audit.model}` : '' })}
             </div>
           </div>
         )}
@@ -308,7 +312,7 @@ export function MessageBubble({ message, onPlanProceed, sessionId }: Props) {
           <div className="mt-3 flex items-center gap-3">
             {(message.costUsd || message.durationMs) && (
               <div className="text-[11px] text-muted-foreground/80">
-                {message.costUsd && <span>비용 ${message.costUsd.toFixed(4)}</span>}
+                {message.costUsd && <span>{t('costLabel', { amount: message.costUsd.toFixed(4) })}</span>}
                 {message.costUsd && message.durationMs && <span className="mx-2">·</span>}
                 {message.durationMs && <span>{message.durationMs}ms</span>}
               </div>

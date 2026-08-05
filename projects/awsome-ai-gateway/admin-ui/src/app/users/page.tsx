@@ -1,6 +1,7 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 import { adminAPI } from '@/lib/api-client';
+import { getTranslations } from 'next-intl/server';
 import type { OrgTreeNode } from '@/types/entities';
 import { OrgTreeView } from '@/components/users/OrgTreeView';
 import { CognitoSyncButton } from '@/components/users/CognitoSyncButton';
@@ -18,6 +19,7 @@ function countOrgNodes(node: OrgTreeNode | null): Record<string, number> {
 }
 
 export default async function UsersPage() {
+  const t = await getTranslations('users');
   const orgTree = await adminAPI
     .get<OrgTreeNode>('/admin/users/tree')
     .catch(() => null);
@@ -39,12 +41,11 @@ export default async function UsersPage() {
       />
 
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold">사용자/팀 관리</h1>
+        <h1 className="text-2xl font-bold">{t('title')}</h1>
         <div className="flex items-center gap-3">
           <CognitoSyncButton />
           <p className="text-xs text-muted-foreground">
-            부서/팀/사용자 구조는 Cognito 그룹이 원천입니다. 변경이 필요하면 Cognito
-            Console 에서 그룹을 수정하세요.
+            {t('cognitoNote')}
           </p>
         </div>
       </div>

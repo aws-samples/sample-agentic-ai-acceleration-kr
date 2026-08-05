@@ -4,6 +4,7 @@
 
 
 import { useState, useEffect, useTransition } from 'react';
+import { useTranslations } from 'next-intl';
 import type { OrgTreeNode, ModelListItem } from '@/types/entities';
 import {
   forceReauthTeamAction,
@@ -24,11 +25,7 @@ interface OrgDetailPanelProps {
   node: OrgTreeNode | null;
 }
 
-const ROLE_LABEL: Record<string, string> = {
-  ADMIN: '관리자',
-  TEAM_LEADER: '팀장',
-  DEVELOPER: '개발자',
-};
+// Role labels are now i18n-driven — see t('roleLabel.ADMIN') etc.
 
 const ROLE_TONE: Record<string, BadgeTone> = {
   ADMIN: 'pink',
@@ -37,10 +34,12 @@ const ROLE_TONE: Record<string, BadgeTone> = {
 };
 
 export function OrgDetailPanel({ node }: OrgDetailPanelProps) {
+  const t = useTranslations('users');
+
   if (!node) {
     return (
       <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-        트리에서 항목을 선택하세요
+        {t('selectNodePrompt')}
       </div>
     );
   }
@@ -52,8 +51,8 @@ export function OrgDetailPanel({ node }: OrgDetailPanelProps) {
       <div>
         <h2 className="text-lg font-semibold mb-4">{node.name}</h2>
         <div className="flex items-center gap-2 text-sm mb-2">
-          <span className="text-muted-foreground">부서 수</span>
-          <span className="font-medium">{deptCount}개</span>
+          <span className="text-muted-foreground">{t('departmentCount')}</span>
+          <span className="font-medium">{t('countSuffix', { count: deptCount })}</span>
         </div>
       </div>
     );
@@ -66,8 +65,8 @@ export function OrgDetailPanel({ node }: OrgDetailPanelProps) {
       <div>
         <h2 className="text-lg font-semibold mb-4">{node.name}</h2>
         <div className="flex items-center gap-2 text-sm mb-2">
-          <span className="text-muted-foreground">팀 수</span>
-          <span className="font-medium">{teamCount}개</span>
+          <span className="text-muted-foreground">{t('teamCount')}</span>
+          <span className="font-medium">{t('countSuffix', { count: teamCount })}</span>
         </div>
       </div>
     );
@@ -119,6 +118,7 @@ function clientsKey(clients: string[]): string {
 }
 
 function UserPanel({ node }: { node: OrgTreeNode }) {
+  const t = useTranslations('users');
   const { toast } = useToast();
   // 로드용/저장용 transition 분리 — 초기 조회 중에 Apply 버튼이 스피너로 보이는 혼동 방지.
   const [isLoadPending, startLoadTransition] = useTransition();
@@ -126,7 +126,7 @@ function UserPanel({ node }: { node: OrgTreeNode }) {
 
   const email = node.meta.email ?? '-';
   const role = node.meta.role ?? null;
-  const teamName = node.meta.team_name ?? '미배정';
+  const teamName = node.meta.team_name ?? t('teamUnassigned');
 
   const [loadedSelected, setLoadedSelected] = useState<ClientId[]>([...ALL_CLIENTS]);
   const [selected, setSelected] = useState<ClientId[]>([...ALL_CLIENTS]);
@@ -173,10 +173,9 @@ function UserPanel({ node }: { node: OrgTreeNode }) {
         setSelected(sel);
         setClientsLoaded(true);
       } else {
-        // 조회 실패 시 stale 전체허용이 실제값처럼 보여 잘못된 DELETE 를 유발할 수 있으므로 명시 알림.
         toast({
           type: 'error',
-          message: '앱 접근 권한 조회 실패 — 새로고침 후 다시 시도하세요.',
+          message: t('loadErrors.appAccess'),
           auto_dismiss_ms: 5000,
         });
       }
@@ -192,7 +191,7 @@ function UserPanel({ node }: { node: OrgTreeNode }) {
       } else {
         toast({
           type: 'error',
-          message: '모델 목록 조회 실패 — 새로고침 후 다시 시도하세요.',
+          message: t('loadErrors.models'),
           auto_dismiss_ms: 5000,
         });
       }
@@ -201,10 +200,9 @@ function UserPanel({ node }: { node: OrgTreeNode }) {
         setSelectedModelAliases(m.data.modelAliases);
         setModelsLoaded(true);
       } else {
-        // 조회 실패 시 stale 빈 목록이 실제값처럼 보여 잘못된 DELETE(override 해제)를 유발할 수 있으므로 명시 알림.
         toast({
           type: 'error',
-          message: '사용자별 허용 모델 조회 실패 — 새로고침 후 다시 시도하세요.',
+          message: t('loadErrors.userModels'),
           auto_dismiss_ms: 5000,
         });
       }
@@ -327,7 +325,7 @@ function UserPanel({ node }: { node: OrgTreeNode }) {
       setLoadedBudgets(opt);
       toast({
         type: 'success',
-        message: '앱 접근 권한·예산·허용 모델 저장됨 (게이트웨이 반영까지 최대 ~5분 — VK 캐시 TTL)',
+        message: t('saveSuccess'),
         auto_dismiss_ms: 5000,
       });
     });
@@ -362,33 +360,33 @@ function UserPanel({ node }: { node: OrgTreeNode }) {
     <div>
       <h2 className="text-lg font-semibold mb-4">{node.name}</h2>
       <div className="flex items-center gap-2 text-sm mb-2">
-        <span className="text-muted-foreground">이메일</span>
+        <span className="text-muted-foreground">{t('email')}</span>
         <span className="font-medium">{email}</span>
       </div>
       <div className="flex items-center gap-2 text-sm mb-2">
-        <span className="text-muted-foreground">역할</span>
+        <span className="text-muted-foreground">{t('role')}</span>
         {role ? (
-          <Badge tone={ROLE_TONE[role] ?? 'neutral'}>{ROLE_LABEL[role] ?? role}</Badge>
+          <Badge tone={ROLE_TONE[role] ?? 'neutral'}>{t(`roleLabel.${role}` as 'roleLabel.ADMIN' | 'roleLabel.TEAM_LEADER' | 'roleLabel.DEVELOPER')}</Badge>
         ) : (
           <span className="font-medium">-</span>
         )}
       </div>
       <div className="flex items-center gap-2 text-sm mb-4">
-        <span className="text-muted-foreground">소속 팀</span>
+        <span className="text-muted-foreground">{t('teamNameLabel')}</span>
         <span className="font-medium">{teamName}</span>
       </div>
 
       <div className="border-t pt-4">
-        <p className="text-sm font-medium mb-2">앱 접근 권한</p>
+        <p className="text-sm font-medium mb-2">{t('appAccess.title')}</p>
         <p className="text-xs text-muted-foreground mb-2">
           전부 선택(또는 전체 해제) = 모든 앱 허용. 일부만 선택하면 화이트리스트로 제한됩니다.
         </p>
         {isLoadPending ? (
-          <div className="text-xs text-muted-foreground py-1 mb-3">로딩 중…</div>
+          <div className="text-xs text-muted-foreground py-1 mb-3">{t('appAccess.loading')}</div>
         ) : (
           <div
             role="group"
-            aria-label="앱 접근 권한 선택"
+            aria-label={t('appAccess.groupLabel')}
             className="glass inline-flex items-center gap-0.5 rounded-apple-md p-1 mb-3"
           >
             {CLIENT_OPTIONS.map((o) => (
@@ -411,7 +409,7 @@ function UserPanel({ node }: { node: OrgTreeNode }) {
             {CLIENT_OPTIONS.filter((o) => selected.includes(o.value)).map((o) => (
               <div key={o.value}>
                 <label className="block text-xs text-muted-foreground mb-1">
-                  {o.label} 예산 (USD/월)
+                  {o.value === 'claude-code' ? t('budgetInput.claudeCode') : o.value === 'cowork' ? t('budgetInput.cowork') : `${o.label} (USD/월)`}
                 </label>
                 <input
                   type="number"
@@ -422,7 +420,7 @@ function UserPanel({ node }: { node: OrgTreeNode }) {
                     setBudgets((prev) => ({ ...prev, [o.value]: e.target.value }))
                   }
                   disabled={busy}
-                  placeholder="미설정"
+                  placeholder={t('budgetInput.placeholder')}
                   className="glass w-full rounded-apple-sm border px-3 py-1.5 text-sm disabled:opacity-50"
                 />
               </div>
@@ -432,17 +430,16 @@ function UserPanel({ node }: { node: OrgTreeNode }) {
 
         {!isLoadPending && (
           <div className="border rounded-apple-md p-3 mb-3">
-            <p className="text-sm font-medium mb-1">사용자별 허용 모델 (팀 정책 override)</p>
+            <p className="text-sm font-medium mb-1">{t('userModels.title')}</p>
             <p className="text-xs text-muted-foreground mb-3">
-              선택 없음 = 팀 정책을 따름 (override 해제)
+              {t('userModels.hint')}
             </p>
             {!modelsLoaded ? (
-              // 정책 로드 실패 — stale 상태로 저장하지 않도록 입력 비활성화 + 명시 안내(Codex MF1).
               <div className="text-xs text-destructive py-1">
-                정책을 불러오지 못했습니다. 새로고침 후 다시 시도하세요. (저장 비활성화)
+                {t('userModels.loadFailed')}
               </div>
             ) : models.length === 0 ? (
-              <div className="text-xs text-muted-foreground py-1">활성 모델이 없습니다.</div>
+              <div className="text-xs text-muted-foreground py-1">{t('userModels.empty')}</div>
             ) : (
               <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
                 {models.map((m) => (
@@ -472,7 +469,7 @@ function UserPanel({ node }: { node: OrgTreeNode }) {
             disabled={busy || !dirty}
             onClick={handleApply}
           >
-            적용
+            {t('apply')}
           </SpinnerButton>
         </div>
       </div>
@@ -483,11 +480,13 @@ function UserPanel({ node }: { node: OrgTreeNode }) {
 // ── TEAM 상세 (강제 재인증 버튼 포함) ─────────────────────────────────────────
 
 function TeamPanel({ node }: { node: OrgTreeNode }) {
+  const t = useTranslations('users');
+  const tc = useTranslations('common');
   const { toast } = useToast();
   const [isPending, startTransition] = useTransition();
   const [confirmOpen, setConfirmOpen] = useState(false);
 
-  const leader = node.meta.leader_name ?? '미지정';
+  const leader = node.meta.leader_name ?? t('leaderUnassigned');
   const memberCount = node.meta.member_count ?? 0;
 
   const handleForceReauth = () => {
@@ -497,7 +496,7 @@ function TeamPanel({ node }: { node: OrgTreeNode }) {
       if (result.success) {
         toast({
           type: 'success',
-          message: `${result.data.revoked_count}개의 API Key가 회수되었습니다. 사용자에게 Claude Code 재실행을 안내하세요.`,
+          message: t('forceReauth.success', { count: result.data.revoked_count }),
           auto_dismiss_ms: 5000,
         });
       } else {
@@ -510,12 +509,12 @@ function TeamPanel({ node }: { node: OrgTreeNode }) {
     <div>
       <h2 className="text-lg font-semibold mb-4">{node.name}</h2>
       <div className="flex items-center gap-2 text-sm mb-2">
-        <span className="text-muted-foreground">리더</span>
+        <span className="text-muted-foreground">{t('leaderName')}</span>
         <span className="font-medium">{leader}</span>
       </div>
       <div className="flex items-center gap-2 text-sm mb-4">
-        <span className="text-muted-foreground">구성원 수</span>
-        <span className="font-medium">{memberCount}명</span>
+        <span className="text-muted-foreground">{t('memberCount')}</span>
+        <span className="font-medium">{t('memberCountValue', { count: memberCount })}</span>
       </div>
 
       <SpinnerButton
@@ -524,20 +523,19 @@ function TeamPanel({ node }: { node: OrgTreeNode }) {
         onClick={() => setConfirmOpen(true)}
         disabled={memberCount === 0}
       >
-        팀 전체 강제 재인증
+        {t('forceReauth.button')}
       </SpinnerButton>
 
       {confirmOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="bg-background border rounded-lg shadow-lg max-w-md w-full mx-4 p-6">
-            <h3 className="text-base font-semibold mb-3">팀 전체 강제 재인증</h3>
+            <h3 className="text-base font-semibold mb-3">{t('forceReauth.button')}</h3>
             <p className="text-sm text-muted-foreground mb-2">
-              <span className="font-medium text-foreground">{node.name}</span> 팀의
-              모든 활성 API Key ({memberCount}명)를 즉시 무효화합니다.
+              <span className="font-medium text-foreground">{node.name}</span>{' '}
+              {t('forceReauth.warning', { count: memberCount })}
             </p>
             <p className="text-sm text-muted-foreground mb-4">
-              사용자는 호출 시 401 을 받게 되며, Claude Code 를 재실행해야 새 Key
-              가 발급됩니다. 필요 시 사용자에게 별도로 안내해 주세요.
+              {t('forceReauth.note')}
             </p>
             <div className="flex justify-end gap-2">
               <button
@@ -546,7 +544,7 @@ function TeamPanel({ node }: { node: OrgTreeNode }) {
                 disabled={isPending}
                 className="px-3 py-1.5 text-sm rounded-md border hover:bg-muted"
               >
-                취소
+                {tc('cancel')}
               </button>
               <SpinnerButton
                 type="button"
@@ -554,7 +552,7 @@ function TeamPanel({ node }: { node: OrgTreeNode }) {
                 isLoading={isPending}
                 onClick={handleForceReauth}
               >
-                진행
+                {t('forceReauth.proceed')}
               </SpinnerButton>
             </div>
           </div>

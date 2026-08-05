@@ -3,6 +3,7 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
+import { useTranslations } from 'next-intl';
 import {
   currentCalendarMonth,
   monthsAgo,
@@ -21,6 +22,7 @@ interface PeriodSelectorProps {
  * 선택은 ?period=YYYY-MM URL 쿼리로 구동되어 서버 컴포넌트가 리렌더된다.
  */
 export function PeriodSelector({ periods, current }: PeriodSelectorProps) {
+  const t = useTranslations('dashboard');
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -38,7 +40,7 @@ export function PeriodSelector({ periods, current }: PeriodSelectorProps) {
   }
 
   if (periods.length === 0) {
-    return <span className="text-sm text-muted-foreground">표시할 기간이 없습니다</span>;
+    return <span className="text-sm text-muted-foreground">{t('noPeriods')}</span>;
   }
 
   // 드롭다운 옵션 = 이번 달/지난 달을 제외한 나머지 월(보통 과거 데이터 월).
@@ -59,7 +61,7 @@ export function PeriodSelector({ periods, current }: PeriodSelectorProps) {
   return (
     <div
       role="group"
-      aria-label="기간 선택"
+      aria-label={t('periodSelect')}
       className="glass inline-flex items-center gap-0.5 rounded-apple-md p-1"
     >
       <button
@@ -68,7 +70,7 @@ export function PeriodSelector({ periods, current }: PeriodSelectorProps) {
         aria-pressed={current === thisMonth}
         className={btn(current === thisMonth)}
       >
-        이번 달
+        {t('thisMonth')}
       </button>
       <button
         type="button"
@@ -76,13 +78,13 @@ export function PeriodSelector({ periods, current }: PeriodSelectorProps) {
         aria-pressed={current === lastMonth}
         className={btn(current === lastMonth)}
       >
-        지난 달
+        {t('lastMonth')}
       </button>
 
       {dropdownMonths.length > 0 && (
         <div className="relative">
           <select
-            aria-label="기간 선택 (월)"
+            aria-label={t('periodSelectMonth')}
             value={dropdownActive ? current : ''}
             onChange={(e) => {
               if (e.target.value) go(e.target.value);
@@ -99,7 +101,7 @@ export function PeriodSelector({ periods, current }: PeriodSelectorProps) {
             }}
           >
             <option value="" disabled>
-              기간 선택
+              {t('periodSelect')}
             </option>
             {dropdownMonths.map((p) => (
               <option key={p} value={p}>

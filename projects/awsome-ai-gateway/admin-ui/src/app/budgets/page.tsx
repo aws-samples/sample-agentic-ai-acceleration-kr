@@ -1,6 +1,7 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 import { cookies } from 'next/headers';
+import { getTranslations } from 'next-intl/server';
 import { adminAPI } from '@/lib/api-client';
 import { parseJWT } from '@/lib/auth';
 import type { BudgetSummaryItem, ModelListItem, TeamBudgetAllocation } from '@/types/entities';
@@ -10,6 +11,7 @@ import { DowngradeSection } from '@/components/budgets/DowngradeSection';
 import { RegisterScreenContext } from '@/components/chat/RegisterScreenContext';
 
 export default async function BudgetsPage() {
+  const t = await getTranslations('budgets');
   const cookieStore = cookies();
   const jwt = cookieStore.get('admin_jwt')?.value;
   const session = jwt ? parseJWT(jwt) : null;
@@ -138,7 +140,7 @@ export default async function BudgetsPage() {
       <RegisterScreenContext page="예산 관리" period={`${period} 월간`} data={contextData} />
 
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">예산 관리</h1>
+        <h1 className="text-2xl font-bold">{t('title')}</h1>
       </div>
 
       {isAdmin ? (
@@ -149,7 +151,7 @@ export default async function BudgetsPage() {
           initialAllocation={teamAllocation}
         />
       ) : (
-        <p className="text-sm text-muted-foreground">배정된 팀이 없습니다.</p>
+        <p className="text-sm text-muted-foreground">{t('noTeamAssigned')}</p>
       )}
 
       {isAdmin && teamItems.length > 0 && (

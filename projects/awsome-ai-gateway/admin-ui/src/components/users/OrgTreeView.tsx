@@ -4,6 +4,7 @@
 
 
 import { useEffect, useRef, useState } from 'react';
+import { useTranslations } from 'next-intl';
 import type { OrgTreeNode } from '@/types/entities';
 import { OrgTree } from './OrgTree';
 import { OrgDetailPanel } from './OrgDetailPanel';
@@ -15,6 +16,7 @@ interface OrgTreeViewProps {
 const EXPANDED_NODES_STORAGE_KEY = 'users:orgtree:expandedNodes';
 
 export function OrgTreeView({ root }: OrgTreeViewProps) {
+  const t = useTranslations('users');
   const [selectedNode, setSelectedNode] = useState<OrgTreeNode | null>(null);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
   const hasMountedRef = useRef(false);
@@ -71,7 +73,7 @@ export function OrgTreeView({ root }: OrgTreeViewProps) {
             onToggle={handleToggle}
           />
         ) : (
-          <p className="p-4 text-muted-foreground text-sm">조직 데이터가 없습니다</p>
+          <p className="p-4 text-muted-foreground text-sm">{t('noOrgData')}</p>
         )}
       </div>
       <div className="flex-1 p-6">

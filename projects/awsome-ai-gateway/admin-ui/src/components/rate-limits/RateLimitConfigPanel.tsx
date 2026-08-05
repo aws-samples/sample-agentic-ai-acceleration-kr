@@ -4,6 +4,7 @@
 
 
 import { useState, useEffect, useTransition } from 'react';
+import { useTranslations } from 'next-intl';
 import type { RateLimitTreeNode } from '@/types/entities';
 import { RateLimitScope } from '@/types/enums';
 import { setRateLimitAction } from '@/lib/actions/rate-limits';
@@ -16,11 +17,7 @@ interface RateLimitConfigPanelProps {
   node: RateLimitTreeNode | null;
 }
 
-const SCOPE_LABEL: Record<string, string> = {
-  GLOBAL: '전역',
-  TEAM: '팀',
-  USER: '사용자',
-};
+// SCOPE_LABEL is now resolved inside the component via translations
 
 function parsePosInt(val: string): number | null {
   const n = parseInt(val, 10);
@@ -33,7 +30,15 @@ function parsePosFloat(val: string): number | null {
 }
 
 export function RateLimitConfigPanel({ node }: RateLimitConfigPanelProps) {
+  const t = useTranslations('rateLimits');
+  const tCommon = useTranslations('common');
   const { toast } = useToast();
+
+  const SCOPE_LABEL: Record<string, string> = {
+    GLOBAL: t('scopeLabel.GLOBAL'),
+    TEAM: t('scopeLabel.TEAM'),
+    USER: t('scopeLabel.USER'),
+  };
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
@@ -78,7 +83,7 @@ export function RateLimitConfigPanel({ node }: RateLimitConfigPanelProps) {
   if (!node) {
     return (
       <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-        트리에서 노드를 선택하세요
+        {t('selectNodePrompt')}
       </div>
     );
   }
@@ -110,7 +115,7 @@ export function RateLimitConfigPanel({ node }: RateLimitConfigPanelProps) {
       if (result.success) {
         toast({
           type: 'success',
-          message: `${node.label}의 Rate Limit이 저장되었습니다.`,
+          message: t('saved', { label: node.label }),
           auto_dismiss_ms: 3000,
         });
       } else {
@@ -132,7 +137,7 @@ export function RateLimitConfigPanel({ node }: RateLimitConfigPanelProps) {
       {/* 상속 정보 */}
       {node.inherited_from && (
         <div className="mb-4 rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">
-          상위 설정 상속 중: <span className="font-medium text-foreground">{node.inherited_from}</span>
+          {t('inheritingFrom')} <span className="font-medium text-foreground">{node.inherited_from}</span>
         </div>
       )}
 
@@ -141,7 +146,7 @@ export function RateLimitConfigPanel({ node }: RateLimitConfigPanelProps) {
         <div className="mb-4 rounded-md border border-border bg-card/50 px-3 py-2.5">
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-muted-foreground">
-              실시간 RPM 사용량 (최근 {usage.window_sec}초)
+              {t('liveRpm', { seconds: usage.window_sec })}
             </span>
             <span className="num text-sm font-semibold text-foreground">
               {usage.rpm_used_total}
@@ -170,7 +175,7 @@ export function RateLimitConfigPanel({ node }: RateLimitConfigPanelProps) {
             </ul>
           )}
           {usage.rpm_used_total === 0 && (
-            <p className="mt-1 text-[11px] text-muted-foreground">최근 {usage.window_sec}초간 요청 없음</p>
+            <p className="mt-1 text-[11px] text-muted-foreground">{t('noRecentRequests', { seconds: usage.window_sec })}</p>
           )}
         </div>
       )}
@@ -184,10 +189,10 @@ export function RateLimitConfigPanel({ node }: RateLimitConfigPanelProps) {
             min={1}
             value={rpm}
             onChange={(e) => setRpm(e.target.value)}
-            placeholder={inheritedRpm ?? '제한없음'}
+            placeholder={inheritedRpm ?? t('unlimited')}
             className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           />
-          <p className="text-xs text-muted-foreground">비워두면 제한 없음</p>
+          <p className="text-xs text-muted-foreground">{t('emptyMeansUnlimited')}</p>
         </div>
 
         {/* TPM */}
@@ -198,10 +203,10 @@ export function RateLimitConfigPanel({ node }: RateLimitConfigPanelProps) {
             min={1}
             value={tpm}
             onChange={(e) => setTpm(e.target.value)}
-            placeholder={inheritedTpm ?? '제한없음'}
+            placeholder={inheritedTpm ?? t('unlimited')}
             className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           />
-          <p className="text-xs text-muted-foreground">비워두면 제한 없음</p>
+          <p className="text-xs text-muted-foreground">{t('emptyMeansUnlimited')}</p>
         </div>
 
         {/* CPM — USER/TEAM only */}
@@ -220,12 +225,12 @@ export function RateLimitConfigPanel({ node }: RateLimitConfigPanelProps) {
             step="0.0001"
             value={cpm}
             onChange={(e) => setCpm(e.target.value)}
-            placeholder="제한없음"
+            placeholder={t('unlimited')}
             disabled={!isUserOrTeam}
             className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
           />
           {!isUserOrTeam && (
-            <p className="text-xs text-muted-foreground">USER/TEAM 범위에서만 사용 가능</p>
+            <p className="text-xs text-muted-foreground">{t('scopeOnlyUserTeam')}</p>
           )}
         </div>
 
@@ -245,12 +250,12 @@ export function RateLimitConfigPanel({ node }: RateLimitConfigPanelProps) {
             step="0.0001"
             value={cph}
             onChange={(e) => setCph(e.target.value)}
-            placeholder="제한없음"
+            placeholder={t('unlimited')}
             disabled={!isUserOrTeam}
             className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
           />
           {!isUserOrTeam && (
-            <p className="text-xs text-muted-foreground">USER/TEAM 범위에서만 사용 가능</p>
+            <p className="text-xs text-muted-foreground">{t('scopeOnlyUserTeam')}</p>
           )}
         </div>
 
@@ -258,7 +263,7 @@ export function RateLimitConfigPanel({ node }: RateLimitConfigPanelProps) {
 
         <div className="flex items-center justify-end pt-2">
           <SpinnerButton type="submit" isLoading={isPending}>
-            저장
+            {tCommon('save')}
           </SpinnerButton>
         </div>
       </form>

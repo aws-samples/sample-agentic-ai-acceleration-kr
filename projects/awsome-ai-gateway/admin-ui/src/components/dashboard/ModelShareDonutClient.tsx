@@ -4,6 +4,7 @@
 
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslations } from 'next-intl';
 import {
   Chart as ChartJS,
   ArcElement,
@@ -28,6 +29,7 @@ interface Props {
 }
 
 export function ModelShareDonutClient({ initialData, teams, period, client }: Props) {
+  const t = useTranslations('dashboard');
   const [teamId, setTeamId] = useState<string>('all');
   const [data, setData] = useState<ModelShareResponse>(initialData);
   const [loading, setLoading] = useState(false);
@@ -54,7 +56,7 @@ export function ModelShareDonutClient({ initialData, teams, period, client }: Pr
         if (!cancelled) setData(next);
       })
       .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : '조회 실패');
+        if (!cancelled) setError(e instanceof Error ? e.message : t('fetchFailedShort'));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -111,12 +113,12 @@ export function ModelShareDonutClient({ initialData, teams, period, client }: Pr
     <div className="glass glass-hover rounded-apple p-5">
       <div className="flex items-start justify-between gap-3 mb-3">
         <div>
-          <div className="text-sm font-semibold tracking-tight">모델별 비용 점유율</div>
-          <div className="text-xs text-muted-foreground">기간 내 모델별 비용 비중</div>
+          <div className="text-sm font-semibold tracking-tight">{t('modelShareTitle')}</div>
+          <div className="text-xs text-muted-foreground">{t('modelShareSubtitle')}</div>
         </div>
         <div className="flex items-center gap-2">
           <label htmlFor="team-select" className="text-xs text-muted-foreground">
-            범위
+            {t('scope')}
           </label>
           <select
             id="team-select"
@@ -125,7 +127,7 @@ export function ModelShareDonutClient({ initialData, teams, period, client }: Pr
             className="rounded-apple-sm border border-input bg-background px-2 py-1 text-xs interactive focus:outline-none focus:ring-1 focus:ring-ring"
             disabled={loading}
           >
-            <option value="all">전체</option>
+            <option value="all">{t('scopeAll')}</option>
             {teams.map((team) => (
               <option key={team.id} value={team.id}>
                 {team.name}
@@ -136,12 +138,12 @@ export function ModelShareDonutClient({ initialData, teams, period, client }: Pr
       </div>
 
       {error && (
-        <p className="text-sm text-destructive mb-2">조회 실패: {error}</p>
+        <p className="text-sm text-destructive mb-2">{t('fetchFailedWith', { error })}</p>
       )}
 
       {isEmpty ? (
         <div className="flex items-center justify-center h-64 text-sm text-muted-foreground">
-          이 기간/범위에 사용 기록이 없습니다.
+          {t('noUsageForScope')}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-center">
@@ -163,10 +165,10 @@ export function ModelShareDonutClient({ initialData, teams, period, client }: Pr
                 {data.models[0] ? modelDisplay(data.models[0].model_alias, data.models[0].display_name) : ''}
               </p>
               <p className="mt-0.5 text-[10px] text-muted-foreground">
-                점유 1위 · 총 ${data.total_cost_usd.toLocaleString('en-US', {
+                {t('topShare', { total: data.total_cost_usd.toLocaleString('en-US', {
                   minimumFractionDigits: 2,
                   maximumFractionDigits: 2,
-                })}
+                }) })}
               </p>
             </div>
           </div>
