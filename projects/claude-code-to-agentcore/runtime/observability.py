@@ -43,8 +43,13 @@ def _cw():
     global _cloudwatch
     if _cloudwatch is None:
         import boto3
+        from botocore.config import Config
+        # invoke()의 finally에서 동기 호출되므로, CloudWatch 장애 시 응답 스트림
+        # 종료가 늘어지지 않도록 타임아웃을 짧게 잡고 재시도하지 않습니다.
         _cloudwatch = boto3.client(
-            "cloudwatch", region_name=os.environ.get("AWS_REGION", "us-east-1"))
+            "cloudwatch", region_name=os.environ.get("AWS_REGION", "us-east-1"),
+            config=Config(connect_timeout=2, read_timeout=2,
+                          retries={"max_attempts": 0}))
     return _cloudwatch
 
 
@@ -54,10 +59,12 @@ def observe_invocation(*, prompt: str, response: str, model: str,
                        tools_used: list[str] | None = None, error: str | None = None):
     """호출 1건의 메트릭·gen_ai 스팬·페이로드 로그를 기록. 스트리밍 종료(finally) 시점에 호출."""
     tools_used = tools_used or []
-    input_tokens = (usage.get("input_tokens", 0)
-                    + usage.get("cache_creation_input_tokens", 0)
-                    + usage.get("cache_read_input_tokens", 0))
-    output_tokens = usage.get("output_tokens", 0)
+    # usage 필드가 null로 올 수도 있으므로 `or 0`으로 방어 (finally에서 호출되는
+    # 함수라 여기서 예외가 새면 원래 예외를 가리거나 정상 응답 종료를 깨뜨림).
+    input_tokens = ((usage.get("input_tokens") or 0)
+                    + (usage.get("cache_creation_input_tokens") or 0)
+                    + (usage.get("cache_read_input_tokens") or 0))
+    output_tokens = usage.get("output_tokens") or 0
 
     # GenAI Observability 콘솔의 트레이스 상세에서 입출력을 보여주는 gen_ai 스팬.
     try:

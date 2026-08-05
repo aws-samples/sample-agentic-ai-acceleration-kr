@@ -143,6 +143,10 @@ async def invoke(payload: dict):
                     result = msg
                     if msg.is_error and not error:
                         error = f"result.subtype={msg.subtype}"
+    except GeneratorExit:
+        # 클라이언트가 스트림을 중단한 경우 — 정상 호출로 집계되지 않도록 표시.
+        error = "client_disconnect"
+        raise
     except Exception as e:
         error = repr(e)
         raise
