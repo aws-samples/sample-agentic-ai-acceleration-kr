@@ -3,6 +3,7 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 import { useMemo } from 'react';
+import { useTranslations } from 'next-intl';
 import {
   Chart as ChartJS,
   ArcElement,
@@ -24,6 +25,7 @@ interface Props {
 }
 
 export function ClientShareDonutClient({ data }: Props) {
+  const t = useTranslations('dashboard');
   const chartData = useMemo(
     () => ({
       labels: data.clients.map((c) => labelFor(c.client)),
@@ -73,7 +75,7 @@ export function ClientShareDonutClient({ data }: Props) {
   if (!data.clients.length) {
     return (
       <div className="flex items-center justify-center h-64 text-sm text-muted-foreground">
-        이 기간에 사용 기록이 없습니다.
+        {t('noUsageForPeriod')}
       </div>
     );
   }

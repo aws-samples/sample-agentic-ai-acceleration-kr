@@ -16,6 +16,7 @@ import {
   CalendarClock,
 } from 'lucide-react';
 import { Suspense } from 'react';
+import { getTranslations } from 'next-intl/server';
 import {
   fetchDashboardSummary,
   fetchModelShare,
@@ -82,6 +83,7 @@ function computeDailyAvg(period: string, totalCost: number): {
 }
 
 async function DashboardKPIs({ period, client }: { period: string; client: string }) {
+  const t = await getTranslations('dashboard');
   const [budgetResult, keysResult, modelsResult, summaryResult] = await Promise.allSettled([
     adminAPI.get<BudgetSummaryResponse>('/admin/budgets/summary', { period }),
     adminAPI.get<KeyCountResponse>('/admin/keys/count', { status: 'ACTIVE' }),
@@ -121,36 +123,36 @@ async function DashboardKPIs({ period, client }: { period: string; client: strin
       {/* ── 비용 & 예산 ── */}
       <section className="space-y-3">
         <h2 className="px-1 text-xs font-bold uppercase tracking-[0.12em] text-muted-foreground">
-          비용 &amp; 예산
+          {t('costAndBudget')}
         </h2>
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
           <KPICard
-            title="이번 달 사용량"
-            value={fmtUsd2(summary.total_cost_usd ?? totalUsageUsd)}
+            title={t('usageThisMonth')}
+            value={fmtUsd2(summary?.total_cost_usd ?? totalUsageUsd)}
             icon={<DollarSign size={18} aria-hidden="true" />}
-            description="USD 기준 당월 누적 비용"
+            description={t('usageThisMonthDesc')}
           />
           <KPICard
-            title="예산 소진율"
+            title={t('budgetUtilization')}
             value={`${budgetUtilization.toFixed(1)}%`}
             icon={<BarChart3 size={18} aria-hidden="true" />}
             alertLevel={alertLevel}
-            description="전체 예산 대비 사용 비율"
+            description={t('budgetUtilizationDesc')}
           />
           <KPICard
-            title="사용자당 평균비용"
+            title={t('avgCostPerUser')}
             value={summary ? fmtUsd2(summary.cost_per_user_usd) : '—'}
             icon={<Users size={18} aria-hidden="true" />}
-            description={summary ? `이번달 활성 사용자 ${summary.active_users}명 기준` : '집계 실패'}
+            description={summary ? t('avgCostPerUserDesc', { count: summary.active_users }) : t('fetchFailed')}
           />
           <KPICard
-            title="일 평균 소비"
+            title={t('dailyAvg')}
             value={summary ? fmtUsd2(dailyAvg) : '—'}
             icon={<CalendarClock size={18} aria-hidden="true" />}
             description={
               projection != null
-                ? `월말 예상 ${fmtUsd2(projection)} (선형 추정)`
-                : '경과일 기준 일평균'
+                ? t('dailyAvgProjection', { amount: fmtUsd2(projection) })
+                : t('dailyAvgDesc')
             }
           />
         </div>
@@ -159,32 +161,32 @@ async function DashboardKPIs({ period, client }: { period: string; client: strin
       {/* ── 사용량 & 시스템 ── */}
       <section className="space-y-3">
         <h2 className="px-1 text-xs font-bold uppercase tracking-[0.12em] text-muted-foreground">
-          사용량 &amp; 시스템
+          {t('usageAndSystem')}
         </h2>
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
           <KPICard
-            title="총 요청 수"
+            title={t('totalRequests')}
             value={summary ? summary.total_requests.toLocaleString() : '—'}
             icon={<Activity size={18} aria-hidden="true" />}
-            description="이번달 SUCCESS 요청"
+            description={t('totalRequestsDesc')}
           />
           <KPICard
-            title="총 토큰 수"
+            title={t('totalTokens')}
             value={summary ? formatTokens(summary.total_tokens) : '—'}
             icon={<Coins size={18} aria-hidden="true" />}
-            description="입력+출력+캐시 합계"
+            description={t('totalTokensDesc')}
           />
           <KPICard
-            title="활성 API Keys"
+            title={t('activeKeys')}
             value={activeKeys}
             icon={<Key size={18} aria-hidden="true" />}
-            description="현재 활성 상태인 가상 키 수"
+            description={t('activeKeysDesc')}
           />
           <KPICard
-            title="활성 모델"
+            title={t('activeModels')}
             value={activeModels}
             icon={<Cpu size={18} aria-hidden="true" />}
-            description="현재 사용 가능한 모델 수"
+            description={t('activeModelsDesc')}
           />
         </div>
       </section>
@@ -193,6 +195,7 @@ async function DashboardKPIs({ period, client }: { period: string; client: strin
 }
 
 async function TrendAndDistribution({ period, client }: { period: string; client: string }) {
+  const t = await getTranslations('dashboard');
   const [analyticsResult, shareResult, teamsResult] = await Promise.allSettled([
     fetchAnalytics(period, 'team'),
     fetchModelShare(period, 'all', client),
@@ -210,7 +213,7 @@ async function TrendAndDistribution({ period, client }: { period: string; client
   return (
     <section className="space-y-3">
       <h2 className="px-1 text-xs font-bold uppercase tracking-[0.12em] text-muted-foreground">
-        추이 &amp; 분포
+        {t('trendAndDistribution')}
       </h2>
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.6fr_1fr]">
         <CostTrendCard trends={analytics.trends ?? []} />
@@ -221,6 +224,7 @@ async function TrendAndDistribution({ period, client }: { period: string; client
 }
 
 async function TeamUserRanking({ period, client }: { period: string; client: string }) {
+  const t = await getTranslations('dashboard');
   // §60.9: 팀·사용자 모두 실제 비용(usage_logs SUCCESS+KST) 기준으로 통일 — 예산
   // 설정 여부와 무관히 진짜 top spender 를 보여준다(기존 budgets/summary 소스는
   // 예산설정 대상만 포함해 누락 위험). 예산 소진율(%)은 budgets/summary 에서 보강.
@@ -258,18 +262,18 @@ async function TeamUserRanking({ period, client }: { period: string; client: str
   return (
     <section className="space-y-3">
       <h2 className="px-1 text-xs font-bold uppercase tracking-[0.12em] text-muted-foreground">
-        팀 &amp; 사용자 랭킹
+        {t('teamUserRanking')}
       </h2>
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <TopSpendTable
-          title="Top 팀 by 비용"
-          subtitle="이번 달 상위 5개 팀 (실제 사용 비용)"
+          title={t('topTeamByCost')}
+          subtitle={t('topTeamByCostSubtitle')}
           rows={teamRows}
           accentVar="var(--chart-1)"
         />
         <TopSpendTable
-          title="Top 사용자 by 비용"
-          subtitle="이번 달 상위 5명 (실제 사용 비용)"
+          title={t('topUserByCost')}
+          subtitle={t('topUserByCostSubtitle')}
           rows={userRows}
           accentVar="var(--chart-2)"
         />
@@ -279,12 +283,13 @@ async function TeamUserRanking({ period, client }: { period: string; client: str
 }
 
 async function ClientDistribution({ period }: { period: string }) {
+  const t = await getTranslations('dashboard');
   const share = await fetchClientShare(period).catch(() => null);
   const data: ClientShareResponse = share ?? { period, total_cost_usd: 0, clients: [] };
   return (
     <section className="space-y-3">
       <h2 className="px-1 text-xs font-bold uppercase tracking-[0.12em] text-muted-foreground">
-        앱별 비용 점유율 (Claude Code · Cowork · Codex)
+        {t('clientCostShare')}
       </h2>
       <div className="glass glass-hover rounded-apple p-5">
         <ClientShareDonutClient data={data} />
@@ -309,10 +314,12 @@ export default async function DashboardPage({
   const rawClient = searchParams?.client;
   const client = rawClient && ALLOWED_CLIENTS.includes(rawClient) ? rawClient : 'all';
 
+  const t = await getTranslations('dashboard');
+
   return (
     <div className="space-y-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-bold tracking-tight">대시보드</h1>
+        <h1 className="text-2xl font-bold tracking-tight">{t('title')}</h1>
         <div className="flex flex-wrap items-center gap-2">
           <ClientFilter current={client} />
           <PeriodSelector periods={periods} current={period} />

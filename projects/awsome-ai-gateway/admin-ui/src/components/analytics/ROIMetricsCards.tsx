@@ -1,5 +1,6 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
+import { getTranslations } from 'next-intl/server';
 import type { AnalyticsFilterForm } from '@/types/api';
 import { adminAPI } from '@/lib/api-client';
 import { buildAnalyticsQuery } from '@/lib/utils/analyticsQuery';
@@ -41,6 +42,7 @@ function MetricCard({ label, value, description }: MetricCardProps) {
 }
 
 export async function ROIMetricsCards({ filter, latestMonth }: ROIMetricsCardsProps) {
+  const t = await getTranslations('analytics');
   const data = await adminAPI
     .get<AnalyticsAPIResponse>('/admin/analytics', buildAnalyticsQuery(filter, latestMonth))
     .catch(() => null);
@@ -69,7 +71,7 @@ export async function ROIMetricsCards({ filter, latestMonth }: ROIMetricsCardsPr
       description: '기간 내 소비된 총 토큰 수',
     },
     {
-      label: '총 비용',
+      label: t('totalCost'),
       value: `$${totalCost.toFixed(4)}`,
       description: '기간 내 총 USD 비용',
     },

@@ -4,6 +4,7 @@
 
 
 import { Fragment, useMemo, useState } from 'react';
+import { useTranslations } from 'next-intl';
 import { ChevronRight, ChevronDown } from 'lucide-react';
 import type { BudgetSummaryItem } from '@/types/entities';
 import { AlertLevel, BudgetScope } from '@/types/enums';
@@ -26,23 +27,17 @@ type DialogTarget = {
 
 const UNASSIGNED_KEY = '__unassigned__';
 
-function AlertBadge({ level }: { level: (typeof AlertLevel)[keyof typeof AlertLevel] }) {
+function AlertBadge({ level, labels }: { level: (typeof AlertLevel)[keyof typeof AlertLevel]; labels: Record<string, string> }) {
   const tones: Record<string, BadgeTone> = {
     [AlertLevel.NORMAL]: 'teal',
     [AlertLevel.WARNING]: 'amber',
     [AlertLevel.CRITICAL]: 'pink',
   };
-  const labels: Record<string, string> = {
-    [AlertLevel.NORMAL]: '정상',
-    [AlertLevel.WARNING]: '경고',
-    [AlertLevel.CRITICAL]: '위험',
-  };
   return <Badge tone={tones[level] ?? 'neutral'}>{labels[level] ?? level}</Badge>;
 }
 
-function TypeBadge({ type }: { type: (typeof BudgetScope)[keyof typeof BudgetScope] }) {
-  const label = type === BudgetScope.TEAM ? '팀' : '사용자';
-  return <Badge tone={type === BudgetScope.TEAM ? 'sky' : 'neutral'}>{label}</Badge>;
+function TypeBadge({ type, labels }: { type: (typeof BudgetScope)[keyof typeof BudgetScope]; labels: Record<string, string> }) {
+  return <Badge tone={type === BudgetScope.TEAM ? 'sky' : 'neutral'}>{labels[type] ?? type}</Badge>;
 }
 
 function UsageBar({
@@ -70,10 +65,21 @@ function UsageBar({
 }
 
 export function BudgetSummaryTable({ items, isAdmin }: BudgetSummaryTableProps) {
+  const t = useTranslations('budgets');
   const [selectedItem, setSelectedItem] = useState<DialogTarget | null>(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [showInactive, setShowInactive] = useState(false);
+
+  const alertLabels: Record<string, string> = {
+    [AlertLevel.NORMAL]: t('alertLevels.NORMAL'),
+    [AlertLevel.WARNING]: t('alertLevels.WARNING'),
+    [AlertLevel.CRITICAL]: t('alertLevels.CRITICAL'),
+  };
+  const typeLabels: Record<string, string> = {
+    [BudgetScope.TEAM]: t('scope.TEAM'),
+    [BudgetScope.USER]: t('scope.USER'),
+  };
 
   const hasInactive = items.some(i => i.is_active === false);
   const filteredItems = showInactive ? items : items.filter(i => i.is_active !== false);
@@ -126,10 +132,10 @@ export function BudgetSummaryTable({ items, isAdmin }: BudgetSummaryTableProps) 
         </div>
       </Td>
       <Td>
-        <TypeBadge type={user.target_type} />
+        <TypeBadge type={user.target_type} labels={typeLabels} />
       </Td>
       <Td numeric>
-        {user.limit != null ? `$${user.limit.toFixed(2)}` : <span className="text-muted-foreground italic">팀 예산 적용</span>}
+        {user.limit != null ? `$${user.limit.toFixed(2)}` : <span className="text-muted-foreground italic">{t('teamBudgetApplied')}</span>}
       </Td>
       <Td numeric>${user.used.toFixed(2)}</Td>
       <Td numeric>
@@ -150,7 +156,7 @@ export function BudgetSummaryTable({ items, isAdmin }: BudgetSummaryTableProps) 
         </div>
       </Td>
       <Td>
-        <AlertBadge level={user.alert_level} />
+        <AlertBadge level={user.alert_level} labels={alertLabels} />
       </Td>
       {isAdmin && (
         <Td>
@@ -158,7 +164,7 @@ export function BudgetSummaryTable({ items, isAdmin }: BudgetSummaryTableProps) 
             onClick={() => handleOpenDialog(user)}
             className="inline-flex items-center justify-center rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
-            예산 설정
+            {t('setBudget')}
           </button>
         </Td>
       )}
@@ -176,7 +182,7 @@ export function BudgetSummaryTable({ items, isAdmin }: BudgetSummaryTableProps) 
               onChange={e => setShowInactive(e.target.checked)}
               className="h-3.5 w-3.5 rounded border-border"
             />
-            비활성 팀/유저 포함
+            {t('includeInactive')}
           </label>
         </div>
       )}
@@ -184,19 +190,19 @@ export function BudgetSummaryTable({ items, isAdmin }: BudgetSummaryTableProps) 
         <Table>
           <THead>
             <Tr>
-              <Th>대상명</Th>
-              <Th>타입</Th>
-              <Th numeric>최대 예산</Th>
-              <Th numeric>사용량</Th>
-              <Th numeric>남은 예산</Th>
-              <Th className="min-w-[120px]">사용률</Th>
-              <Th>상태</Th>
-              {isAdmin && <Th>액션</Th>}
+              <Th>{t('targetName')}</Th>
+              <Th>{t('type')}</Th>
+              <Th numeric>{t('maxBudget')}</Th>
+              <Th numeric>{t('used')}</Th>
+              <Th numeric>{t('remainingBudget')}</Th>
+              <Th className="min-w-[120px]">{t('usageRate')}</Th>
+              <Th>{t('status')}</Th>
+              {isAdmin && <Th>{t('actions')}</Th>}
             </Tr>
           </THead>
           <TBody>
             {isEmpty ? (
-              <TEmpty colSpan={colCount}>예산 데이터가 없습니다.</TEmpty>
+              <TEmpty colSpan={colCount}>{t('noData')}</TEmpty>
             ) : (
               <>
                 {teamRows.map((team) => {
@@ -216,8 +222,8 @@ export function BudgetSummaryTable({ items, isAdmin }: BudgetSummaryTableProps) 
                               aria-label={
                                 hasMembers
                                   ? isOpen
-                                    ? `${team.target_name} 접기`
-                                    : `${team.target_name} 펼치기`
+                                    ? t('collapse', { name: team.target_name })
+                                    : t('expand', { name: team.target_name })
                                   : undefined
                               }
                               className={`flex h-5 w-5 items-center justify-center rounded ${
@@ -241,10 +247,10 @@ export function BudgetSummaryTable({ items, isAdmin }: BudgetSummaryTableProps) 
                           </div>
                         </Td>
                         <Td>
-                          <TypeBadge type={team.target_type} />
+                          <TypeBadge type={team.target_type} labels={typeLabels} />
                         </Td>
                         <Td numeric>
-                          {team.limit != null ? `$${team.limit.toFixed(2)}` : <span className="text-muted-foreground italic">미설정</span>}
+                          {team.limit != null ? `$${team.limit.toFixed(2)}` : <span className="text-muted-foreground italic">{t('notSet')}</span>}
                         </Td>
                         <Td numeric>${team.used.toFixed(2)}</Td>
                         <Td numeric>
@@ -265,7 +271,7 @@ export function BudgetSummaryTable({ items, isAdmin }: BudgetSummaryTableProps) 
                           </div>
                         </Td>
                         <Td>
-                          <AlertBadge level={team.alert_level} />
+                          <AlertBadge level={team.alert_level} labels={alertLabels} />
                         </Td>
                         {isAdmin && (
                           <Td>
@@ -273,7 +279,7 @@ export function BudgetSummaryTable({ items, isAdmin }: BudgetSummaryTableProps) 
                               onClick={() => handleOpenDialog(team)}
                               className="inline-flex items-center justify-center rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                             >
-                              예산 설정
+                              {t('setBudget')}
                             </button>
                           </Td>
                         )}
@@ -294,7 +300,7 @@ export function BudgetSummaryTable({ items, isAdmin }: BudgetSummaryTableProps) 
                               type="button"
                               onClick={() => toggle(UNASSIGNED_KEY)}
                               aria-expanded={isOpen}
-                              aria-label={isOpen ? '팀 미배정 접기' : '팀 미배정 펼치기'}
+                              aria-label={isOpen ? t('collapseUnassigned') : t('expandUnassigned')}
                               className="flex h-5 w-5 items-center justify-center rounded hover:bg-muted text-muted-foreground"
                             >
                               {isOpen ? (
@@ -303,7 +309,7 @@ export function BudgetSummaryTable({ items, isAdmin }: BudgetSummaryTableProps) 
                                 <ChevronRight size={14} />
                               )}
                             </button>
-                            <span className="text-muted-foreground">팀 미배정</span>
+                            <span className="text-muted-foreground">{t('unassigned')}</span>
                             <span className="text-xs text-muted-foreground">
                               ({unassignedUsers.length})
                             </span>

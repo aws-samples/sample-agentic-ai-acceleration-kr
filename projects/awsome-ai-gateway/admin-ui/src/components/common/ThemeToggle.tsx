@@ -3,17 +3,19 @@
 'use client';
 
 import { useTheme } from 'next-themes';
+import { useTranslations } from 'next-intl';
 import { Sun, Moon, Laptop } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 const OPTIONS = [
-  { value: 'light', label: '라이트', icon: Sun },
-  { value: 'dark', label: '다크', icon: Moon },
-  { value: 'system', label: '시스템', icon: Laptop },
+  { value: 'light', key: 'light' as const, icon: Sun },
+  { value: 'dark', key: 'dark' as const, icon: Moon },
+  { value: 'system', key: 'system' as const, icon: Laptop },
 ] as const;
 
 export function ThemeToggle() {
   const { theme, setTheme } = useTheme();
+  const t = useTranslations('common.theme');
   const [mounted, setMounted] = useState(false);
 
   // hydration mismatch 방지: client mount 후에만 active state 표시
@@ -23,10 +25,11 @@ export function ThemeToggle() {
     <div
       className="flex items-center gap-1 rounded-md border border-sidebar-border bg-sidebar-background p-1"
       role="radiogroup"
-      aria-label="테마 선택"
+      aria-label={t('label')}
     >
-      {OPTIONS.map(({ value, label, icon: Icon }) => {
+      {OPTIONS.map(({ value, key, icon: Icon }) => {
         const active = mounted && theme === value;
+        const label = t(key);
         return (
           <button
             key={value}

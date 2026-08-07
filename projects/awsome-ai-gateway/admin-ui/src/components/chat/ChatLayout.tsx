@@ -3,6 +3,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useTranslations } from 'next-intl';
 import { Send, Loader2, StopCircle, MessageSquarePlus } from 'lucide-react';
 import { createSession, getHistory } from './api';
 import { MessageList } from './MessageList';
@@ -24,6 +25,7 @@ export interface ChatLayoutProps {
 }
 
 export function ChatLayout({ variant = 'page', mode = 'quick' }: ChatLayoutProps) {
+  const t = useTranslations('chat');
   // 분할뷰 패널 안에서 쓰일 땐 "지금 보는 화면" 컨텍스트를 동봉. Provider 밖
   // (/chat 풀페이지)이면 null → 컨텍스트 없이 기존 동작.
   const chatPanel = useChatPanelOptional();
@@ -50,7 +52,7 @@ export function ChatLayout({ variant = 'page', mode = 'quick' }: ChatLayoutProps
           sessionStorage.setItem(storeKey, s.session_id);
           setSessionId(s.session_id);
         })
-        .catch((e) => setError(`세션 생성 실패: ${e.message}`));
+        .catch((e) => setError(t('sessionCreateFailed', { error: e.message })));
 
     if (!saved) {
       startFresh();
@@ -150,7 +152,7 @@ export function ChatLayout({ variant = 'page', mode = 'quick' }: ChatLayoutProps
       setMessages([]);
       setInput('');
     } catch (e) {
-      setError(`새 대화 생성 실패: ${e instanceof Error ? e.message : String(e)}`);
+      setError(t('newChatFailed', { error: e instanceof Error ? e.message : String(e) }));
     }
   }, [isStreaming, mode]);
 
@@ -172,16 +174,16 @@ export function ChatLayout({ variant = 'page', mode = 'quick' }: ChatLayoutProps
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-base font-semibold">
-              {mode === 'deep' ? 'BI Insight' : 'Quick Chat'}
+              {mode === 'deep' ? t('biInsight') : t('quickChat')}
             </h1>
             <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
-              {mode === 'deep' ? '심층 분석' : '즉답'}
+              {mode === 'deep' ? t('deepAnalysis') : t('quickAnswer')}
             </span>
           </div>
           <p className="text-xs text-muted-foreground">
             {mode === 'deep'
-              ? '계획 수립 → 다단계 분석 → 교차 검증 → 인사이트 · 5-agent powered by Bedrock Claude'
-              : '5-agent (Orchestrator + SQL + Code + Validator + Viz) · powered by Bedrock Claude'}
+              ? t('deepDescription')
+              : t('quickDescription')}
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -190,11 +192,11 @@ export function ChatLayout({ variant = 'page', mode = 'quick' }: ChatLayoutProps
               type="button"
               onClick={handleNewChat}
               disabled={isStreaming}
-              title="새 대화 시작 (기존 대화는 보존됩니다)"
+              title={t('newChatTooltip')}
               className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <MessageSquarePlus size={14} />
-              새 대화
+              {t('newChat')}
             </button>
           )}
           {sessionId && (
@@ -241,7 +243,7 @@ export function ChatLayout({ variant = 'page', mode = 'quick' }: ChatLayoutProps
                 handleSubmit(input);
               }
             }}
-            placeholder="자연어로 질문하세요. Enter 로 전송, Shift+Enter 로 줄바꿈."
+            placeholder={t('inputPlaceholder')}
             rows={2}
             disabled={!sessionId}
             className="flex-1 resize-none rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
@@ -251,7 +253,7 @@ export function ChatLayout({ variant = 'page', mode = 'quick' }: ChatLayoutProps
               type="button"
               onClick={cancel}
               className="flex h-10 w-10 items-center justify-center rounded-md border border-border bg-card hover:bg-accent transition-colors"
-              aria-label="취소"
+              aria-label={t('cancelButton')}
             >
               <StopCircle size={16} />
             </button>
@@ -260,7 +262,7 @@ export function ChatLayout({ variant = 'page', mode = 'quick' }: ChatLayoutProps
               type="submit"
               disabled={!input.trim() || !sessionId}
               className="flex h-10 w-10 items-center justify-center rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              aria-label="전송"
+              aria-label={t('sendButton')}
             >
               {sessionId ? <Send size={16} /> : <Loader2 size={16} className="animate-spin" />}
             </button>

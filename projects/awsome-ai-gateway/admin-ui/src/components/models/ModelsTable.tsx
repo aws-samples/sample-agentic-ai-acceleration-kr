@@ -4,6 +4,7 @@
 
 
 import { useState, useTransition } from 'react';
+import { useTranslations } from 'next-intl';
 import type { ModelListItem } from '@/types/entities';
 import { activateModelAction } from '@/lib/actions/models';
 import { useToast } from '@/components/common/ToastProvider';
@@ -26,8 +27,8 @@ function ProviderBadge({ provider }: { provider: string }) {
   return <Badge tone={toneMap[provider.toLowerCase()] ?? 'neutral'}>{provider}</Badge>;
 }
 
-function StatusBadge({ isActive }: { isActive: boolean }) {
-  return <Badge tone={isActive ? 'teal' : 'neutral'}>{isActive ? '활성' : '비활성'}</Badge>;
+function StatusBadge({ isActive, activeLabel, inactiveLabel }: { isActive: boolean; activeLabel: string; inactiveLabel: string }) {
+  return <Badge tone={isActive ? 'teal' : 'neutral'}>{isActive ? activeLabel : inactiveLabel}</Badge>;
 }
 
 function formatNumber(n: number): string {
@@ -35,6 +36,7 @@ function formatNumber(n: number): string {
 }
 
 export function ModelsTable({ models }: ModelsTableProps) {
+  const t = useTranslations('models');
   const { toast } = useToast();
   const [isPending, startTransition] = useTransition();
   const [selectedModel, setSelectedModel] = useState<ModelListItem | null>(null);
@@ -57,7 +59,7 @@ export function ModelsTable({ models }: ModelsTableProps) {
       if (result.success) {
         toast({
           type: 'success',
-          message: `${model.alias} 모델이 활성화되었습니다.`,
+          message: t('activateSuccess', { alias: model.alias }),
           auto_dismiss_ms: 3000,
         });
       } else {
@@ -77,21 +79,21 @@ export function ModelsTable({ models }: ModelsTableProps) {
           <THead>
             <Tr>
               <Th>Alias</Th>
-              <Th>표시 이름</Th>
+              <Th>{t('displayName')}</Th>
               <Th>Provider</Th>
               <Th>Model ID</Th>
-              <Th numeric>입력단가</Th>
-              <Th numeric>출력단가</Th>
-              <Th numeric>캐시 5min</Th>
-              <Th numeric>캐시 1h</Th>
-              <Th numeric>캐시 읽기</Th>
-              <Th>상태</Th>
-              <Th>액션</Th>
+              <Th numeric>{t('inputPriceShort')}</Th>
+              <Th numeric>{t('outputPriceShort')}</Th>
+              <Th numeric>{t('cache5min')}</Th>
+              <Th numeric>{t('cache1h')}</Th>
+              <Th numeric>{t('cacheRead')}</Th>
+              <Th>{t('status')}</Th>
+              <Th>{t('actions')}</Th>
             </Tr>
           </THead>
           <TBody>
             {models.length === 0 ? (
-              <TEmpty colSpan={11}>등록된 모델이 없습니다.</TEmpty>
+              <TEmpty colSpan={11}>{t('noModels')}</TEmpty>
             ) : (
               models.map((model) => (
                 <Tr key={model.alias}>
@@ -126,7 +128,7 @@ export function ModelsTable({ models }: ModelsTableProps) {
                       : '—'}
                   </Td>
                   <Td>
-                    <StatusBadge isActive={model.is_active} />
+                    <StatusBadge isActive={model.is_active} activeLabel={t('active')} inactiveLabel={t('inactive')} />
                   </Td>
                   <Td>
                     <div className="flex items-center gap-2">
@@ -134,14 +136,14 @@ export function ModelsTable({ models }: ModelsTableProps) {
                         onClick={() => handleEdit(model)}
                         className="inline-flex items-center justify-center rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                       >
-                        수정
+                        {t('edit')}
                       </button>
                       {model.is_active ? (
                         <button
                           onClick={() => handleDeactivate(model)}
                           className="inline-flex items-center justify-center rounded-md border border-destructive/30 bg-background px-3 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/10 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                         >
-                          비활성화
+                          {t('deactivate')}
                         </button>
                       ) : (
                         <button
@@ -149,7 +151,7 @@ export function ModelsTable({ models }: ModelsTableProps) {
                           disabled={isPending}
                           className="inline-flex items-center justify-center rounded-md border border-primary/40 bg-background px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
                         >
-                          활성화
+                          {t('activate')}
                         </button>
                       )}
                     </div>

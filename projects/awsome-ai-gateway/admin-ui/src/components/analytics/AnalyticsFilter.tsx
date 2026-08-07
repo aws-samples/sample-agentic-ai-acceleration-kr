@@ -3,6 +3,7 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 import { useRouter, usePathname } from 'next/navigation';
+import { useTranslations } from 'next-intl';
 import type { AnalyticsFilterForm } from '@/types/api';
 import type { GroupByType } from '@/types/enums';
 import { currentCalendarMonth, monthsAgo, toKoreanMonthLabel } from '@/lib/utils/period';
@@ -15,15 +16,16 @@ interface AnalyticsFilterProps {
   currentMonth: string;
 }
 
-const GROUP_BY_OPTIONS: { value: GroupByType; label: string }[] = [
-  { value: 'model', label: '모델별' },
-  { value: 'team', label: '팀별' },
-  { value: 'user', label: '사용자별' },
-];
-
 export function AnalyticsFilter({ defaultValue, periods, currentMonth }: AnalyticsFilterProps) {
+  const t = useTranslations('analytics');
   const router = useRouter();
   const pathname = usePathname();
+
+  const GROUP_BY_OPTIONS: { value: GroupByType; label: string }[] = [
+    { value: 'model', label: t('groupByOptions.model') },
+    { value: 'team', label: t('groupByOptions.team') },
+    { value: 'user', label: t('groupByOptions.user') },
+  ];
   const isCustom = defaultValue.period === 'custom';
   const thisMonth = currentCalendarMonth();
   const lastMonth = monthsAgo(1);
@@ -79,7 +81,7 @@ export function AnalyticsFilter({ defaultValue, periods, currentMonth }: Analyti
     <div className="flex flex-wrap items-end gap-4 glass rounded-apple p-4">
       {/* 기간 선택 — [이번 달][지난 달][기간선택 ▾][직접 입력] */}
       <div className="flex flex-col gap-1.5">
-        <label className="text-xs font-medium text-muted-foreground">기간</label>
+        <label className="text-xs font-medium text-muted-foreground">{t('period')}</label>
         <div className="glass inline-flex items-center gap-0.5 rounded-apple-md p-1">
           <button
             type="button"
@@ -136,7 +138,7 @@ export function AnalyticsFilter({ defaultValue, periods, currentMonth }: Analyti
         <div className="flex items-end gap-2">
           <div className="flex flex-col gap-1.5">
             <label htmlFor="start_date" className="text-xs font-medium text-muted-foreground">
-              시작일
+              {t('startDate')}
             </label>
             <input
               id="start_date"
@@ -149,7 +151,7 @@ export function AnalyticsFilter({ defaultValue, periods, currentMonth }: Analyti
           <span className="mb-2 text-muted-foreground">~</span>
           <div className="flex flex-col gap-1.5">
             <label htmlFor="end_date" className="text-xs font-medium text-muted-foreground">
-              종료일
+              {t('endDate')}
             </label>
             <input
               id="end_date"
@@ -165,7 +167,7 @@ export function AnalyticsFilter({ defaultValue, periods, currentMonth }: Analyti
       {/* 그룹 기준 */}
       <div className="flex flex-col gap-1.5">
         <label htmlFor="group_by" className="text-xs font-medium text-muted-foreground">
-          그룹 기준
+          {t('groupBy')}
         </label>
         <select
           id="group_by"

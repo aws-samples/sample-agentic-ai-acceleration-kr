@@ -4,9 +4,11 @@
 
 
 import { useState } from 'react';
+import { useTranslations } from 'next-intl';
 import { CreateModelDialog } from './CreateModelDialog';
 
 export function CreateModelButton() {
+  const t = useTranslations('models');
   const [isOpen, setIsOpen] = useState(false);
 
   return (
@@ -15,7 +17,7 @@ export function CreateModelButton() {
         onClick={() => setIsOpen(true)}
         className="inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors bg-primary text-primary-foreground shadow hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
       >
-        + 모델 추가
+        {t('addModelButton')}
       </button>
       <CreateModelDialog isOpen={isOpen} onClose={() => setIsOpen(false)} />
     </>

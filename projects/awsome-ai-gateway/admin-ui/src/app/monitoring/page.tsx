@@ -1,6 +1,7 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 import { Suspense } from 'react';
+import { getTranslations } from 'next-intl/server';
 import { SkeletonCard } from '@/components/common/SkeletonCard';
 import {
   fetchMonitoringOverview,
@@ -47,9 +48,10 @@ async function EventsSection() {
 }
 
 export default async function MonitoringPage() {
+  const t = await getTranslations('monitoring');
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">실시간 모니터링</h1>
+      <h1 className="text-2xl font-bold">{t('title')}</h1>
 
       <Suspense fallback={<SkeletonCard count={6} />}>
         <OverviewSection />

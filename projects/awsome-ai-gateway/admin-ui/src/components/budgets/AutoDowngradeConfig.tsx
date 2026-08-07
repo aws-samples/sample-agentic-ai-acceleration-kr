@@ -4,6 +4,7 @@
 
 
 import { useState, useTransition, useEffect } from 'react';
+import { useTranslations } from 'next-intl';
 import { useToast } from '@/components/common/ToastProvider';
 import { SpinnerButton } from '@/components/common/SpinnerButton';
 import {
@@ -27,6 +28,7 @@ interface AutoDowngradeConfigProps {
 }
 
 export function AutoDowngradeConfig({ scopeType, scopeId, scopeName, models }: AutoDowngradeConfigProps) {
+  const t = useTranslations('budgets');
   const { toast } = useToast();
   const [isPending, startTransition] = useTransition();
   const [enabled, setEnabled] = useState(false);
@@ -76,12 +78,12 @@ export function AutoDowngradeConfig({ scopeType, scopeId, scopeName, models }: A
 
   const handleSave = () => {
     if (rules.length === 0) {
-      toast({ type: 'error', message: '최소 1개 이상의 다운그레이드 규칙을 추가해야 합니다.', auto_dismiss_ms: 3000 });
+      toast({ type: 'error', message: t('minOneRule'), auto_dismiss_ms: 3000 });
       return;
     }
     for (const rule of rules) {
       if (rule.from_model_alias === rule.to_model_alias) {
-        toast({ type: 'error', message: `소스와 타겟 모델이 동일합니다: ${rule.from_model_alias}`, auto_dismiss_ms: 3000 });
+        toast({ type: 'error', message: t('sameSourceTarget', { alias: rule.from_model_alias }), auto_dismiss_ms: 3000 });
         return;
       }
     }
@@ -91,11 +93,11 @@ export function AutoDowngradeConfig({ scopeType, scopeId, scopeName, models }: A
         rules: rules.map(r => ({ ...r, threshold_pct: parseInt(r.threshold_pct) || 0 })),
       });
       if (result.success) {
-        toast({ type: 'success', message: '자동 다운그레이드 설정이 저장되었습니다.', auto_dismiss_ms: 3000 });
+        toast({ type: 'success', message: t('downgradeSaved'), auto_dismiss_ms: 3000 });
       } else {
         let msg = result.error;
         if (msg?.includes('Budget must be configured') || msg?.includes('must be greater than 0 for downgrade')) {
-          msg = '이 팀에 예산이 설정되어 있지 않습니다. 예산을 먼저 설정해주세요.';
+          msg = t('noBudgetForTeam');
         }
         toast({ type: 'error', message: msg, auto_dismiss_ms: 5000 });
       }
@@ -108,7 +110,7 @@ export function AutoDowngradeConfig({ scopeType, scopeId, scopeName, models }: A
       if (result.success) {
         setEnabled(false);
         setRules([]);
-        toast({ type: 'success', message: '자동 다운그레이드 설정이 해제되었습니다.', auto_dismiss_ms: 3000 });
+        toast({ type: 'success', message: t('downgradeCleared'), auto_dismiss_ms: 3000 });
       } else {
         toast({ type: 'error', message: result.error, auto_dismiss_ms: 5000 });
       }
@@ -119,7 +121,7 @@ export function AutoDowngradeConfig({ scopeType, scopeId, scopeName, models }: A
     return (
       <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
         <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-        설정 로딩 중...
+        {t('configLoading')}
       </div>
     );
   }
@@ -128,9 +130,9 @@ export function AutoDowngradeConfig({ scopeType, scopeId, scopeName, models }: A
     <div className="space-y-4 glass rounded-apple p-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-semibold">자동 다운그레이드</h3>
+          <h3 className="text-sm font-semibold">{t('autoDowngrade')}</h3>
           <p className="text-xs text-muted-foreground">
-            {scopeName} — 예산 임계치 초과 시 자동으로 하위 모델로 라우팅
+            {t('autoDowngradeDesc', { scope: scopeName })}
           </p>
         </div>
         <label className="flex items-center gap-2 cursor-pointer">
@@ -140,7 +142,7 @@ export function AutoDowngradeConfig({ scopeType, scopeId, scopeName, models }: A
             onChange={e => setEnabled(e.target.checked)}
             className="h-4 w-4 rounded border-gray-300"
           />
-          <span className="text-sm">설정하기</span>
+          <span className="text-sm">{t('configure')}</span>
         </label>
       </div>
 
@@ -148,7 +150,7 @@ export function AutoDowngradeConfig({ scopeType, scopeId, scopeName, models }: A
         <>
           {rules.length > 0 && (
             <div className="flex flex-wrap items-center gap-2 rounded-md bg-muted/30 p-3">
-              <span className="text-xs font-medium text-muted-foreground">다운그레이드 체인:</span>
+              <span className="text-xs font-medium text-muted-foreground">{t('downgradeChain')}</span>
               {rules
                 .sort((a, b) => (parseInt(a.threshold_pct) || 0) - (parseInt(b.threshold_pct) || 0))
                 .map((rule, i) => (
@@ -215,7 +217,7 @@ export function AutoDowngradeConfig({ scopeType, scopeId, scopeName, models }: A
             onClick={addRule}
             className="text-sm text-primary hover:underline"
           >
-            + 규칙 추가
+            {t('addRule')}
           </button>
         </>
       )}
@@ -227,7 +229,7 @@ export function AutoDowngradeConfig({ scopeType, scopeId, scopeName, models }: A
           disabled={!enabled && rules.length === 0}
           className="bg-primary text-primary-foreground hover:bg-primary/90 px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50"
         >
-          설정 저장
+          {t('saveConfig')}
         </SpinnerButton>
         {enabled && (
           <button
@@ -236,7 +238,7 @@ export function AutoDowngradeConfig({ scopeType, scopeId, scopeName, models }: A
             disabled={isPending}
             className="text-sm text-destructive hover:underline disabled:opacity-50"
           >
-            설정 해제
+            {t('clearConfig')}
           </button>
         )}
       </div>

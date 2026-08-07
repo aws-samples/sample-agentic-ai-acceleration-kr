@@ -5,6 +5,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useTranslations } from 'next-intl';
 import {
   LayoutDashboard,
   KeyRound,
@@ -25,64 +26,64 @@ interface SidebarProps {
   role?: UserRole;
 }
 
-interface NavItem {
-  label: string;
+interface NavItemDef {
+  key: string; // translation key in 'nav' namespace
   href: string;
   icon: React.ReactNode;
   allowedRoles: UserRole[];
 }
 
-const NAV_ITEMS: NavItem[] = [
+const NAV_ITEMS: NavItemDef[] = [
   {
-    label: '대시보드',
+    key: 'dashboard',
     href: '/',
     icon: <LayoutDashboard size={18} />,
     allowedRoles: [UserRoleConst.ADMIN, UserRoleConst.TEAM_LEADER, UserRoleConst.DEVELOPER],
   },
   {
-    label: '사용자/팀',
+    key: 'users',
     href: '/users',
     icon: <Users size={18} />,
     allowedRoles: [UserRoleConst.ADMIN],
   },
   {
-    label: '모델 관리',
+    key: 'models',
     href: '/models',
     icon: <BrainCircuit size={18} />,
     allowedRoles: [UserRoleConst.ADMIN],
   },
   {
-    label: '예산 관리',
+    key: 'budgets',
     href: '/budgets',
     icon: <Wallet size={18} />,
     allowedRoles: [UserRoleConst.ADMIN, UserRoleConst.TEAM_LEADER],
   },
   {
-    label: 'Rate Limits',
+    key: 'rateLimits',
     href: '/rate-limits',
     icon: <Gauge size={18} />,
     allowedRoles: [UserRoleConst.ADMIN],
   },
   {
-    label: 'API Keys',
+    key: 'keys',
     href: '/keys',
     icon: <KeyRound size={18} />,
     allowedRoles: [UserRoleConst.ADMIN],
   },
   {
-    label: '모니터링',
+    key: 'monitoring',
     href: '/monitoring',
     icon: <Activity size={18} />,
     allowedRoles: [UserRoleConst.ADMIN],
   },
   {
-    label: 'BI Insight',
+    key: 'chat',
     href: '/chat',
     icon: <Sparkles size={18} />,
     allowedRoles: [UserRoleConst.ADMIN],
   },
   {
-    label: '내 사용량',
+    key: 'my',
     href: '/my',
     icon: <UserCircle size={18} />,
     allowedRoles: [UserRoleConst.TEAM_LEADER, UserRoleConst.DEVELOPER],
@@ -91,6 +92,7 @@ const NAV_ITEMS: NavItem[] = [
 
 export function Sidebar({ role }: SidebarProps) {
   const pathname = usePathname();
+  const t = useTranslations('nav');
 
   const visibleItems = role
     ? NAV_ITEMS.filter((item) => item.allowedRoles.includes(role))
@@ -113,7 +115,7 @@ export function Sidebar({ role }: SidebarProps) {
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto py-4 px-3" aria-label="주요 메뉴">
+      <nav className="flex-1 overflow-y-auto py-4 px-3" aria-label={t('mainMenu')}>
         <ul className="flex flex-col gap-0.5" role="list">
           {visibleItems.map((item) => {
             const active = isActive(item.href);
@@ -132,7 +134,7 @@ export function Sidebar({ role }: SidebarProps) {
                   <span className="flex-shrink-0" aria-hidden="true">
                     {item.icon}
                   </span>
-                  {item.label}
+                  {t(item.key)}
                 </Link>
               </li>
             );

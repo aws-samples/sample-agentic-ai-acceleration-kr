@@ -4,6 +4,7 @@
 
 
 import { useState, useTransition, useEffect } from 'react';
+import { useTranslations } from 'next-intl';
 import { X } from 'lucide-react';
 import type { ModelListItem } from '@/types/entities';
 import { createModelAction, updateModelAction } from '@/lib/actions/models';
@@ -63,6 +64,8 @@ function getInitialState(editModel?: ModelListItem): FormState {
 }
 
 export function CreateModelDialog({ isOpen, onClose, editModel }: CreateModelDialogProps) {
+  const t = useTranslations('models');
+  const tCommon = useTranslations('common');
   const { toast } = useToast();
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -119,8 +122,8 @@ export function CreateModelDialog({ isOpen, onClose, editModel }: CreateModelDia
         toast({
           type: 'success',
           message: isEditMode
-            ? `${form.alias} 모델이 수정되었습니다.`
-            : `${form.alias} 모델이 등록되었습니다.`,
+            ? t('editSuccess', { alias: form.alias })
+            : t('createSuccess', { alias: form.alias }),
           auto_dismiss_ms: 3000,
         });
         onClose();
@@ -140,12 +143,12 @@ export function CreateModelDialog({ isOpen, onClose, editModel }: CreateModelDia
       <div className="bg-background rounded-lg p-6 w-full max-w-lg shadow-xl border border-border max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold">
-            {isEditMode ? '모델 수정' : '모델 추가'}
+            {isEditMode ? t('editModel') : t('createModel')}
           </h2>
           <button
             onClick={onClose}
             className="rounded-sm opacity-70 hover:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring transition-opacity"
-            aria-label="닫기"
+            aria-label={tCommon('close')}
           >
             <X size={16} aria-hidden="true" />
           </button>
@@ -170,7 +173,7 @@ export function CreateModelDialog({ isOpen, onClose, editModel }: CreateModelDia
             />
             {isEditMode && (
               <p className="text-xs text-muted-foreground">
-                Alias 는 여러 테이블에서 참조하는 식별자라 변경할 수 없습니다.
+                {t('aliasReadonly')}
               </p>
             )}
             {fieldErrors.alias && <FormError error={fieldErrors.alias} />}
@@ -189,7 +192,7 @@ export function CreateModelDialog({ isOpen, onClose, editModel }: CreateModelDia
               required
               className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             >
-              <option value="">선택하세요</option>
+              <option value="">{t('selectProvider')}</option>
               <option value="BEDROCK">BEDROCK</option>
               <option value="OPENMODEL">OPENMODEL</option>
               {/* Mantle 계열은 endpoint_url·api_format 이 필요해 보통 마이그레이션으로 시드되지만,
@@ -238,10 +241,10 @@ export function CreateModelDialog({ isOpen, onClose, editModel }: CreateModelDia
 
           {/* Price fields — 수직 일렬 배치 */}
           <div className="space-y-3">
-            <span className="text-sm font-medium">단가 (USD/1K tokens)</span>
+            <span className="text-sm font-medium">{t('priceLabel')}</span>
 
             <div className="space-y-1">
-              <label htmlFor="input_price_per_1k" className="text-xs text-muted-foreground">입력</label>
+              <label htmlFor="input_price_per_1k" className="text-xs text-muted-foreground">{t('priceInput')}</label>
               <input
                 id="input_price_per_1k"
                 name="input_price_per_1k"
@@ -258,7 +261,7 @@ export function CreateModelDialog({ isOpen, onClose, editModel }: CreateModelDia
             </div>
 
             <div className="space-y-1">
-              <label htmlFor="output_price_per_1k" className="text-xs text-muted-foreground">출력</label>
+              <label htmlFor="output_price_per_1k" className="text-xs text-muted-foreground">{t('priceOutput')}</label>
               <input
                 id="output_price_per_1k"
                 name="output_price_per_1k"
@@ -275,7 +278,7 @@ export function CreateModelDialog({ isOpen, onClose, editModel }: CreateModelDia
             </div>
 
             <div className="space-y-1">
-              <label htmlFor="cache_creation_5m_price_per_1k" className="text-xs text-muted-foreground">캐시 생성 5min</label>
+              <label htmlFor="cache_creation_5m_price_per_1k" className="text-xs text-muted-foreground">{t('priceCacheCreate5m')}</label>
               <input
                 id="cache_creation_5m_price_per_1k"
                 name="cache_creation_5m_price_per_1k"
@@ -291,7 +294,7 @@ export function CreateModelDialog({ isOpen, onClose, editModel }: CreateModelDia
             </div>
 
             <div className="space-y-1">
-              <label htmlFor="cache_creation_1h_price_per_1k" className="text-xs text-muted-foreground">캐시 생성 1h</label>
+              <label htmlFor="cache_creation_1h_price_per_1k" className="text-xs text-muted-foreground">{t('priceCacheCreate1h')}</label>
               <input
                 id="cache_creation_1h_price_per_1k"
                 name="cache_creation_1h_price_per_1k"
@@ -307,7 +310,7 @@ export function CreateModelDialog({ isOpen, onClose, editModel }: CreateModelDia
             </div>
 
             <div className="space-y-1">
-              <label htmlFor="cache_read_price_per_1k" className="text-xs text-muted-foreground">캐시 읽기</label>
+              <label htmlFor="cache_read_price_per_1k" className="text-xs text-muted-foreground">{t('priceCacheRead')}</label>
               <input
                 id="cache_read_price_per_1k"
                 name="cache_read_price_per_1k"
@@ -326,7 +329,7 @@ export function CreateModelDialog({ isOpen, onClose, editModel }: CreateModelDia
           {/* Description */}
           <div className="space-y-1">
             <label htmlFor="description" className="text-sm font-medium">
-              설명 <span className="text-muted-foreground text-xs">(선택)</span>
+              {t('descriptionLabel')} <span className="text-muted-foreground text-xs">({t('descriptionOptional')})</span>
             </label>
             <textarea
               id="description"
@@ -336,7 +339,7 @@ export function CreateModelDialog({ isOpen, onClose, editModel }: CreateModelDia
               rows={3}
               maxLength={512}
               className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring resize-none"
-              placeholder="모델에 대한 설명을 입력하세요"
+              placeholder={t('descriptionPlaceholder')}
             />
             {fieldErrors.description && <FormError error={fieldErrors.description} />}
           </div>
@@ -344,7 +347,7 @@ export function CreateModelDialog({ isOpen, onClose, editModel }: CreateModelDia
           {/* Display Name */}
           <div className="space-y-1">
             <label htmlFor="display_name" className="text-sm font-medium">
-              표시 이름 (예: Cowork · Opus 4.8)
+              {t('displayNameLabel')}
             </label>
             <input
               id="display_name"
@@ -353,7 +356,7 @@ export function CreateModelDialog({ isOpen, onClose, editModel }: CreateModelDia
               maxLength={128}
               value={form.display_name}
               onChange={handleChange}
-              placeholder="미설정 시 alias 로 표시 (등록 시점)"
+              placeholder={t('displayNamePlaceholder')}
               className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             />
             {fieldErrors.display_name && <FormError error={fieldErrors.display_name} />}
@@ -368,10 +371,10 @@ export function CreateModelDialog({ isOpen, onClose, editModel }: CreateModelDia
               disabled={isPending}
               className="inline-flex items-center justify-center rounded-md border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-accent transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
             >
-              취소
+              {tCommon('cancel')}
             </button>
             <SpinnerButton type="submit" isLoading={isPending}>
-              {isEditMode ? '수정' : '등록'}
+              {isEditMode ? t('edit') : t('register')}
             </SpinnerButton>
           </div>
         </form>
