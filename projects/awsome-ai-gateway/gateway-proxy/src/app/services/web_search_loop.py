@@ -134,6 +134,34 @@ def _client_declares_web_search(body: dict) -> bool:
     return False
 
 
+# Anthropic/OpenAI NATIVE server-side web_search tools carry a `type` naming the
+# server tool (Messages: "web_search_20250305"; Responses: "web_search_preview").
+# Bedrock/Mantle reject these ("tool type ... is not supported for this model").
+# We STRIP them and fulfill the intent with our own injected tool + search loop.
+# A genuinely custom client tool merely NAMED web_search has no such type and is
+# left alone (F-7). Clients like Claude Code CLI attach the native tool by default.
+def _is_native_web_search(tool: dict) -> bool:
+    if not isinstance(tool, dict):
+        return False
+    t = tool.get("type")
+    return isinstance(t, str) and t.startswith("web_search")
+
+
+def _strip_native_web_search(body: dict) -> dict:
+    tools = body.get("tools")
+    if not isinstance(tools, list):
+        return body
+    filtered = [t for t in tools if not _is_native_web_search(t)]
+    if len(filtered) == len(tools):
+        return body  # unchanged — no native tool present
+    out = dict(body)
+    if filtered:
+        out["tools"] = filtered
+    else:
+        out.pop("tools", None)
+    return out
+
+
 # ── usage merge ───────────────────────────────────────────────────────────────
 def _merge_usage(acc: TokenUsage, turn: TokenUsage) -> TokenUsage:
     """Sum usage across turns. reasoning_tokens stays a submetric (already inside
@@ -263,14 +291,20 @@ async def _anthropic_stream(
                                            "id": block.get("id"), "name": block.get("name")}
                         ev2 = dict(ev); ev2["index"] = gi
                         yield _sse("content_block_start", ev2)
+                    elif btype in ("thinking", "redacted_thinking"):
+                        # Buffer thinking for the INTERNAL conversation (the next model turn's
+                        # same-model replay needs it), but do NOT emit it to the client stream
+                        # and do NOT advance global_index. Stitching merges N turns into one
+                        # envelope; a thinking block replayed inside a stitched assistant message
+                        # is rejected by Bedrock ("thinking blocks ... cannot be modified").
+                        thinking_buf[idx] = {"kind": btype, "thinking": "", "signature": "",
+                                             "data": block.get("data")}
                     else:
                         gi = global_index
                         global_index += 1
                         local_to_global[idx] = gi
                         if btype == "text":
                             text_buf[idx] = ""
-                        elif btype in ("thinking", "redacted_thinking"):
-                            thinking_buf[idx] = {"thinking": "", "signature": "", "data": block.get("data")}
                         ev2 = dict(ev); ev2["index"] = gi
                         yield _sse("content_block_start", ev2)
 
@@ -289,12 +323,15 @@ async def _anthropic_stream(
                         ev2 = dict(ev); ev2["index"] = gi
                         yield _sse("content_block_delta", ev2)
                         continue
+                    if idx in thinking_buf:
+                        # Accumulate thinking/signature internally; never emit to client.
+                        if dtype == "thinking_delta":
+                            thinking_buf[idx]["thinking"] += delta.get("thinking", "") or ""
+                        elif dtype == "signature_delta":
+                            thinking_buf[idx]["signature"] += delta.get("signature", "") or ""
+                        continue
                     if dtype == "text_delta" and idx in text_buf:
                         text_buf[idx] += delta.get("text", "") or ""
-                    elif dtype == "thinking_delta" and idx in thinking_buf:
-                        thinking_buf[idx]["thinking"] += delta.get("thinking", "") or ""
-                    elif dtype == "signature_delta" and idx in thinking_buf:
-                        thinking_buf[idx]["signature"] += delta.get("signature", "") or ""
                     gi = local_to_global.get(idx, idx)
                     ev2 = dict(ev); ev2["index"] = gi
                     yield _sse("content_block_delta", ev2)
@@ -325,14 +362,21 @@ async def _anthropic_stream(
                         ev2 = dict(ev); ev2["index"] = gi
                         yield _sse("content_block_stop", ev2)
                         continue
+                    if idx in thinking_buf:
+                        # Keep the thinking block in the INTERNAL conversation so the next
+                        # model turn's same-model replay is valid; do NOT emit its stop to
+                        # the client (start/delta were already suppressed above).
+                        tb = thinking_buf[idx]
+                        if tb.get("kind") == "redacted_thinking":
+                            blk = {"type": "redacted_thinking", "data": tb.get("data")}
+                        else:
+                            blk = {"type": "thinking", "thinking": tb["thinking"]}
+                            if tb["signature"]:
+                                blk["signature"] = tb["signature"]
+                        assistant_content.append(blk)
+                        continue  # suppress from client
                     if idx in text_buf:
                         assistant_content.append({"type": "text", "text": text_buf[idx]})
-                    elif idx in thinking_buf:
-                        tb = thinking_buf[idx]
-                        blk = {"type": "thinking", "thinking": tb["thinking"]}
-                        if tb["signature"]:
-                            blk["signature"] = tb["signature"]
-                        assistant_content.append(blk)
                     gi = local_to_global.get(idx, idx)
                     ev2 = dict(ev); ev2["index"] = gi
                     yield _sse("content_block_stop", ev2)
@@ -498,6 +542,15 @@ async def _anthropic_nonstream(
         # client sees the full accounting; reasoning stays a submetric.
         final_body["usage"]["input_tokens"] = merged.input_tokens
         final_body["usage"]["output_tokens"] = merged.output_tokens
+    # Strip thinking/redacted_thinking from the CLIENT-returned body: the client replays
+    # this (possibly stitched) assistant message on its next turn, and Bedrock rejects a
+    # modified thinking block. Prior-turn thinking may be omitted on a new user turn, so
+    # this is safe. (Mirrors the streaming path's client-side suppression.)
+    if final_status == 200 and isinstance(final_body.get("content"), list):
+        final_body["content"] = [
+            b for b in final_body["content"]
+            if not (isinstance(b, dict) and b.get("type") in ("thinking", "redacted_thinking"))
+        ]
     return JSONResponse(status_code=final_status, content=final_body)
 
 
@@ -873,6 +926,12 @@ async def run_web_search_loop(
     if that fails, it degrades to a plain pass-through of the original request (no tool).
     """
     deadline = time.monotonic() + total_deadline_sec
+
+    # Strip Anthropic/OpenAI NATIVE web_search tool(s) up front: Bedrock/Mantle reject
+    # them, and we fulfill the intent via our own loop. Doing it here (before F-7) means
+    # a native-only request no longer trips _client_declares_web_search, so the loop runs;
+    # a genuine CUSTOM web_search tool (no native type) survives and is still respected.
+    initial_req_data = _strip_native_web_search(initial_req_data)
 
     # streaming.py sse helpers now call on_usage(usage, first_token_time) (2-arg TTFT
     # contract). The web-search loop's on_usage is 1-arg (multi-turn aggregate — per-turn
