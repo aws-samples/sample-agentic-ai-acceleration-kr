@@ -18,6 +18,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
+import { useTranslations } from 'next-intl';
 import { useRouter, usePathname } from 'next/navigation';
 import { MessageSquare, X, Sparkles } from 'lucide-react';
 import { ChatProvider, useChatPanel, CHAT_MIN_WIDTH, CHAT_MAX_WIDTH } from './ChatProvider';
@@ -43,6 +44,7 @@ function useIsWideViewport(): boolean {
 
 /** 드래그로 패널 폭 조절. 본문/패널 경계의 세로 핸들. */
 function ResizeHandle() {
+  const t = useTranslations('chat');
   const { width, setWidth } = useChatPanel();
   const dragging = useRef(false);
 
@@ -70,13 +72,13 @@ function ResizeHandle() {
     <div
       role="separator"
       aria-orientation="vertical"
-      aria-label="채팅 패널 폭 조절"
+      aria-label={t('shell.resizeLabel')}
       onPointerDown={() => {
         dragging.current = true;
         document.body.style.userSelect = 'none';
         document.body.style.cursor = 'col-resize';
       }}
-      title={`폭 ${Math.round(width)}px (드래그로 조절)`}
+      title={t('shell.resizeTitle', { width: Math.round(width) })}
       className="w-1 flex-shrink-0 cursor-col-resize bg-border hover:bg-primary/50 active:bg-primary transition-colors"
     />
   );
@@ -86,13 +88,14 @@ function ResizeHandle() {
  *  X 가 담당). FAB 가 패널 위에 떠 있으면 입력창 전송 버튼과 위치가 겹치므로
  *  (둘 다 우하단), 열렸을 땐 숨겨 충돌을 없앤다 — 표준 FAB-드로어 패턴. */
 function ChatToggleButton() {
+  const t = useTranslations('chat');
   const { open, toggle } = useChatPanel();
   if (open) return null;
   return (
     <button
       type="button"
       onClick={toggle}
-      aria-label="Quick Chat 열기"
+      aria-label={t('shell.openQuickChat')}
       className="fixed bottom-6 right-6 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg transition-transform hover:scale-105 hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-ring"
     >
       <MessageSquare size={22} />
@@ -102,6 +105,8 @@ function ChatToggleButton() {
 
 /** 채팅 패널 헤더 — 전체화면 이동 + 닫기. */
 function PanelHeader() {
+  const t = useTranslations('chat');
+  const tCommon = useTranslations('common');
   const { setOpen } = useChatPanel();
   const router = useRouter();
   return (
@@ -114,17 +119,17 @@ function PanelHeader() {
           setOpen(false);
           router.push('/chat');
         }}
-        aria-label="BI Insight 심층 분석으로 열기"
-        title="BI Insight(심층 분석)로 이동 — 별도 세션"
+        aria-label={t('shell.openDeepLabel')}
+        title={t('shell.openDeepTitle')}
         className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
       >
         <Sparkles size={14} />
-        BI Insight
+        {t('biInsight')}
       </button>
       <button
         type="button"
         onClick={() => setOpen(false)}
-        aria-label="닫기"
+        aria-label={tCommon('close')}
         className="flex h-8 w-8 items-center justify-center rounded-md hover:bg-accent"
       >
         <X size={18} />
@@ -134,6 +139,7 @@ function PanelHeader() {
 }
 
 function ShellInner({ children, enabled }: { children: React.ReactNode; enabled: boolean }) {
+  const t = useTranslations('chat');
   const { open, setOpen, width } = useChatPanel();
   const isWide = useIsWideViewport();
   // /chat 풀페이지에선 드로어/ FAB 를 띄우지 않는다 — 그 페이지가 이미 채팅이라
@@ -169,7 +175,7 @@ function ShellInner({ children, enabled }: { children: React.ReactNode; enabled:
       {overlay && (
         <button
           type="button"
-          aria-label="채팅 닫기"
+          aria-label={t('shell.closeChat')}
           onClick={() => setOpen(false)}
           className="fixed inset-0 z-40 bg-black/40"
         />

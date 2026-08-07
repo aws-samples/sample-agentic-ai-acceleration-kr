@@ -4,6 +4,7 @@
 
 
 import { useEffect, useRef, useState } from 'react';
+import { useTranslations } from 'next-intl';
 import type { RateLimitTreeNode } from '@/types/entities';
 import { RateLimitTree } from './RateLimitTree';
 import { RateLimitConfigPanel } from './RateLimitConfigPanel';
@@ -24,6 +25,7 @@ function collectDefaultExpanded(nodes: RateLimitTreeNode[]): Set<string> {
 }
 
 export function RateLimitTreeView({ nodes }: RateLimitTreeViewProps) {
+  const t = useTranslations('rateLimits');
   const [selectedNode, setSelectedNode] = useState<RateLimitTreeNode | null>(null);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(() =>
     collectDefaultExpanded(nodes)
@@ -87,7 +89,7 @@ export function RateLimitTreeView({ nodes }: RateLimitTreeViewProps) {
             onChange={e => setShowInactive(e.target.checked)}
             className="h-3.5 w-3.5 rounded border-gray-300"
           />
-          비활성 팀/유저 포함
+          {t('includeInactive')}
         </label>
       )}
       <div className="flex gap-0 border rounded-lg overflow-hidden min-h-[600px]">

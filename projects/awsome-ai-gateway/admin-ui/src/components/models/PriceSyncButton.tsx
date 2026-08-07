@@ -3,6 +3,7 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 import { useState, useTransition } from 'react';
+import { useTranslations } from 'next-intl';
 import { RefreshCw, Loader2, X } from 'lucide-react';
 import {
   previewPriceSyncAction,
@@ -20,6 +21,7 @@ import { Table, THead, TBody, Tr, Th, Td } from '@/components/common/Table';
  * 경로라 시계열·감사·캐시무효화가 보존된다.
  */
 export function PriceSyncButton() {
+  const tCommon = useTranslations('common');
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [preview, setPreview] = useState<PriceSyncPreview | null>(null);
@@ -159,7 +161,7 @@ export function PriceSyncButton() {
                 onClick={() => setOpen(false)}
                 className="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent/50"
               >
-                취소
+                {tCommon('cancel')}
               </button>
               <button
                 onClick={apply}

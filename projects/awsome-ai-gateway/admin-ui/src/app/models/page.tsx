@@ -1,5 +1,6 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
+import { getTranslations } from 'next-intl/server';
 import { adminAPI } from '@/lib/api-client';
 import type { ModelListItem } from '@/types/entities';
 import { ModelsTable } from '@/components/models/ModelsTable';
@@ -59,6 +60,8 @@ function mapToModelListItem(item: APIModelItem): ModelListItem {
 }
 
 export default async function ModelsPage() {
+  const t = await getTranslations('models');
+
   const [modelsRes, teamsRes, routingRes] = await Promise.allSettled([
     adminAPI.get<{ items: APIModelItem[] }>('/admin/models'),
     adminAPI.get<{ items: APITeamItem[] }>('/admin/users/teams'),
@@ -76,7 +79,7 @@ export default async function ModelsPage() {
     <div className="space-y-8">
       <div>
         <div className="flex items-center justify-between mb-6">
-          <h1 className="text-2xl font-bold">모델 관리</h1>
+          <h1 className="text-2xl font-bold">{t('title')}</h1>
           <div className="flex items-center gap-2">
             <PriceSyncButton />
             <CreateModelButton />
@@ -86,7 +89,7 @@ export default async function ModelsPage() {
       </div>
 
       <div>
-        <h2 className="text-lg font-semibold mb-4">팀별 모델 접근 관리</h2>
+        <h2 className="text-lg font-semibold mb-4">{t('teamModelAccess')}</h2>
         <TeamModelPermissionPanel
           teams={teams}
           allTeams={allTeams.map(t => ({ id: t.id, name: t.name }))}

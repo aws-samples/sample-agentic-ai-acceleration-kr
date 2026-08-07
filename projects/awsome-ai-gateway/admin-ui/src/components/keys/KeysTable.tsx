@@ -4,6 +4,7 @@
 
 
 import { useState } from 'react';
+import { useTranslations } from 'next-intl';
 import { revokeKeyAction } from '@/lib/actions/keys';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import { useToast } from '@/components/common/ToastProvider';
@@ -22,14 +23,8 @@ const STATUS_TONE: Record<string, BadgeTone> = {
   [KeyStatus.REVOKED]: 'pink',
 };
 
-const STATUS_LABELS: Record<string, string> = {
-  [KeyStatus.ACTIVE]: '활성',
-  [KeyStatus.EXPIRED]: '만료',
-  [KeyStatus.REVOKED]: '해지',
-};
-
-function formatDate(iso: string | null): string {
-  if (!iso) return '없음';
+function formatDate(iso: string | null, noExpiry: string): string {
+  if (!iso) return noExpiry;
   const date = new Date(iso);
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
@@ -38,6 +33,7 @@ function formatDate(iso: string | null): string {
 }
 
 export function KeysTable({ keys }: KeysTableProps) {
+  const t = useTranslations('keys');
   const { toast } = useToast();
 
   const [revokeState, setRevokeState] = useState<{
@@ -55,13 +51,13 @@ export function KeysTable({ keys }: KeysTableProps) {
     if (result.success) {
       toast({
         type: 'success',
-        message: `키 ${revokeState.keyPrefix}가 성공적으로 해지되었습니다.`,
+        message: t('revokeSuccess', { prefix: revokeState.keyPrefix }),
         auto_dismiss_ms: 4000,
       });
     } else {
       toast({
         type: 'error',
-        message: result.error ?? '키 해지에 실패했습니다.',
+        message: result.error ?? t('revokeFailed'),
         auto_dismiss_ms: 5000,
       });
     }
@@ -70,7 +66,7 @@ export function KeysTable({ keys }: KeysTableProps) {
   if (keys.length === 0) {
     return (
       <div className="flex items-center justify-center glass rounded-apple py-16 text-sm text-muted-foreground">
-        등록된 API Key가 없습니다.
+        {t('noKeys')}
       </div>
     );
   }
@@ -81,12 +77,12 @@ export function KeysTable({ keys }: KeysTableProps) {
         <Table>
           <THead>
             <Tr>
-              <Th>키 접두사</Th>
-              <Th>사용자 이메일</Th>
-              <Th>상태</Th>
-              <Th>생성일</Th>
-              <Th>만료일</Th>
-              <Th numeric>액션</Th>
+              <Th>{t('keyPrefix')}</Th>
+              <Th>{t('userEmail')}</Th>
+              <Th>{t('status')}</Th>
+              <Th>{t('createdAt')}</Th>
+              <Th>{t('expiresAt')}</Th>
+              <Th numeric>{t('actions')}</Th>
             </Tr>
           </THead>
           <TBody>
@@ -98,11 +94,11 @@ export function KeysTable({ keys }: KeysTableProps) {
                 </Td>
                 <Td>
                   <Badge tone={STATUS_TONE[key.status] ?? 'neutral'}>
-                    {STATUS_LABELS[key.status] ?? key.status}
+                    {t(`keyStatus.${key.status}` as 'keyStatus.ACTIVE' | 'keyStatus.EXPIRED' | 'keyStatus.REVOKED')}
                   </Badge>
                 </Td>
-                <Td className="text-muted-foreground">{formatDate(key.created_at)}</Td>
-                <Td className="text-muted-foreground">{formatDate(key.expires_at)}</Td>
+                <Td className="text-muted-foreground">{formatDate(key.created_at, t('noExpiry'))}</Td>
+                <Td className="text-muted-foreground">{formatDate(key.expires_at, t('noExpiry'))}</Td>
                 <Td numeric>
                   <div className="flex items-center justify-end gap-2">
                     <button
@@ -118,7 +114,7 @@ export function KeysTable({ keys }: KeysTableProps) {
                       }
                       className="inline-flex items-center rounded-md border border-destructive/50 bg-background px-3 py-1.5 text-xs font-medium text-destructive hover:bg-destructive hover:text-destructive-foreground transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40"
                     >
-                      {revokingId === key.key_id ? '처리 중...' : '해지'}
+                      {revokingId === key.key_id ? t('revoking') : t('revoke')}
                     </button>
                   </div>
                 </Td>
@@ -133,9 +129,9 @@ export function KeysTable({ keys }: KeysTableProps) {
         isOpen={revokeState.isOpen}
         onClose={() => setRevokeState({ isOpen: false, keyId: '', keyPrefix: '' })}
         onConfirm={handleRevoke}
-        title="API Key 해지"
-        message={`키 "${revokeState.keyPrefix}"를 해지하시겠습니까? 이 작업은 되돌릴 수 없습니다.`}
-        confirmLabel="해지"
+        title={t('revokeDialogTitle')}
+        message={t('revokeDialogMessage', { prefix: revokeState.keyPrefix })}
+        confirmLabel={t('revokeDialogConfirm')}
         isDestructive
       />
     </>

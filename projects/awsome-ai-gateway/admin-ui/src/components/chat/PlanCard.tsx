@@ -2,6 +2,7 @@
 
 'use client';
 
+import { useTranslations } from 'next-intl';
 import { ClipboardList, Database, Code2, ShieldCheck, BarChart3, Play } from 'lucide-react';
 import type { AnalysisPlan } from './types';
 
@@ -30,11 +31,12 @@ export function PlanCard({
   onProceed?: () => void;
   disabled?: boolean;
 }) {
+  const t = useTranslations('chat');
   return (
     <div className="my-2 rounded-lg border border-primary/30 bg-primary/5 px-4 py-3">
       <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
         <ClipboardList size={15} className="text-primary" />
-        {plan.title || '분석 계획'}
+        {plan.title || t('plan.title')}
       </div>
       <ol className="flex flex-col gap-1.5">
         {plan.steps.map((s, i) => {
@@ -65,10 +67,10 @@ export function PlanCard({
             className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors"
           >
             <Play size={12} />
-            이 계획으로 진행
+            {t('plan.proceed')}
           </button>
           <span className="text-[11px] text-muted-foreground">
-            수정하려면 입력창에 변경 내용을 적어주세요 (예: &quot;2단계는 빼고&quot;)
+            {t('plan.editHint')}
           </span>
         </div>
       )}

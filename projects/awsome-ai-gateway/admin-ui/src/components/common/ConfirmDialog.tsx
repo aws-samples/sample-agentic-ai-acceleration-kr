@@ -4,6 +4,7 @@
 
 
 import * as Dialog from '@radix-ui/react-dialog';
+import { useTranslations } from 'next-intl';
 import { X } from 'lucide-react';
 
 interface ConfirmDialogProps {
@@ -22,9 +23,12 @@ export function ConfirmDialog({
   onConfirm,
   title,
   message,
-  confirmLabel = '확인',
+  confirmLabel,
   isDestructive = false,
 }: ConfirmDialogProps) {
+  const t = useTranslations('common');
+  const resolvedConfirmLabel = confirmLabel ?? t('confirm');
+
   const handleConfirm = () => {
     onConfirm();
     onClose();
@@ -44,7 +48,7 @@ export function ConfirmDialog({
           {/* Close button */}
           <Dialog.Close
             className="absolute right-4 top-4 rounded-sm opacity-70 hover:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring transition-opacity"
-            aria-label="닫기"
+            aria-label={t('close')}
           >
             <X size={16} aria-hidden="true" />
           </Dialog.Close>
@@ -68,7 +72,7 @@ export function ConfirmDialog({
               onClick={onClose}
               className="inline-flex items-center justify-center rounded-md border border-border bg-background px-4 py-2 text-sm font-medium text-foreground shadow-sm hover:bg-accent hover:text-accent-foreground transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             >
-              취소
+              {t('cancel')}
             </button>
             <button
               onClick={handleConfirm}
@@ -79,7 +83,7 @@ export function ConfirmDialog({
                   : 'bg-primary text-primary-foreground hover:bg-primary/90',
               ].join(' ')}
             >
-              {confirmLabel}
+              {resolvedConfirmLabel}
             </button>
           </div>
         </Dialog.Content>

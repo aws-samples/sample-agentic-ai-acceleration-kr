@@ -4,6 +4,7 @@
 
 
 import { useState, useTransition } from 'react';
+import { useTranslations } from 'next-intl';
 import type { TeamBudgetAllocation, AllocationEntry } from '@/types/entities';
 import { allocateTeamBudgetAction } from '@/lib/actions/budgets';
 import { SpinnerButton } from '@/components/common/SpinnerButton';
@@ -16,6 +17,8 @@ interface TeamAllocationViewProps {
 }
 
 export function TeamAllocationView({ teamId, initialAllocation }: TeamAllocationViewProps) {
+  const t = useTranslations('budgets');
+  const tCommon = useTranslations('common');
   const { toast } = useToast();
   const [isPending, startTransition] = useTransition();
 
@@ -45,7 +48,7 @@ export function TeamAllocationView({ teamId, initialAllocation }: TeamAllocation
       if (result.success) {
         toast({
           type: 'success',
-          message: '팀 예산 배분이 저장되었습니다.',
+          message: t('allocationSaved'),
           auto_dismiss_ms: 3000,
         });
       } else {
@@ -60,7 +63,7 @@ export function TeamAllocationView({ teamId, initialAllocation }: TeamAllocation
 
   if (!initialAllocation) {
     return (
-      <p className="text-sm text-muted-foreground">팀 예산 정보를 불러올 수 없습니다.</p>
+      <p className="text-sm text-muted-foreground">{t('allocationLoadFailed')}</p>
     );
   }
 
@@ -68,7 +71,7 @@ export function TeamAllocationView({ teamId, initialAllocation }: TeamAllocation
     <div className="space-y-4">
       <div className="rounded-lg border border-border bg-muted/30 px-4 py-3 flex items-center justify-between">
         <span className="text-sm font-medium">
-          {initialAllocation.team_name} 전체 예산
+          {t('teamTotalBudget', { team: initialAllocation.team_name })}
         </span>
         <span className="text-lg font-bold">${totalBudget.toFixed(2)}</span>
       </div>
@@ -77,14 +80,14 @@ export function TeamAllocationView({ teamId, initialAllocation }: TeamAllocation
         <Table>
           <THead>
             <Tr>
-              <Th>팀원명</Th>
-              <Th>배분 금액 (USD)</Th>
-              <Th numeric>사용량</Th>
+              <Th>{t('colMemberName')}</Th>
+              <Th>{t('colAllocated')}</Th>
+              <Th numeric>{t('colUsage')}</Th>
             </Tr>
           </THead>
           <TBody>
             {allocations.length === 0 ? (
-              <TEmpty colSpan={3}>팀원이 없습니다.</TEmpty>
+              <TEmpty colSpan={3}>{t('noMembers')}</TEmpty>
             ) : (
               allocations.map((entry) => (
                 <Tr key={entry.target_id}>
@@ -113,7 +116,7 @@ export function TeamAllocationView({ teamId, initialAllocation }: TeamAllocation
           </TBody>
           <TFoot>
             <Tr>
-              <Td emphasis colSpan={2}>미배분 잔액</Td>
+              <Td emphasis colSpan={2}>{t('unallocated')}</Td>
               <Td numeric className={isOverBudget ? 'text-destructive' : 'text-primary'}>
                 ${unallocated.toFixed(2)}
               </Td>
@@ -124,7 +127,7 @@ export function TeamAllocationView({ teamId, initialAllocation }: TeamAllocation
 
       {isOverBudget && (
         <p className="text-sm text-destructive" role="alert">
-          배분 금액의 합계(${totalAllocated.toFixed(2)})가 팀 예산(${totalBudget.toFixed(2)})을 초과합니다.
+          {t('allocationExceeds', { allocated: totalAllocated.toFixed(2), budget: totalBudget.toFixed(2) })}
         </p>
       )}
 
@@ -135,7 +138,7 @@ export function TeamAllocationView({ teamId, initialAllocation }: TeamAllocation
           disabled={isOverBudget}
           type="button"
         >
-          저장
+          {tCommon('save')}
         </SpinnerButton>
       </div>
     </div>

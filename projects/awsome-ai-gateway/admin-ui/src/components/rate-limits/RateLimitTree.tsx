@@ -1,6 +1,9 @@
+'use client';
+
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 import { Globe, Users, User, ChevronRight, ChevronDown } from 'lucide-react';
+import { useTranslations } from 'next-intl';
 import type { RateLimitTreeNode } from '@/types/entities';
 import type { RateLimitScope } from '@/types/enums';
 
@@ -36,6 +39,7 @@ function TreeNode({
   onToggle,
   depth,
 }: TreeNodeProps) {
+  const t = useTranslations('rateLimits');
   const isSelected = selectedNodeId === node.id;
   const hasChildren = Boolean(node.children && node.children.length > 0);
   // USER 는 leaf. GLOBAL/TEAM 만 expandable.
@@ -75,7 +79,7 @@ function TreeNode({
         <span className="flex-1 truncate">{node.label}</span>
         <span className="text-xs text-muted-foreground flex-shrink-0">
           {node.inherited_from
-            ? '상속'
+            ? t('inherited')
             : node.config
             ? `${node.config.rpm ?? '∞'}rpm`
             : '-'}
@@ -105,9 +109,10 @@ export function RateLimitTree({
   onToggle,
   depth = 0,
 }: RateLimitTreeProps) {
+  const t = useTranslations('rateLimits');
   if (nodes.length === 0) {
     return (
-      <p className="p-4 text-sm text-muted-foreground">설정 데이터가 없습니다</p>
+      <p className="p-4 text-sm text-muted-foreground">{t('noConfigData')}</p>
     );
   }
 

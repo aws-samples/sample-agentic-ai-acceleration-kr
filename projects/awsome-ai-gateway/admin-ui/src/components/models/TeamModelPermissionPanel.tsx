@@ -4,6 +4,7 @@
 
 
 import { useState, useTransition, useEffect } from 'react';
+import { useTranslations } from 'next-intl';
 import { useToast } from '@/components/common/ToastProvider';
 import { SpinnerButton } from '@/components/common/SpinnerButton';
 import {
@@ -25,6 +26,7 @@ interface TeamModelPermissionPanelProps {
 }
 
 export function TeamModelPermissionPanel({ teams, allTeams, models }: TeamModelPermissionPanelProps) {
+  const t = useTranslations('models');
   const { toast } = useToast();
   const [isPending, startTransition] = useTransition();
   const [selectedTeamId, setSelectedTeamId] = useState('');
@@ -66,14 +68,14 @@ export function TeamModelPermissionPanel({ teams, allTeams, models }: TeamModelP
   const handleSave = () => {
     if (!selectedTeamId) return;
     if (allowedAliases.length === 0) {
-      toast({ type: 'error', message: '최소 1개 이상의 모델을 선택해야 합니다.', auto_dismiss_ms: 3000 });
+      toast({ type: 'error', message: t('minOneModel'), auto_dismiss_ms: 3000 });
       return;
     }
     startTransition(async () => {
       const result = await setTeamAllowedModelsAction(selectedTeamId, allowedAliases);
       if (result.success) {
         setHasRestrictions(true);
-        toast({ type: 'success', message: '팀 모델 접근 권한이 저장되었습니다.', auto_dismiss_ms: 3000 });
+        toast({ type: 'success', message: t('teamPermissionSaved'), auto_dismiss_ms: 3000 });
       } else {
         toast({ type: 'error', message: result.error, auto_dismiss_ms: 5000 });
       }
@@ -87,7 +89,7 @@ export function TeamModelPermissionPanel({ teams, allTeams, models }: TeamModelP
       if (result.success) {
         setAllowedAliases([]);
         setHasRestrictions(false);
-        toast({ type: 'success', message: '모델 접근 제한이 해제되었습니다.', auto_dismiss_ms: 3000 });
+        toast({ type: 'success', message: t('restrictionCleared'), auto_dismiss_ms: 3000 });
       } else {
         toast({ type: 'error', message: result.error, auto_dismiss_ms: 5000 });
       }
@@ -97,13 +99,13 @@ export function TeamModelPermissionPanel({ teams, allTeams, models }: TeamModelP
   return (
     <div className="space-y-4 glass rounded-apple p-4">
       <div className="flex items-center gap-4">
-        <label className="text-sm font-medium">팀 선택</label>
+        <label className="text-sm font-medium">{t('selectTeam')}</label>
         <select
           value={selectedTeamId}
           onChange={e => setSelectedTeamId(e.target.value)}
           className="rounded-md border border-input bg-background px-3 py-1.5 text-sm"
         >
-          <option value="">-- 팀을 선택하세요 --</option>
+          <option value="">{t('selectTeamPlaceholder')}</option>
           {visibleTeams.map(t => (
             <option key={t.id} value={t.id}>{t.name}</option>
           ))}
@@ -116,14 +118,14 @@ export function TeamModelPermissionPanel({ teams, allTeams, models }: TeamModelP
               onChange={e => setShowInactive(e.target.checked)}
               className="h-3.5 w-3.5 rounded border-gray-300"
             />
-            비활성 팀 포함
+            {t('includeInactiveTeams')}
           </label>
         )}
         {selectedTeamId && loaded && (
           hasRestrictions ? (
-            <span className="badge badge-amber">접근 제한 적용됨</span>
+            <span className="badge badge-amber">{t('restrictionApplied')}</span>
           ) : (
-            <span className="badge badge-teal">제한 없음 (전체 허용)</span>
+            <span className="badge badge-teal">{t('noRestriction')}</span>
           )
         )}
       </div>
@@ -132,21 +134,21 @@ export function TeamModelPermissionPanel({ teams, allTeams, models }: TeamModelP
         <>
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-sm text-muted-foreground">허용할 모델 선택</span>
+              <span className="text-sm text-muted-foreground">{t('selectAllowedModels')}</span>
               <div className="flex gap-2">
                 <button
                   type="button"
                   onClick={() => setAllowedAliases(activeModels.map(m => m.alias))}
                   className="text-xs text-primary hover:underline"
                 >
-                  전체 선택
+                  {t('selectAll')}
                 </button>
                 <button
                   type="button"
                   onClick={() => setAllowedAliases([])}
                   className="text-xs text-muted-foreground hover:underline"
                 >
-                  전체 해제
+                  {t('clearAll')}
                 </button>
               </div>
             </div>
@@ -171,7 +173,7 @@ export function TeamModelPermissionPanel({ teams, allTeams, models }: TeamModelP
               isLoading={isPending}
               className="bg-primary text-primary-foreground hover:bg-primary/90 px-4 py-2 rounded-md text-sm font-medium"
             >
-              권한 저장
+              {t('savePermission')}
             </SpinnerButton>
             {hasRestrictions && (
               <button
@@ -180,7 +182,7 @@ export function TeamModelPermissionPanel({ teams, allTeams, models }: TeamModelP
                 disabled={isPending}
                 className="text-sm text-destructive hover:underline disabled:opacity-50"
               >
-                제한 해제 (전체 허용)
+                {t('clearRestriction')}
               </button>
             )}
           </div>
@@ -190,7 +192,7 @@ export function TeamModelPermissionPanel({ teams, allTeams, models }: TeamModelP
       {selectedTeamId && !loaded && (
         <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
           <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-          로딩 중...
+          {t('loadingText')}
         </div>
       )}
     </div>

@@ -1,6 +1,7 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 import { Suspense } from 'react';
+import { getTranslations } from 'next-intl/server';
 import type { AnalyticsFilterForm } from '@/types/api';
 import type { PeriodType, GroupByType } from '@/types/enums';
 import { SkeletonCard } from '@/components/common/SkeletonCard';
@@ -116,6 +117,7 @@ async function ContextSection({
 }
 
 export default async function AnalyticsPage({ searchParams }: AnalyticsPageProps) {
+  const t = await getTranslations('analytics');
   // 월 데이터 소스 (대시보드와 동일: /admin/dashboard/periods).
   const { periods, latest } = await fetchAvailablePeriods();
 
@@ -140,7 +142,7 @@ export default async function AnalyticsPage({ searchParams }: AnalyticsPageProps
       </Suspense>
 
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">분석 (ROI 대시보드)</h1>
+        <h1 className="text-2xl font-bold">{t('pageTitle')}</h1>
         <div className="flex gap-2">
           <RefreshButton />
           <ExportButton filter={filter} latestMonth={effectiveMonth} />

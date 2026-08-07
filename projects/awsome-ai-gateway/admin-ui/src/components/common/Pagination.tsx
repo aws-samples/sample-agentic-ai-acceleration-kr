@@ -1,6 +1,9 @@
+'use client';
+
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 import Link from 'next/link';
+import { useTranslations } from 'next-intl';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 interface PaginationProps {
@@ -36,6 +39,8 @@ function getPageRange(current: number, total: number, maxVisible = 5): number[] 
 }
 
 export function Pagination({ currentPage, totalPages, basePath }: PaginationProps) {
+  const t = useTranslations('common.pagination');
+
   if (totalPages <= 1) return null;
 
   const pages = getPageRange(currentPage, totalPages);
@@ -50,7 +55,7 @@ export function Pagination({ currentPage, totalPages, basePath }: PaginationProp
 
   return (
     <nav
-      aria-label="페이지 탐색"
+      aria-label={t('nav')}
       className="flex items-center justify-center gap-1 mt-4"
     >
       {/* Previous */}
@@ -58,12 +63,12 @@ export function Pagination({ currentPage, totalPages, basePath }: PaginationProp
         <Link
           href={buildHref(basePath, currentPage - 1)}
           className={`${buttonBase} ${inactiveClass}`}
-          aria-label="이전 페이지"
+          aria-label={t('previous')}
         >
           <ChevronLeft size={16} aria-hidden="true" />
         </Link>
       ) : (
-        <span className={`${buttonBase} ${disabledClass}`} aria-disabled="true" aria-label="이전 페이지 (없음)">
+        <span className={`${buttonBase} ${disabledClass}`} aria-disabled="true" aria-label={t('previousNone')}>
           <ChevronLeft size={16} aria-hidden="true" />
         </span>
       )}
@@ -71,7 +76,7 @@ export function Pagination({ currentPage, totalPages, basePath }: PaginationProp
       {/* First page + ellipsis */}
       {pages[0] > 1 && (
         <>
-          <Link href={buildHref(basePath, 1)} className={`${buttonBase} ${inactiveClass}`} aria-label="1페이지">
+          <Link href={buildHref(basePath, 1)} className={`${buttonBase} ${inactiveClass}`} aria-label={t('gotoPage', { page: 1 })}>
             1
           </Link>
           {pages[0] > 2 && (
@@ -88,7 +93,7 @@ export function Pagination({ currentPage, totalPages, basePath }: PaginationProp
           key={page}
           href={buildHref(basePath, page)}
           className={`${buttonBase} ${page === currentPage ? activeClass : inactiveClass}`}
-          aria-label={`${page}페이지`}
+          aria-label={t('gotoPage', { page })}
           aria-current={page === currentPage ? 'page' : undefined}
         >
           {page}
@@ -103,7 +108,7 @@ export function Pagination({ currentPage, totalPages, basePath }: PaginationProp
               …
             </span>
           )}
-          <Link href={buildHref(basePath, totalPages)} className={`${buttonBase} ${inactiveClass}`} aria-label={`${totalPages}페이지`}>
+          <Link href={buildHref(basePath, totalPages)} className={`${buttonBase} ${inactiveClass}`} aria-label={t('gotoPage', { page: totalPages })}>
             {totalPages}
           </Link>
         </>
@@ -114,12 +119,12 @@ export function Pagination({ currentPage, totalPages, basePath }: PaginationProp
         <Link
           href={buildHref(basePath, currentPage + 1)}
           className={`${buttonBase} ${inactiveClass}`}
-          aria-label="다음 페이지"
+          aria-label={t('next')}
         >
           <ChevronRight size={16} aria-hidden="true" />
         </Link>
       ) : (
-        <span className={`${buttonBase} ${disabledClass}`} aria-disabled="true" aria-label="다음 페이지 (없음)">
+        <span className={`${buttonBase} ${disabledClass}`} aria-disabled="true" aria-label={t('nextNone')}>
           <ChevronRight size={16} aria-hidden="true" />
         </span>
       )}

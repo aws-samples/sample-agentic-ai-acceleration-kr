@@ -4,6 +4,7 @@
 
 
 import { useState, useTransition, useEffect } from 'react';
+import { useTranslations } from 'next-intl';
 import { X } from 'lucide-react';
 import type { BudgetScope } from '@/types/enums';
 import { setBudgetAction, deleteUserBudgetAction } from '@/lib/actions/budgets';
@@ -30,9 +31,9 @@ interface SetBudgetDialogProps {
 }
 
 const POLICY_OPTIONS = [
-  { value: 'HARD_BLOCK' as const, label: '하드 차단', desc: '한도 초과 시 요청 차단' },
-  { value: 'SOFT_WARNING' as const, label: '경고만', desc: '한도 초과 시 경고 알림만 발송' },
-  { value: 'THROTTLE' as const, label: '쓰로틀링', desc: '임계치 초과 시 RPM 자동 감소' },
+  { value: 'HARD_BLOCK' as const, labelKey: 'policyHardBlock' as const, descKey: 'policyHardBlockDesc' as const },
+  { value: 'SOFT_WARNING' as const, labelKey: 'policySoftWarning' as const, descKey: 'policySoftWarningDesc' as const },
+  { value: 'THROTTLE' as const, labelKey: 'policyThrottle' as const, descKey: 'policyThrottleDesc' as const },
 ];
 
 const DEFAULT_THRESHOLDS = [80, 90, 100];
@@ -54,6 +55,8 @@ function allowedClientList(clients: string[]): ClientId[] {
 }
 
 export function SetBudgetDialog({ isOpen, onClose, target }: SetBudgetDialogProps) {
+  const t = useTranslations('budgets');
+  const tCommon = useTranslations('common');
   const { toast } = useToast();
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -103,7 +106,7 @@ export function SetBudgetDialog({ isOpen, onClose, target }: SetBudgetDialogProp
         // 조회 실패 시 stale 전체허용이 실제값처럼 보여 잘못된 clear 를 유발할 수 있으므로 명시 알림.
         toast({
           type: 'error',
-          message: '앱 접근 권한 조회 실패 — 새로고침 후 다시 시도하세요.',
+          message: t('appAccessFetchFailed'),
           auto_dismiss_ms: 5000,
         });
       }
@@ -119,7 +122,7 @@ export function SetBudgetDialog({ isOpen, onClose, target }: SetBudgetDialogProp
         setLoadedBudgets(emptyBudgets());
         toast({
           type: 'error',
-          message: '앱별 예산 조회 실패 — 새로고침 후 다시 시도하세요.',
+          message: t('appBudgetFetchFailed'),
           auto_dismiss_ms: 5000,
         });
       }
@@ -136,7 +139,7 @@ export function SetBudgetDialog({ isOpen, onClose, target }: SetBudgetDialogProp
       if (result.success) {
         toast({
           type: 'success',
-          message: `${target.name}의 개인 예산이 삭제되었습니다. 팀 예산이 적용됩니다.`,
+          message: t('personalBudgetDeleted', { name: target.name }),
           auto_dismiss_ms: 3000,
         });
         onClose();
@@ -154,7 +157,7 @@ export function SetBudgetDialog({ isOpen, onClose, target }: SetBudgetDialogProp
   };
 
   const removeThreshold = (val: number) => {
-    setThresholds(prev => prev.filter(t => t !== val));
+    setThresholds(prev => prev.filter(v => v !== val));
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -162,7 +165,7 @@ export function SetBudgetDialog({ isOpen, onClose, target }: SetBudgetDialogProp
     setError(null);
 
     if (thresholds.length === 0) {
-      setError('최소 1개 이상의 알림 임계값을 설정해야 합니다.');
+      setError(t('minThresholdError'));
       return;
     }
 
@@ -194,30 +197,29 @@ export function SetBudgetDialog({ isOpen, onClose, target }: SetBudgetDialogProp
         }));
 
         // 검증: >= 0 의 유한수만 허용 (UserPanel 과 동일).
-        for (const t of targets) {
-          const trimmed = t.value.trim();
+        for (const tgt of targets) {
+          const trimmed = tgt.value.trim();
           if (trimmed === '') continue;
           const n = Number(trimmed);
           if (!Number.isFinite(n) || n < 0) {
-            const msg = `유효하지 않은 앱 예산 값입니다 (${t.client}). 0 이상 숫자를 입력하세요.`;
-            setError(msg);
+            setError(t('invalidAppBudget', { client: tgt.client }));
             return;
           }
         }
 
         // 각 앱: 값이 있으면 set, 비었고 기존 예산이 있었으면 clear.
         // policy·thresholds 는 관리자가 이 다이얼로그에서 고른 값을 그대로 상속.
-        for (const t of targets) {
-          const trimmed = t.value.trim();
+        for (const tgt of targets) {
+          const trimmed = tgt.value.trim();
           if (trimmed !== '') {
-            const res = await setUserClientBudgetAction(target.id, t.client, {
+            const res = await setUserClientBudgetAction(target.id, tgt.client, {
               max_budget_usd: trimmed,
               policy,
               alert_thresholds: thresholds,
             });
             if (!res.success && appError === null) appError = res.error;
-          } else if (t.loaded.trim() !== '') {
-            const res = await clearUserClientBudgetAction(target.id, t.client);
+          } else if (tgt.loaded.trim() !== '') {
+            const res = await clearUserClientBudgetAction(target.id, tgt.client);
             if (!res.success && appError === null) appError = res.error;
           }
         }
@@ -236,16 +238,16 @@ export function SetBudgetDialog({ isOpen, onClose, target }: SetBudgetDialogProp
         }
         toast({
           type: 'success',
-          message: `${target.name}의 예산이 $${numericValue.toFixed(2)}로 설정되었습니다. (앱별 예산 일부 실패)`,
+          message: t('budgetSetPartialSuccess', { name: target.name, amount: numericValue.toFixed(2) }),
           auto_dismiss_ms: 3000,
         });
-        setError(`앱별 예산 저장 실패: ${appError}`);
+        setError(t('appBudgetSaveFailed', { error: appError }));
         return;
       }
 
       toast({
         type: 'success',
-        message: `${target.name}의 예산이 $${numericValue.toFixed(2)}로 설정되었습니다.`,
+        message: t('budgetSetSuccess', { name: target.name, amount: numericValue.toFixed(2) }),
         auto_dismiss_ms: 3000,
       });
       onClose();
@@ -258,18 +260,18 @@ export function SetBudgetDialog({ isOpen, onClose, target }: SetBudgetDialogProp
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-background rounded-lg p-6 w-full max-w-md shadow-xl border border-border max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold">예산 설정</h2>
+          <h2 className="text-lg font-semibold">{t('dialogTitle')}</h2>
           <button
             onClick={onClose}
             className="rounded-sm opacity-70 hover:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring transition-opacity"
-            aria-label="닫기"
+            aria-label={tCommon('close')}
           >
             <X size={16} aria-hidden="true" />
           </button>
         </div>
 
         <p className="text-sm text-muted-foreground mb-4">
-          대상: <span className="font-medium text-foreground">{target.name}</span>
+          {t('dialogTarget')} <span className="font-medium text-foreground">{target.name}</span>
         </p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -277,8 +279,8 @@ export function SetBudgetDialog({ isOpen, onClose, target }: SetBudgetDialogProp
           {isUserScope && (
             <div className="flex items-center justify-between rounded-md border border-border p-3 bg-muted/30">
               <div>
-                <p className="text-sm font-medium">팀 예산 적용</p>
-                <p className="text-xs text-muted-foreground">개인 예산을 삭제하고 팀 예산을 적용합니다</p>
+                <p className="text-sm font-medium">{t('useTeamBudget')}</p>
+                <p className="text-xs text-muted-foreground">{t('useTeamBudgetDesc')}</p>
               </div>
               <SpinnerButton
                 type="button"
@@ -286,14 +288,14 @@ export function SetBudgetDialog({ isOpen, onClose, target }: SetBudgetDialogProp
                 isLoading={isPending && useTeamBudget}
                 className="bg-secondary text-secondary-foreground hover:bg-secondary/80 px-3 py-1.5 rounded-md text-xs font-medium"
               >
-                팀 예산으로 전환
+                {t('switchToTeamBudget')}
               </SpinnerButton>
             </div>
           )}
 
           {/* Budget Amount */}
           <div className="space-y-2">
-            <label className="text-sm font-medium">최대 예산 (USD)</label>
+            <label className="text-sm font-medium">{t('maxBudgetUsd')}</label>
             <div className="space-y-3">
               <input
                 type="range"
@@ -318,7 +320,7 @@ export function SetBudgetDialog({ isOpen, onClose, target }: SetBudgetDialogProp
               </div>
               {target.parentLimit !== undefined && (
                 <p className="text-xs text-muted-foreground">
-                  상한: ${target.parentLimit.toFixed(2)}
+                  {t('upperLimit')} ${target.parentLimit.toFixed(2)}
                 </p>
               )}
             </div>
@@ -326,7 +328,7 @@ export function SetBudgetDialog({ isOpen, onClose, target }: SetBudgetDialogProp
 
           {/* Policy Selection */}
           <div className="space-y-2">
-            <label className="text-sm font-medium">초과 시 정책</label>
+            <label className="text-sm font-medium">{t('overagePolicy')}</label>
             <div className="space-y-1.5">
               {POLICY_OPTIONS.map(opt => (
                 <label key={opt.value} className="flex items-start gap-2 cursor-pointer p-2 rounded-md hover:bg-accent">
@@ -339,8 +341,8 @@ export function SetBudgetDialog({ isOpen, onClose, target }: SetBudgetDialogProp
                     className="mt-0.5 h-4 w-4"
                   />
                   <div>
-                    <span className="text-sm font-medium">{opt.label}</span>
-                    <p className="text-xs text-muted-foreground">{opt.desc}</p>
+                    <span className="text-sm font-medium">{t(opt.labelKey)}</span>
+                    <p className="text-xs text-muted-foreground">{t(opt.descKey)}</p>
                   </div>
                 </label>
               ))}
@@ -349,8 +351,8 @@ export function SetBudgetDialog({ isOpen, onClose, target }: SetBudgetDialogProp
 
           {/* Alert Thresholds */}
           <div className="space-y-2">
-            <label className="text-sm font-medium">알림 임계값 (%)</label>
-            <p className="text-xs text-muted-foreground">예산 사용률이 임계값에 도달하면 알림을 발송합니다.</p>
+            <label className="text-sm font-medium">{t('alertThresholds')}</label>
+            <p className="text-xs text-muted-foreground">{t('alertThresholdsDesc')}</p>
             <div className="flex flex-wrap gap-1.5">
               {thresholds.map(t => (
                 <span key={t} className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-primary/10 text-primary">
@@ -380,7 +382,7 @@ export function SetBudgetDialog({ isOpen, onClose, target }: SetBudgetDialogProp
                 onClick={addThreshold}
                 className="text-sm text-primary hover:underline"
               >
-                추가
+                {t('addThreshold')}
               </button>
             </div>
           </div>
@@ -388,12 +390,12 @@ export function SetBudgetDialog({ isOpen, onClose, target }: SetBudgetDialogProp
           {/* Per-app budgets (USER scope only, allowed_clients-gated) */}
           {isUserScope && (
             <div className="space-y-2 rounded-md border border-border p-3">
-              <label className="text-sm font-medium">앱별 예산 (USD/월)</label>
+              <label className="text-sm font-medium">{t('perAppBudget')}</label>
               <p className="text-xs text-muted-foreground">
-                Claude Code · Cowork · Codex 별 개별 예산입니다. 사용자 관리 화면과 동일하게 적용됩니다.
+                {t('perAppBudgetDesc')}
               </p>
               {isAppLoadPending ? (
-                <div className="text-xs text-muted-foreground py-1">로딩 중…</div>
+                <div className="text-xs text-muted-foreground py-1">{t('loadingText')}</div>
               ) : (
                 <div className="space-y-3 pt-1">
                   {allowedClients.length < ALL_CLIENTS.length && (
@@ -415,7 +417,7 @@ export function SetBudgetDialog({ isOpen, onClose, target }: SetBudgetDialogProp
                           setBudgets((prev) => ({ ...prev, [c]: e.target.value }))
                         }
                         disabled={isPending}
-                        placeholder="미설정"
+                        placeholder={t('notSetPlaceholder')}
                         className="flex-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
                       />
                     </div>
@@ -434,10 +436,10 @@ export function SetBudgetDialog({ isOpen, onClose, target }: SetBudgetDialogProp
               disabled={isPending}
               className="inline-flex items-center justify-center rounded-md border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-accent transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
             >
-              취소
+              {tCommon('cancel')}
             </button>
             <SpinnerButton type="submit" isLoading={isPending}>
-              저장
+              {tCommon('save')}
             </SpinnerButton>
           </div>
         </form>
