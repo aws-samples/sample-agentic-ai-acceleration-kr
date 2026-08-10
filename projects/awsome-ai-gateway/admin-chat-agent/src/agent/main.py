@@ -1231,9 +1231,11 @@ async def invoke(payload: dict):
     # mode(§55): "deep"(사이드바 Chat — plan-first 심층분석) | 그 외("quick" 기본).
     # 퀵 경로는 기존 orchestrator 그대로 — 바이트 무변경(golden 회귀 0).
     mode = (payload or {}).get("mode", "quick")
+    language = (payload or {}).get("language") or (payload or {}).get("locale") or "ko"
     active_orchestrator = orchestrator_deep if mode == "deep" else orchestrator
     logger.info(
-        "agent_invoke", session_id=session_id, mode=mode, content_preview=content[:80]
+        "agent_invoke", session_id=session_id, mode=mode, language=language,
+        content_preview=content[:80],
     )
 
     # 화면 컨텍스트 주입 — admin-ui 가 "지금 보는 화면"({page, period?, data?})을
@@ -1249,6 +1251,13 @@ async def invoke(payload: dict):
         content = (
             f"[사용자가 현재 보고 있는 화면]\n{ctx_block}\n\n"
             f"[사용자 질문]\n{content}"
+        )
+
+    if language == "en":
+        content = (
+            "[LANGUAGE INSTRUCTION] Respond entirely in English. "
+            "All explanations, labels, chart titles, and analysis must be in English.\n\n"
+            + content
         )
 
     # __ping__ 프리워밍 쇼트서킷(§54) — admin-api 가 세션 생성 시 fire-and-forget
