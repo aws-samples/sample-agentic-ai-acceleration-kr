@@ -13,14 +13,16 @@ Design notes
 - ``kid`` 매칭으로 정확한 키 선택 → key rotation 안전.
 - jose 의 ``jwt.decode`` 가 sig + exp + nbf + iat + aud + iss 를 모두 검증.
 - ``RS256`` 만 허용 (alg=none, HS256 차단).
+- JWKS fetch is serialized with ``asyncio.Lock`` — holding a blocking lock across
+  an ``await`` stalls the single-threaded event loop forever (see regression #51).
 
 This class is **read-only** w.r.t. database. User/team provisioning happens in
 ``app.services.oidc_service``.
 """
 from __future__ import annotations
 
+import asyncio
 import time
-from threading import Lock
 
 import httpx
 import structlog
@@ -40,8 +42,9 @@ class OIDCConfigError(Exception):
 class OIDCVerifier:
     """OIDC JWT verifier — issuer discovery + JWKS cache + signature/claim 검증.
 
-    Thread-safe (httpx.Client 재사용). 멀티 worker 환경에서 worker 별 1개 인스턴스.
-    Async 호출은 ``verify_async`` 를 사용; sync 컨텍스트면 ``verify``.
+    One instance per worker in a multi-worker deployment (httpx.AsyncClient is reused).
+    Concurrent JWKS fetches are collapsed into one by ``asyncio.Lock`` — the instance
+    must only be used inside the event loop that owns it, never shared across threads.
     """
 
     _ALLOWED_ALGS = ("RS256", "RS384", "RS512")
@@ -82,7 +85,11 @@ class OIDCVerifier:
         self._jwks_uri: str | None = None
         self._jwks_keys: dict[str, dict] = {}  # kid -> JWK dict
         self._jwks_fetched_at: float = 0.0
-        self._lock = Lock()
+        # asyncio.Lock (NOT threading.Lock): _ensure_jwks_async awaits while holding
+        # the lock. With a blocking lock the second request parks the OS thread, so
+        # the event loop itself stops — it cannot even read the JWKS response, and
+        # there is no recovery.
+        self._lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
     # Discovery + JWKS
@@ -153,7 +160,7 @@ class OIDCVerifier:
         now = time.monotonic()
         if not force and self._jwks_keys and (now - self._jwks_fetched_at) < self._jwks_ttl:
             return
-        with self._lock:
+        async with self._lock:
             # 이중 체크 — lock 진입 사이 다른 호출이 갱신했을 수 있음
             now = time.monotonic()
             if not force and self._jwks_keys and (now - self._jwks_fetched_at) < self._jwks_ttl:

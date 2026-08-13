@@ -314,6 +314,48 @@ ensure_observability() {
 }
 
 # ---- Helm install / upgrade ----
+# SET_ARGS 는 helm_install 이 조립하고 patch_nextauth_url 이 재사용하므로 전역.
+declare -a SET_ARGS=()
+
+# ---- 과거 patch_nextauth_url 이 남긴 field ownership 정리 ----
+# 증상: helm upgrade 가 이 에러로 실패.
+#   conflict with "helm" using apps/v1:
+#     .spec.template.spec.containers[name="admin-ui"].env[name="NEXTAUTH_URL"].value
+#
+# 원인: k8s server-side apply 의 소유권 키는 manager *이름* 이 아니라
+# (이름, operation) 쌍이다. `kubectl set env` 는 operation=Update 로 기록되고,
+# helm 은 operation=Apply 로 기록한다. 따라서 과거 코드의 `--field-manager=helm` 은
+# 소유권을 helm 에 넘겨준 게 아니라, 이름만 같고 operation 이 다른 *두 번째* 소유자를
+# 만들었다. 에러 메시지의 `using apps/v1` 접미사가 그 증거 —
+# k8s 는 충돌 상대가 Update 소유자일 때만 이 접미사를 붙인다.
+#
+# 조치: 그 Update 항목만 managedFields 에서 제거해 helm(Apply) 단독 소유로 되돌린다.
+# `--force-conflicts` 를 쓰지 않는 이유: 그건 릴리즈 전체에 적용돼서, HPA 가 소유한
+# .spec.replicas 까지 helm 이 덮어써 스케일이 되돌아간다 (이 클러스터는 HPA 사용).
+prune_stale_field_managers() {
+    local deploy="${RELEASE_NAME}-admin-ui"
+    kubectl get deployment "$deploy" -n "$NAMESPACE" >/dev/null 2>&1 || return 0
+
+    # operation=Update 이면서 manager 가 helm / kubectl-set 인 항목의 인덱스.
+    # 뒤에서부터 지워야 앞쪽 인덱스가 밀리지 않는다.
+    local idxs
+    idxs=$(kubectl get deployment "$deploy" -n "$NAMESPACE" -o json 2>/dev/null \
+        | jq -r '[.metadata.managedFields | to_entries[]
+                  | select(.value.operation == "Update")
+                  | select(.value.manager == "helm" or .value.manager == "kubectl-set")
+                  | .key] | reverse | .[]' 2>/dev/null || true)
+    [ -z "$idxs" ] && return 0
+
+    warn "admin-ui 에 과거 'kubectl set env' 소유권 잔존 → 정리 (helm 충돌 예방)"
+    local i
+    for i in $idxs; do
+        kubectl patch deployment "$deploy" -n "$NAMESPACE" --type=json \
+            -p="[{\"op\":\"remove\",\"path\":\"/metadata/managedFields/$i\"}]" \
+            >/dev/null 2>&1 || true
+    done
+    ok "admin-ui field ownership 정리 완료"
+}
+
 helm_install() {
     info "Helm ${HELM_ACTION} 실행 중"
 
@@ -326,7 +368,7 @@ helm_install() {
     local ecr_registry="${aws_account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 
     # --set 명령 조립
-    local -a set_args=(
+    SET_ARGS=(
         --set "global.imageRegistry=${ecr_registry}"
         --set "aws.region=${AWS_REGION}"
         --set "database.external.host=${AURORA_HOST}"
@@ -339,7 +381,7 @@ helm_install() {
 
     # OIDC (Cognito) — terraform 에서 만든 경우 자동 주입
     if [ -n "${COGNITO_ISSUER_URL}" ]; then
-        set_args+=(
+        SET_ARGS+=(
             --set "adminApi.oidc.enabled=true"
             --set "adminApi.oidc.issuerUrl=${COGNITO_ISSUER_URL}"
             --set "adminApi.oidc.providerName=oidc:cognito"
@@ -358,7 +400,7 @@ helm_install() {
     # 전체가 helm install 한 번에 끝남. 비활성화 하려면 MIGRATION_ENABLED=false env 사용.
     if [ "${MIGRATION_ENABLED:-true}" != "true" ]; then
         warn "Migration Job 비활성화 (MIGRATION_ENABLED=false). 별도 수동 실행 필요"
-        set_args+=(--set "migration.enabled=false")
+        SET_ARGS+=(--set "migration.enabled=false")
     fi
 
     # helm upgrade --install 로 통합: release 없으면 install, 있으면 upgrade.
@@ -373,7 +415,7 @@ helm_install() {
         helm upgrade --install "$RELEASE_NAME" "$CHART_DIR" \
             --namespace "$NAMESPACE" \
             --values "$VALUES_FILE" \
-            "${set_args[@]}" \
+            "${SET_ARGS[@]}" \
             --timeout 15m \
             --wait
     else
@@ -382,7 +424,7 @@ helm_install() {
             helm upgrade --install "$RELEASE_NAME" "$CHART_DIR" \
                 --namespace "$NAMESPACE" \
                 --values "$VALUES_FILE" \
-                "${set_args[@]}" \
+                "${SET_ARGS[@]}" \
                 --force-conflicts \
                 --rollback-on-failure \
                 --cleanup-on-fail \
@@ -392,7 +434,7 @@ helm_install() {
             helm upgrade --install "$RELEASE_NAME" "$CHART_DIR" \
                 --namespace "$NAMESPACE" \
                 --values "$VALUES_FILE" \
-                "${set_args[@]}" \
+                "${SET_ARGS[@]}" \
                 --rollback-on-failure \
                 --cleanup-on-fail \
                 --timeout 15m \
@@ -446,12 +488,24 @@ patch_nextauth_url() {
         ok "NEXTAUTH_URL 이미 올바름 — 스킵"
         return
     fi
-    # --field-manager=helm 으로 NEXTAUTH_URL 소유권을 Helm 이 계속 보유하도록.
-    # (기본 manager 'kubectl-set' 로 설정되면 다음 helm upgrade 에서 server-side apply 충돌.)
-    kubectl set env deployment/"${RELEASE_NAME}-admin-ui" -n "$NAMESPACE" \
-        --field-manager=helm \
-        NEXTAUTH_URL="$nextauth_url" >/dev/null
-    kubectl rollout status deployment/"${RELEASE_NAME}-admin-ui" -n "$NAMESPACE" --timeout=3m
+
+    # `kubectl set env` 대신 helm upgrade 로 되돌린다 (--set adminUi.nextauthUrl=...).
+    # chart 의 default 표현식이 이 값을 그대로 쓰므로 결과 env 는 동일하고,
+    # 소유자는 helm(Apply) 하나로 유지된다 → 다음 배포에서 충돌이 발생하지 않는다.
+    # (과거 kubectl set env 방식이 만든 Update 소유자가 바로 이번 배포 실패의 원인.)
+    #
+    # migration.enabled=false: 방금 같은 실행의 helm_install 이 이미 alembic upgrade 를
+    # 돌렸다. 이 두 번째 upgrade 는 env 한 개만 바꾸는 것이므로 pre-upgrade
+    # migration hook 을 다시 띄울 이유가 없다 (재실행은 no-op 이지만 배포가 수 분 길어짐).
+    # --set 은 이 호출에만 적용되고 릴리즈 values 에 누적되지 않는다.
+    helm upgrade "$RELEASE_NAME" "$CHART_DIR" \
+        --namespace "$NAMESPACE" \
+        --values "$VALUES_FILE" \
+        "${SET_ARGS[@]}" \
+        --set "adminUi.nextauthUrl=${nextauth_url}" \
+        --set "migration.enabled=false" \
+        --timeout 5m \
+        --wait
     ok "admin-ui NEXTAUTH_URL 패치 완료"
 }
 
@@ -492,6 +546,7 @@ main() {
     ensure_cluster_secret_store
     check_secrets_manager
     preinstall_cleanup_es_artifacts
+    prune_stale_field_managers
     helm_install
     patch_nextauth_url
     verify_deployment

@@ -9,6 +9,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.budget import BudgetConfig, BudgetScope, BudgetUsage, DowngradePolicy
+from app.repositories._locks import advisory_xact_lock
 
 
 class BudgetRepository:
@@ -16,6 +17,13 @@ class BudgetRepository:
         self._session = session
 
     async def upsert_config(self, config: BudgetConfig) -> BudgetConfig:
+        # Serialize concurrent upserts of the same logical key. Without this, two overlapping
+        # writes each deactivate-then-insert and leave two is_active=true rows behind, after
+        # which get_active_config() raises MultipleResultsFound forever (regression #52).
+        # The lock key must match the predicate below exactly, client included.
+        await advisory_xact_lock(
+            self._session, "budget_configs", config.scope.value, config.scope_id, config.client
+        )
         # Deactivate existing for same scope+scope_id+(client if given)
         stmt = update(BudgetConfig).where(
             BudgetConfig.scope == config.scope,

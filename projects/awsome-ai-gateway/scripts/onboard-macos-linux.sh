@@ -55,7 +55,11 @@ log "로그인 완료. 토큰 캐시: ~/.gateway-cli/oidc-tokens.json"
 # ── 4. (선택) Claude Code 연동 ─────────────────────────────────
 if [ "$SETUP_CC" = "1" ]; then
   log "Claude Code 연동 (gateway-cli setup) — sudo 암호를 물을 수 있습니다"
-  gateway-cli setup --gateway-url "$ANTHROPIC_BASE_URL" --admin-api-url "$ADMIN_API_URL"
+  # --issuer-url/--client-id 를 명시한다. 없으면 managed settings 에 OIDC 키가 빠지고
+  # api-key-helper 가 STS(IAM) 모드로 떨어져, 잘못된 사용자로 VK 가 발급되거나
+  # (SSO 세션이 없으면) Claude Code 가 1P 로그인 화면으로 되돌아간다.
+  gateway-cli setup --gateway-url "$ANTHROPIC_BASE_URL" --admin-api-url "$ADMIN_API_URL" \
+    --issuer-url "$OIDC_ISSUER_URL" --client-id "$OIDC_CLIENT_ID"
   log "완료. Claude Code 재시작 후 'claude' 실행하면 게이트웨이로 갑니다. 원복: gateway-cli disable"
 else
   log "공통 1단계(로그인) 완료. Claude Code 자동연동을 원하면 --setup-claude-code 로 재실행."

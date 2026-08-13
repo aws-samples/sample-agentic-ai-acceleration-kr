@@ -26,6 +26,17 @@ MODEL_CACHE_TTL = 300  # 5분
 MODEL_LIST_CACHE_TTL = 300
 
 
+class ModelInactiveError(LookupError):
+    """An alias exists and matches the expected provider, but its status is INACTIVE.
+
+    A LookupError subclass so every existing ``except LookupError`` keeps behaving
+    exactly as before (callers that only care "could not resolve" need no change).
+    The distinction matters where a caller FALLS BACK on a failed lookup: setting
+    status=INACTIVE is an operator kill switch, so it must deny the request rather
+    than silently reroute it to some other model (see routers/openai_compat.py).
+    """
+
+
 def check_client_scope(allowed_clients: list[str] | None, client: str | None) -> None:
     """Raise PermissionError if the identified client is not allowed for this user.
 
@@ -120,7 +131,7 @@ class RouterService:
                 schema = _parse_cached_model(cached, model_ref)
                 if schema is not None:
                     if schema.status == ModelStatus.INACTIVE:
-                        raise LookupError(f"Model '{schema.alias or model_ref}' is inactive")
+                        raise ModelInactiveError(f"Model '{schema.alias or model_ref}' is inactive")
                     if schema.provider != ProviderType.BEDROCK:
                         raise LookupError(f"Model alias '{model_ref}' not found")
                     return schema
@@ -155,7 +166,7 @@ class RouterService:
             raise LookupError(f"Model alias '{model_ref}' not found")
 
         if alias_row.status != "ACTIVE":
-            raise LookupError(f"Model '{alias_row.alias}' is inactive")
+            raise ModelInactiveError(f"Model '{alias_row.alias}' is inactive")
 
         pricing_row = await _fetch_latest_pricing(db, alias_row.alias)
         schema = _orm_to_schema(alias_row, pricing_row)
@@ -191,7 +202,7 @@ class RouterService:
                 schema = _parse_cached_model(cached, model_ref)
                 if schema is not None:
                     if schema.status == ModelStatus.INACTIVE:
-                        raise LookupError(f"Model '{schema.alias or model_ref}' is inactive")
+                        raise ModelInactiveError(f"Model '{schema.alias or model_ref}' is inactive")
                     if schema.provider != expected_provider:
                         raise LookupError(f"Model alias '{model_ref}' not found")
                     return schema
@@ -226,7 +237,7 @@ class RouterService:
             raise LookupError(f"Model alias '{model_ref}' not found")
 
         if alias_row.status != "ACTIVE":
-            raise LookupError(f"Model '{alias_row.alias}' is inactive")
+            raise ModelInactiveError(f"Model '{alias_row.alias}' is inactive")
 
         pricing_row = await _fetch_latest_pricing(db, alias_row.alias)
         schema = _orm_to_schema(alias_row, pricing_row)
@@ -295,7 +306,7 @@ class RouterService:
                 schema = _parse_cached_model(cached, alias)
                 if schema is not None:
                     if schema.status == ModelStatus.INACTIVE:
-                        raise LookupError(f"Model '{alias}' is inactive")
+                        raise ModelInactiveError(f"Model '{alias}' is inactive")
                     if schema.provider != ProviderType.OPENMODEL:
                         raise LookupError(f"Model '{alias}' not found")
                     return schema
@@ -316,7 +327,7 @@ class RouterService:
         if alias_row is None:
             raise LookupError(f"Model '{alias}' not found")
         if alias_row.status != "ACTIVE":
-            raise LookupError(f"Model '{alias}' is inactive")
+            raise ModelInactiveError(f"Model '{alias}' is inactive")
 
         pricing_row = await _fetch_latest_pricing(db, alias_row.alias)
         schema = _orm_to_schema(alias_row, pricing_row)

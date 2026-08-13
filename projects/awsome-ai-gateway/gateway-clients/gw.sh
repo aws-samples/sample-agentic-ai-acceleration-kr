@@ -76,11 +76,29 @@ PY
     if command -v gateway-cli >/dev/null 2>&1; then
       gateway-cli login --issuer-url "$OIDC_ISSUER_URL" --client-id "$OIDC_CLIENT_ID"
       VK="$(python3 - "$ADMIN_URL" <<'PY'
-import json,os,sys,urllib.request
-tok=json.load(open(os.path.expanduser("~/.gateway-cli/oidc-tokens.json")))["access_token"]
+import json,os,sys,urllib.error,urllib.request
+# id_token 을 보낸다 (access_token 아님). 이유:
+#  1) 사용자 신원 claim(email/name/groups)이 id_token 에만 있다. Cognito access_token
+#     에는 email 이 없어 admin-api 가 <sub>@unknown 으로 프로비저닝한다.
+#  2) Entra ID 는 access_token 의 aud 가 리소스(예: MS Graph)로 발급되므로
+#     admin-api 의 OIDC_AUDIENCE(=client_id) 검증에 걸려 401 이 된다.
+# admin-api 도 id_token 을 전제로 동작한다
+# (core/oidc_verifier.py 의 verify_at_hash=False 주석 참조).
+p=os.path.expanduser("~/.gateway-cli/oidc-tokens.json")
+try:
+    d=json.load(open(p))
+except FileNotFoundError:
+    sys.exit(f"토큰 캐시 없음: {p} — 'gateway-cli login' 이 실패했습니다.")
+tok=d.get("id_token") or ""
+if not tok:
+    sys.exit("id_token 이 없습니다. IdP 앱 등록에 'openid' scope 가 있는지 확인하세요.")
 req=urllib.request.Request(sys.argv[1]+"/v1/auth/exchange",data=b"{}",method="POST",
   headers={"Authorization":"Bearer "+tok,"Content-Type":"application/json"})
-print(json.load(urllib.request.urlopen(req,timeout=15))["virtual_key"])
+try:
+    print(json.load(urllib.request.urlopen(req,timeout=15))["virtual_key"])
+except urllib.error.HTTPError as e:
+    # 401/403 을 조용히 삼키면 "왜 안 되는지" 알 수 없다. 본문을 그대로 노출.
+    sys.exit(f"exchange 실패 HTTP {e.code}: {e.read().decode('utf-8','replace')[:500]}")
 PY
 )"
       printf '%s' "$VK" > "$VK_FILE"; chmod 600 "$VK_FILE"

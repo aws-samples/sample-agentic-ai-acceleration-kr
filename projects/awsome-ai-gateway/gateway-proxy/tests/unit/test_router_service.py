@@ -16,7 +16,7 @@ from app.schemas.domain import (
     ModelStatus,
     ProviderType,
 )
-from app.services.router_service import RouterService
+from app.services.router_service import ModelInactiveError, RouterService
 
 
 @pytest.fixture
@@ -211,6 +211,41 @@ async def test_inactive_alias_raises(sample_alias_row):
     rs = RouterService()
     with pytest.raises(LookupError, match="inactive"):
         await rs.resolve_bedrock_model(redis, db, "claude-sonnet-4-6")
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "resolver, model_ref",
+    [
+        ("resolve_bedrock_model", "claude-sonnet-4-6"),
+        ("resolve_codex_model", "codex-gpt"),
+    ],
+)
+async def test_inactive_raises_model_inactive_error_specifically(
+    sample_alias_row, resolver, model_ref
+):
+    """PINS THE SEAM: inactive must raise ModelInactiveError, not a bare LookupError.
+
+    routers/openai_compat._resolve_model tells the two apart on purpose: an unknown
+    alias falls back to default_model, an INACTIVE one is an operator kill switch and
+    must 404. If this collapses back to a plain LookupError, the kill switch silently
+    degrades into "serve default_model and bill the wrong alias" — and every test that
+    only asserts LookupError (the base class) would still pass. Hence this assertion on
+    the exact type, against the real resolver rather than a fake.
+    """
+    sample_alias_row.status = "INACTIVE"
+    sample_alias_row.provider = (
+        "BEDROCK" if resolver == "resolve_bedrock_model" else "BEDROCK_MANTLE_OPENAI"
+    )
+    sample_alias_row.alias = model_ref
+    redis = AsyncMock()
+    redis.get = AsyncMock(return_value=None)
+    db = _make_db_mock([sample_alias_row])
+
+    rs = RouterService()
+    with pytest.raises(ModelInactiveError, match="inactive"):
+        await getattr(rs, resolver)(redis, db, model_ref)
 
 
 @pytest.mark.unit
