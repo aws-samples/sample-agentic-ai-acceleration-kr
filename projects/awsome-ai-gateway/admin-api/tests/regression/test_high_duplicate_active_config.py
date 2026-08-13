@@ -12,8 +12,12 @@ Fix, two independent layers:
   1. ``pg_advisory_xact_lock`` on the logical key in the write path (``app/repositories/_locks.py``),
      so the second caller *succeeds* — it waits, then correctly supersedes — rather than merely
      failing safely;
-  2. partial UNIQUE indexes (migration ``0024``, and ``db/init/02_create_tables.sql`` for fresh
-     installs) as the database-level backstop for any writer that skips the lock.
+  2. partial UNIQUE indexes as the database-level backstop for any writer that skips the lock.
+     Migration ``0024`` is their sole owner: it dedupes first and only then creates them. The init
+     SQL must NOT also create them, because ``run_migration.sh`` applies ``db/init/*.sql`` under
+     ``set -e`` *before* running alembic, so an index created there aborts the upgrade on exactly
+     the installations that still carry duplicates. Fresh installs are covered all the same — both
+     the cloud script and the docker-compose ``migration`` service run ``alembic upgrade head``.
 
 Both regressions share one fix, one migration and one test rig, so they share one file.
 
@@ -183,15 +187,22 @@ def test_migration_0024_dedupes_before_creating_the_indexes():
 
 
 def _index_ddl(name: str) -> str:
-    """The shipped CREATE statement for one index, taken from db/init/02_create_tables.sql.
+    """The shipped CREATE statement for one index, as *executable* SQL.
 
-    The behavioural proofs below run against this exact text rather than a copy, so the rig cannot
-    drift away from what customers actually install.
+    Migration 0024 is the single owner of these indexes — see
+    ``test_init_sql_does_not_create_the_indexes`` for why the init SQL must not create them too.
+    So the DDL is recovered from 0024's source, which spells each statement as adjacent Python
+    string literals; the literal quoting and newlines are stripped here so the behavioural proofs
+    below can execute this exact text rather than a copy, and the rig cannot drift away from what
+    customers actually install.
     """
-    src = _INIT_SQL.read_text()
-    match = re.search(rf"CREATE UNIQUE INDEX IF NOT EXISTS {name}\b.*?;", src, re.DOTALL)
-    assert match, f"{name} not found in {_INIT_SQL.name}"
-    return match.group(0).rstrip(";")
+    ddl = _migration_index_ddl(name)
+    # Splice the adjacent literals together by deleting each literal boundary (a closing quote,
+    # whitespace, an optional f-prefix, an opening quote), then shed the trailing `)` and quote.
+    sql = re.sub(r'"\s*f?"', "", ddl).rstrip().rstrip(")").rstrip().rstrip('"').strip()
+    assert sql.startswith("CREATE UNIQUE INDEX"), f"recovered DDL for {name} looks wrong: {sql!r}"
+    assert '"' not in sql, f"literal boundary left in recovered DDL for {name}: {sql!r}"
+    return sql
 
 
 def _migration_index_ddl(name: str) -> str:
@@ -216,17 +227,36 @@ def _migration_index_ddl(name: str) -> str:
 
 
 def _all_index_ddl(name: str) -> list[tuple[str, str]]:
-    """(source label, emitted DDL) for both places the index is defined."""
-    return [(_INIT_SQL.name, _index_ddl(name)), (_MIGRATION.name, _migration_index_ddl(name))]
+    """(source label, emitted DDL) for every place the index is defined — 0024 alone."""
+    return [(_MIGRATION.name, _migration_index_ddl(name))]
 
 
 @pytest.mark.unit
-def test_both_ddl_sources_define_both_indexes():
-    """Fresh installs run db/init; upgrades run migration 0024. A guard that only checked one
-    would let the other rot."""
+def test_migration_0024_defines_both_indexes():
+    """Both installation paths converge on 0024, so it is the only definition that has to exist.
+    Fresh installs apply db/init and then `alembic upgrade head`; upgrades run the same script.
+    run_migration.sh puts `alembic upgrade head` (line 74) outside the cloud-mode branch that ends
+    at line 71, and docker-compose gives local installs a dedicated `migration` service that every
+    app service waits on, so no shipped path stops after the init SQL."""
     for name in ("uq_budget_configs_active", "uq_rate_limit_configs_active"):
         for label, ddl in _all_index_ddl(name):
             assert name in ddl, f"{label}: {name} missing"
+
+
+@pytest.mark.unit
+def test_init_sql_does_not_create_the_indexes():
+    """The init SQL must NOT create them, or upgrades abort before 0024 can repair anything.
+
+    run_migration.sh applies init/0[1-7]*.sql with `psql -v ON_ERROR_STOP=1` (line 42) under
+    `set -e` (line 21) and only then runs alembic (line 74). Creating a unique index in the init
+    SQL therefore fails on precisely the installations that already carry duplicate active rows —
+    the corruption 0024 exists to remove — and `set -e` kills the job while the duplicates remain.
+    """
+    src = _INIT_SQL.read_text()
+    for name in ("uq_budget_configs_active", "uq_rate_limit_configs_active"):
+        assert f"CREATE UNIQUE INDEX IF NOT EXISTS {name}" not in src, (
+            f"{_INIT_SQL.name} must not create {name}; migration 0024 creates it after deduping"
+        )
 
 
 @pytest.mark.unit
@@ -277,7 +307,7 @@ _ACTOR = uuid.UUID("00000000-0000-0000-0000-0000000000ff")
 
 # Minimal slice of the asset schema: the two tables under test plus the FK targets they need.
 # Enum members and the client CHECK mirror db/init/02_create_tables.sql; the unique indexes are
-# read from that file verbatim by _index_ddl().
+# read verbatim out of migration 0024 by _index_ddl(), which owns them.
 _BASE_DDL = [
     "DROP SCHEMA IF EXISTS budget CASCADE",
     "DROP SCHEMA IF EXISTS model CASCADE",
