@@ -71,4 +71,7 @@ values.local.yaml
 
 # OMC orchestration work artifacts (inventories, workflow scripts, session state) — not deliverable
 .omc/
-SECURITY-FINDINGS.md
+
+# Security scan output — reviewer-only, may embed live resource identifiers
+*scan-report*.json
+SECURITY-FINDINGS*.md

@@ -128,10 +128,18 @@ export function CreateModelDialog({ isOpen, onClose, editModel }: CreateModelDia
         });
         onClose();
       } else {
-        setError(result.error);
-        if (!result.success && result.fieldErrors) {
-          setFieldErrors(result.fieldErrors);
-        }
+        // Field-error keys with no matching input in this form cannot be rendered by the JSX
+        // below, so they just disappear. That is exactly why the max_tokens/context_window
+        // schema drift showed up only as a "Validation failed" with no cause. Merge the
+        // unrenderable keys into the top-level error message so they are always visible.
+        const fe = (!result.success && result.fieldErrors) || {};
+        const orphanKeys = Object.keys(fe).filter((k) => !(k in form));
+        setError(
+          orphanKeys.length
+            ? `${result.error}: ${orphanKeys.map((k) => `${k} (${fe[k]})`).join(', ')}`
+            : result.error
+        );
+        setFieldErrors(fe);
       }
     });
   };
@@ -195,9 +203,10 @@ export function CreateModelDialog({ isOpen, onClose, editModel }: CreateModelDia
               <option value="">{t('selectProvider')}</option>
               <option value="BEDROCK">BEDROCK</option>
               <option value="OPENMODEL">OPENMODEL</option>
-              {/* Mantle 계열은 endpoint_url·api_format 이 필요해 보통 마이그레이션으로 시드되지만,
-                  기존 cowork-opus / codex-gpt 모델 편집(단가 등) 시 provider 드롭다운이 값과
-                  매칭되도록 옵션을 노출한다. */}
+              {/* Mantle providers need endpoint_url and api_format, so they are normally seeded
+                  by a migration. The options are still exposed here so the provider dropdown
+                  matches the stored value when editing existing cowork-opus / codex-gpt models
+                  (unit price, etc.). */}
               <option value="BEDROCK_MANTLE">BEDROCK_MANTLE (Cowork · Opus)</option>
               <option value="BEDROCK_MANTLE_OPENAI">BEDROCK_MANTLE_OPENAI (Codex · GPT)</option>
             </select>

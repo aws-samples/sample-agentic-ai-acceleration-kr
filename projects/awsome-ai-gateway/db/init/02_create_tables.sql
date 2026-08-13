@@ -137,6 +137,13 @@ CREATE TABLE IF NOT EXISTS budget.budget_configs (
 
 CREATE INDEX IF NOT EXISTS idx_budget_configs_scope ON budget.budget_configs (scope, scope_id) WHERE is_active = true;
 
+-- Two rows with is_active=true under the same key make every later lookup fail with
+-- MultipleResultsFound → 500 in scalar_one_or_none() (see migration 0024). COALESCE is required —
+-- org-wide budget rows (client IS NULL) are not covered by plain (scope, scope_id, client).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_budget_configs_active
+    ON budget.budget_configs (scope, scope_id, COALESCE(client, ''))
+    WHERE is_active = true;
+
 CREATE TABLE IF NOT EXISTS budget.budget_usages (
     id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     scope                   budget.budget_scope NOT NULL,
@@ -227,6 +234,15 @@ CREATE TABLE IF NOT EXISTS model.rate_limit_configs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_rate_limit_configs_scope ON model.rate_limit_configs (scope, scope_id) WHERE is_active = true;
+
+-- Same as migration 0024. model_alias is deliberately not part of the key — the upsert
+-- deactivates every active row for the scope regardless of alias, so including alias
+-- would open a real duplicate window. COALESCE(scope_id, ...) is required — GLOBAL scope
+-- has scope_id IS NULL, and NULLs are distinct in a unique index, so plain
+-- (scope, scope_id) would not cover it.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_rate_limit_configs_active
+    ON model.rate_limit_configs (scope, COALESCE(scope_id, '00000000-0000-0000-0000-000000000000'::uuid))
+    WHERE is_active = true;
 
 -- ------------------------------------------------------------
 -- 팀별 모델 접근 제어

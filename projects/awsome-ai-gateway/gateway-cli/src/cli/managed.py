@@ -51,25 +51,51 @@ def read_gateway_settings() -> dict | None:
         return None
 
 
-def write_gateway_settings(
+def build_gateway_settings(
     gateway_url: str,
     admin_api_url: str,
     api_key_helper_path: str,
     otel_endpoint: str | None = None,
     otel_auth_token: str | None = None,
-) -> Path:
-    """Write gateway managed settings file.
+    oidc_issuer_url: str | None = None,
+    oidc_client_id: str | None = None,
+    oidc_audience: str | None = None,
+) -> dict:
+    """Assemble the managed-settings document (pure — no filesystem, no sudo).
+
+    Split out of :func:`write_gateway_settings` so the env block can be unit
+    tested without sudo; the write path is a thin wrapper around this.
 
     gateway_url:   Gateway proxy URL (ANTHROPIC_BASE_URL — for Claude Code API calls)
     admin_api_url: Admin API URL (GATEWAY_CLI_GATEWAY_URL — for api-key-helper VK issuance)
 
-    Requires root/admin — uses sudo on Linux/WSL.
-    Returns the path of the written file.
+    OIDC_ISSUER_URL / OIDC_CLIENT_ID are written because ``apiKeyHelper`` runs as a
+    *child of Claude Code*, so its only configuration channel is this ``env`` block —
+    it does not inherit the operator's shell. api_key_helper._detect_mode requires
+    BOTH vars to pick OIDC mode; with neither present it silently selects STS(IAM)
+    mode, which either issues a VK against the caller's AWS IAM ARN (wrong user —
+    admin-api provisions ``<session_name>@unknown``) or, with no SSO session, prints
+    nothing to stdout and exits 1. Claude Code then has no credential and falls back
+    to its own first-party login prompt ("Not logged in · Please run /login") — i.e.
+    the redirect-to-1P symptom. Omitting these two keys was the defect;
+    guides/user-guide.md §5.2 has always told manual users to set all four.
     """
     env: dict[str, str] = {
         "ANTHROPIC_BASE_URL": gateway_url,
         "GATEWAY_CLI_GATEWAY_URL": admin_api_url,
     }
+
+    # OIDC (IDP) — the two vars api-key-helper requires to operate in OIDC mode.
+    # ADMIN_API_URL is not written separately: gateway_cli_oidc.load_oidc_config_from_env
+    # falls back to ``ADMIN_API_URL or GATEWAY_CLI_GATEWAY_URL``, so the key above already
+    # covers that role (writing the same value under two keys drifts once only one is updated).
+    if oidc_issuer_url and oidc_client_id:
+        env["OIDC_ISSUER_URL"] = oidc_issuer_url.rstrip("/")
+        env["OIDC_CLIENT_ID"] = oidc_client_id
+        # audience is optional — needed only when admin-api's OIDC_AUDIENCE check is enabled.
+        # An empty string is omitted instead: audience handling differs per IDP and can cause 401.
+        if oidc_audience:
+            env["OIDC_AUDIENCE"] = oidc_audience
 
     # Claude Code client-side OTEL (metrics + traces + code activity)
     if otel_endpoint:
@@ -82,12 +108,39 @@ def write_gateway_settings(
         if otel_auth_token:
             env["OTEL_EXPORTER_OTLP_HEADERS"] = f"Authorization=Bearer {otel_auth_token}"
 
-    settings = {
+    return {
         "_comment": "LLM Gateway — managed by gateway-cli",
         "env": env,
         "apiKeyHelper": api_key_helper_path,
         "statusLine": {"type": "command", "command": "statusline"},
     }
+
+
+def write_gateway_settings(
+    gateway_url: str,
+    admin_api_url: str,
+    api_key_helper_path: str,
+    otel_endpoint: str | None = None,
+    otel_auth_token: str | None = None,
+    oidc_issuer_url: str | None = None,
+    oidc_client_id: str | None = None,
+    oidc_audience: str | None = None,
+) -> Path:
+    """Write gateway managed settings file.
+
+    Requires root/admin — uses sudo on Linux/WSL.
+    Returns the path of the written file.
+    """
+    settings = build_gateway_settings(
+        gateway_url=gateway_url,
+        admin_api_url=admin_api_url,
+        api_key_helper_path=api_key_helper_path,
+        otel_endpoint=otel_endpoint,
+        otel_auth_token=otel_auth_token,
+        oidc_issuer_url=oidc_issuer_url,
+        oidc_client_id=oidc_client_id,
+        oidc_audience=oidc_audience,
+    )
 
     content = json.dumps(settings, indent=2, ensure_ascii=False) + "\n"
     target = _managed_file()

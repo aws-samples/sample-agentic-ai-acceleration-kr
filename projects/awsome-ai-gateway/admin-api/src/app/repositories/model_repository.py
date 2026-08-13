@@ -16,6 +16,7 @@ from app.models.model import (
     RateLimitScope,
     TeamAllowedModel,
 )
+from app.repositories._locks import advisory_xact_lock
 
 
 class ModelRepository:
@@ -150,6 +151,16 @@ class RateLimitConfigRepository:
         self._session = session
 
     async def upsert(self, config: RateLimitConfig) -> RateLimitConfig:
+        # Serialize concurrent upserts of the same logical key, or two overlapping writes each
+        # deactivate-then-insert and leave two is_active=true rows behind — after which
+        # get_active() raises MultipleResultsFound forever (regression #53).
+        #
+        # The key is (scope, scope_id) WITHOUT model_alias, matching the predicate below: this
+        # upsert is deliberately alias-blind, so at most one active row per scope exists. Adding
+        # model_alias to the key would let two concurrent writes for different aliases race.
+        await advisory_xact_lock(
+            self._session, "rate_limit_configs", config.scope.value, config.scope_id
+        )
         stmt = (
             update(RateLimitConfig)
             .where(
