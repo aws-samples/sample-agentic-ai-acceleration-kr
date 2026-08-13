@@ -96,7 +96,7 @@ def db_session_factory():
     The factory returns a context manager yielding a session whose `add_all` calls
     are recorded so tests can assert batch INSERT behavior. We do NOT use a real DB
     here because AuditLog uses Postgres-specific schema=audit and JSONB types.
-    Real DB integration is covered separately (Finch e2e in Task A5).
+    Real-database integration for the batch insert has no coverage yet.
     """
     from contextlib import asynccontextmanager
 

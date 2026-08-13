@@ -165,7 +165,9 @@ migration Job 이 **매 helm install/upgrade 마다** 실행되어:
 1. init SQL (`db/init/*.sql`) 실행 — schemas, tables, seed data (idempotent)
 2. `gateway` 유저 생성 (없으면) 또는 비번 업데이트 (있으면) — **Terraform 이 생성한 password 사용**
 3. 모든 schema 에 필요한 권한 부여 (USAGE, CREATE, SELECT/INSERT/UPDATE/DELETE, DEFAULT PRIVILEGES)
-4. `alembic stamp head`
+4. `alembic upgrade head` — 실제 마이그레이션 적용. 이 단계에서 `budget_configs` /
+   `rate_limit_configs` 의 partial UNIQUE 인덱스가 중복 정리 후 생성된다(migration 0024).
+   `stamp` 가 아니므로 신규 설치와 업그레이드 모두 이 단계를 반드시 통과해야 한다.
 
 수동 SQL 실행 불필요. 신규 계정에서도 이 구조 그대로 재현.
 

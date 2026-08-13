@@ -70,7 +70,7 @@ spec:
           securityContext:
             {{- include "llm-gateway.containerSecurityContext" (dict "root" . "override" (dict)) | nindent 12 }}
           env:
-            # Alembic stamp 용 (application user)
+            # Alembic 용 (application user)
             - name: DB_PASSWORD
               valueFrom:
                 secretKeyRef:
@@ -80,7 +80,8 @@ spec:
               value: {{ include "llm-gateway.dbUrl" . | quote }}
             # Cloud mode: init SQL 실행 + application user 생성용 (master 권한).
             # 이 env 들이 모두 제공될 때만 run_migration.sh 가 cloud mode 로 동작.
-            # 로컬 docker-compose 에서는 이 env 들이 없으므로 local mode (alembic stamp 만).
+            # 로컬 docker-compose 에서는 이 env 들이 없으므로 local mode — init SQL 은 postgres
+            # 컨테이너가 이미 실행했고, run_migration.sh 는 alembic upgrade head 만 수행한다.
             - name: DB_MASTER_PASSWORD
               valueFrom:
                 secretKeyRef:

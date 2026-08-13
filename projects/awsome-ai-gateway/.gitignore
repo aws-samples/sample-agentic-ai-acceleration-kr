@@ -69,8 +69,10 @@ values.local.yaml
 *.tmp
 .playwright-mcp/
 
-# OMC orchestration work artifacts (inventories, workflow scripts, session state) — not deliverable
+# Agent orchestration work artifacts (inventories, workflow scripts, session state) — not deliverable
 .omc/
+.superpowers/
+docs/superpowers/
 
 # Security scan output — reviewer-only, may embed live resource identifiers
 *scan-report*.json

@@ -3,8 +3,9 @@
 """Unit tests for KeyRepository.expire_and_create (B: single CTE).
 
 Mock-based: verifies method signature, SQL call shape, and return value parsing.
-Actual SQL execution (atomicity, lock semantics, Postgres CTE compatibility) is
-covered by Finch e2e in Task B4 — see docs/superpowers/plans/2026-05-08-admin-api-robustness-loadtest.md.
+These stub ``session.execute``, so they cannot catch a Postgres syntax error, a changed RETURNING
+shape, or a loss of atomicity in the hand-written CTE. That behaviour has no real-database coverage
+yet; adding a proof against a live Postgres instance is still outstanding.
 """
 
 from __future__ import annotations
