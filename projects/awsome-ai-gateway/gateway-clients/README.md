@@ -41,7 +41,8 @@ cd gateway-clients
   Claude Code 가 `/v1/messages` 를 게이트웨이로 호출. 게이트웨이가 `client=claude-code` 로 식별.
 - **codex-box**: entrypoint 가 `~/.codex/config.toml` 을 생성(`base_url=<게이트웨이>/v1`,
   `wire_api="responses"`, `env_key=GATEWAY_VK`) → Codex 가 `/v1/responses` 로 GPT-5.5 호출.
-  Codex 가 보내는 `originator: codex_cli_rs` 헤더로 게이트웨이가 `client=codex` 식별.
+  Codex 가 보내는 `originator` 헤더로 게이트웨이가 `client=codex` 식별 — 대화형은 `codex_cli_rs`,
+  `codex exec` 는 `codex_exec` 이고 판정이 `startswith("codex")` 라서 둘 다 인식된다.
 - **VK**: 호스트 `~/.gateway-vk`(plain 문자열, 600)에서 읽어 컨테이너에 env 주입. 호스트 환경 무변경.
   1시간 만료 → `./gw.sh vk` 재실행.
 

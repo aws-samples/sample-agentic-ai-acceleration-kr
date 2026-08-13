@@ -358,11 +358,29 @@ def _detect_mode(explicit_mode: str | None) -> str:
     """Return 'oidc' or 'sts'.
 
     Explicit override > env auto-detect > legacy sts default.
+
+    Partial configuration is warned about: when only one of the two vars is set
+    the OIDC intent is obvious, yet the mode silently falls back to STS and the
+    user — who did log in through the IDP — is provisioned as a *different user*
+    keyed on the IAM ARN (auto-provisioning in admin-api
+    services/cli_service.py: email = ``<session_name>@unknown``). The user then
+    cannot find their own account in the Admin UI user list and usage
+    accumulates under that ARN user — very hard to track down.
     """
     if explicit_mode in ("oidc", "sts"):
         return explicit_mode
-    if os.environ.get("OIDC_ISSUER_URL") and os.environ.get("OIDC_CLIENT_ID"):
+    issuer = os.environ.get("OIDC_ISSUER_URL")
+    client_id = os.environ.get("OIDC_CLIENT_ID")
+    if issuer and client_id:
         return "oidc"
+    if issuer or client_id:
+        missing = "OIDC_CLIENT_ID" if issuer else "OIDC_ISSUER_URL"
+        print(
+            f"Warning: {missing} is not set, so STS(IAM) mode is used instead of OIDC. "
+            "The VK is issued for your AWS IAM ARN, not your IDP login identity. "
+            f"To use OIDC, set {missing} or pass --auth-mode oidc.",
+            file=sys.stderr,
+        )
     return "sts"
 
 

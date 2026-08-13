@@ -8,10 +8,11 @@ import time
 import structlog
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from sqlalchemy.exc import DBAPIError
 
 from app.schemas.domain import ProviderType, TokenUsage
 from app.schemas.responses import ModelObject, ModelPricingObject, ModelsListResponse
-from app.services.router_service import RouterService
+from app.services.router_service import ModelInactiveError, RouterService
 from app.services.streaming import openai_sse_stream
 
 logger = structlog.get_logger(__name__)
@@ -331,6 +332,107 @@ async def _handle_responses(request: Request):
             return None
         return await routing_loader.load(redis, db, client)
 
+    # Per-request model selection (added with the GPT-5.6 Sol/Terra/Luna aliases).
+    #
+    # Before this, the profile's default_model was the ONLY reachable model on this
+    # route, so registering three GPT-5.6 aliases would have left all three
+    # unreachable: a client sending {"model": "codex-gpt-5.6-sol"} still got the
+    # default. Now the client's own model wins WHEN it resolves to an ACTIVE
+    # BEDROCK_MANTLE_OPENAI alias.
+    #
+    # Falling back (rather than 404ing) on an unresolvable value is what makes this
+    # change regression-free for existing clients: Codex always sends SOME model id,
+    # typically an upstream OpenAI name like "gpt-5.5-codex" that is not one of our
+    # aliases. Before this change that value was ignored; a strict lookup would turn
+    # every such request into a 404. The default_model path below is therefore reached
+    # by exactly the requests that reached it before.
+    #
+    # This is NOT an entitlement bypass: whatever is resolved goes through
+    # check_key_scope() below, which matches against {alias, provider_model_id}. A key
+    # scoped to codex-gpt cannot reach a GPT-5.6 alias by asking for it.
+    #
+    # KNOWN COST, accepted: a model name we do not register costs 2 extra indexed
+    # SELECTs (alias match, then provider_model_id match) before the fallback, on every
+    # such request -- failed lookups are not negatively cached, and a Codex client sends
+    # the same unregistered name every time. Measured: exactly 2 queries per miss.
+    # Accepted rather than optimised because the alternative (caching negative lookups)
+    # would delay a newly-registered alias becoming reachable, and an operator adding a
+    # model expects it to work immediately. If this ever shows up in DB load, negatively
+    # cache the miss with a TTL well under MODEL_CACHE_TTL rather than reordering these
+    # lookups -- and note the cost lands only on clients sending unregistered names.
+    def _is_usable_model_ref(value) -> bool:
+        """True only for a value we can safely hand to the resolver.
+
+        "model" comes straight from untrusted client JSON, so it is not necessarily a
+        usable string, and an unusable one must not reach the resolver: the resolver's
+        failures below are caught as LookupError, but these two failure modes are NOT
+        LookupError, so they would escape the fallback and 500 a request that returned
+        200 before this feature existed.
+
+          * non-str (number/list/dict/bool) → asyncpg gets a non-text bind for a VARCHAR
+            comparison and raises DBAPIError. Verified against real Postgres with
+            123 / ["a"] / {"x":1} / True.
+          * lone UTF-16 surrogate (e.g. {"model": "\\ud800"}) → valid JSON and a real str,
+            but redis-py encodes cache keys with encoding_errors="strict", so
+            redis.get(f"model:{ref}") raises UnicodeEncodeError before any DB call.
+            Verified directly against redis-py's Encoder.
+          * NUL byte (e.g. {"model": "codex\\u0000gpt"}) → valid JSON, a real str, and
+            encodes to UTF-8 cleanly, so neither check above catches it. Postgres has no
+            NUL in text: asyncpg raises CharacterNotInRepertoireError ("invalid byte
+            sequence for encoding UTF8: 0x00"). Verified against real Postgres.
+
+        All are rejected here rather than caught below, so the profile default serves
+        them exactly as it did before per-request selection.
+
+        Deliberately NOT rejected: an over-long value. Postgres compares
+        `alias = $1` by VALUE, not by the column's declared width, so a 100 000-char ref
+        simply matches nothing and falls back (verified: HTTP 200). Length is bounded
+        for LOGGING only, at the log call below.
+        """
+        if not isinstance(value, str) or not value or "\x00" in value:
+            return False
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            return False
+        return True
+
+    async def _resolve_model(db, profile):
+        """Resolve the client-sent model, falling back to the profile default."""
+        if _is_usable_model_ref(requested_alias) and requested_alias != profile.default_model:
+            try:
+                return await _router_service.resolve_codex_model(redis, db, requested_alias)
+            except ModelInactiveError:
+                # Do NOT fall back. status=INACTIVE is an operator kill switch: an alias
+                # that exists but was deliberately disabled must be refused, not quietly
+                # served as some other model (which would also bill the wrong alias).
+                # Propagates as a 404 via the LookupError handler below.
+                raise
+            except (LookupError, DBAPIError):
+                # The alias is genuinely not ours (unknown name, or a different
+                # provider's alias) → the pre-existing behaviour: profile default.
+                #
+                # DBAPIError is a deliberate backstop, not a substitute for the guard
+                # above: "model" is untrusted client JSON, and a driver-level rejection
+                # of some value we did not anticipate must degrade to the default (the
+                # pre-feature behaviour) rather than 500 a request that used to succeed.
+                # It is caught HERE only — around the *requested* model. The default
+                # model's own lookup below is left to propagate, because a broken
+                # default is a real server fault and must not be hidden.
+                #
+                # INFO, not DEBUG: this is a silent model substitution, so it has to be
+                # visible at the default log level to be diagnosable. Truncated to the
+                # alias column's own width (128): the value is unbounded client input,
+                # and logging it verbatim turns one request into a multi-MB log line,
+                # while nothing legitimate is ever longer than the column allows.
+                logger.info(
+                    "responses_requested_model_unresolved_using_default",
+                    requested=requested_alias[:128],
+                    default_model=profile.default_model,
+                    client=client,
+                )
+        return await _router_service.resolve_codex_model(redis, db, profile.default_model)
+
     try:
         if not is_db_degraded and session_factory is not None:
             async with session_factory() as db:
@@ -341,9 +443,7 @@ async def _handle_responses(request: Request):
                         content={"error": {"type": "not_found",
                                             "message": "No Responses backend for this client"}},
                     )
-                model_config = await _router_service.resolve_codex_model(
-                    redis, db, profile.default_model
-                )
+                model_config = await _resolve_model(db, profile)
         else:
             profile = await _load_profile(None)
             if profile is None or profile.backend != "mantle" or not profile.default_model:
@@ -352,9 +452,7 @@ async def _handle_responses(request: Request):
                     content={"error": {"type": "not_found",
                                         "message": "No Responses backend for this client"}},
                 )
-            model_config = await _router_service.resolve_codex_model(
-                redis, None, profile.default_model
-            )
+            model_config = await _resolve_model(None, profile)
     except LookupError as e:
         return JSONResponse(
             status_code=404, content={"error": {"type": "not_found", "message": str(e)}}
@@ -392,8 +490,10 @@ async def _handle_responses(request: Request):
     adapter = registry.get(ProviderType.BEDROCK_MANTLE_OPENAI)
     rate_limit_state = state.get("rate_limit_state")
 
-    # Rewrite the outgoing model id to the resolved provider_model_id (e.g. openai.gpt-5.5),
-    # so the alias the client sent (codex-gpt / openai.gpt-5.5) maps to the Mantle model.
+    # Rewrite the outgoing model id to the resolved provider_model_id (e.g. openai.gpt-5.5,
+    # openai.gpt-5.6-terra), so the alias the client sent (codex-gpt-5.6-terra) — or the
+    # profile default, when the client sent something we do not recognise — maps to the
+    # Mantle model. Mantle only accepts provider model ids, never our aliases.
     if isinstance(req_data, dict):
         req_data["model"] = model_config.provider_model_id
         body = json.dumps(req_data).encode()

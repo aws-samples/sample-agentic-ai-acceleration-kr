@@ -73,9 +73,11 @@ claude            # 이제 그냥 실행하면 게이트웨이로 감 (Bearer VK
 ### 2-B. Codex (OpenAI Codex CLI)
 Codex 는 OpenAI **Responses API** 방언을 쓴다. `~/.codex/config.toml` 에 gateway provider 를 넣는다:
 ```toml
+model = "gpt-5.5"                      # 생략 금지 (아래 주의 참고)
 model_provider = "gateway"
 
 [model_providers.gateway]
+name = "LLM Gateway"                   # 필수 — 없으면 codex 가 config 로드를 거부
 base_url = "<ANTHROPIC_BASE_URL>/v1"   # 끝에 /v1
 wire_api = "responses"
 env_key  = "GATEWAY_VK"                # 아래 VK 를 이 env 로 참조
@@ -83,7 +85,20 @@ env_key  = "GATEWAY_VK"                # 아래 VK 를 이 env 로 참조
 ```bash
 export GATEWAY_VK="<VK>"   # gateway-cli 로 발급 (아래 부록) → codex 실행
 ```
-- 게이트웨이는 Codex 가 보내는 `originator: codex_cli_rs` 헤더로 `client=codex` 자동 식별.
+> ⚠️ **`name` 을 빠뜨리면 codex 가 아예 뜨지 않는다** (실측, Codex CLI 0.147.0):
+> `Error loading config.toml: model_providers.gateway: provider name must not be empty` 로 즉시 종료.
+> 게이트웨이 장애로 오인하기 쉬우므로 이 줄을 반드시 넣는다.
+>
+> ⚠️ **`model` 도 명시한다.** 생략하면 Codex 가 자체 기본값(0.147.0 은 `gpt-5.6-sol`)을 보내고, 이 문자열은
+> 게이트웨이 alias 와 일치하지 않는다. 현재 게이트웨이는 클라이언트가 보낸 `model` 을 무시하고 routing
+> profile 의 `default_model`(=`codex-gpt`, GPT-5.5) 로 라우팅하므로 **호출은 성공하지만**, Codex 내장
+> 메타데이터(context window 등)가 실제 모델과 어긋나 성능이 저하될 수 있다. `gpt-5.5` 를 주면 경고 없이
+> 정확한 메타데이터를 쓴다 (`gateway-clients/codex-box/entrypoint.sh:10-15` 의 실측 주석과 동일).
+
+- 게이트웨이는 Codex 가 보내는 `originator` 헤더로 `client=codex` 자동 식별.
+  값은 실행 모드에 따라 다르다 — 대화형 `codex` 는 `codex_cli_rs`, `codex exec` 는 `codex_exec`.
+  판정이 `originator.startswith("codex")` 라서 둘 다 인식된다
+  (`gateway-proxy/src/app/services/client_identifier.py:48-52`).
 - **격리 실행**(호스트 `~/.codex` 미접근): `gateway-clients/codex-box` 도커 이미지 사용 — 컨테이너 안에서만 config 생성. `gateway-clients/README.md` 참고.
 
 ### 2-C. Cowork (Claude 데스크톱 앱)

@@ -193,6 +193,8 @@ gateway-cli setup \
   Gateway URL:     https://gateway.llm-gateway.example.com
   Admin API URL:   https://admin-api.llm-gateway.example.com
   API Key Helper:  /usr/local/bin/api-key-helper
+  OIDC Issuer:     https://login.microsoftonline.com/<TENANT>/v2.0  (from login cache)
+  OIDC Client ID:  <CLIENT_ID>
 
   Gateway enabled: /etc/claude-code/managed-settings.d/50-gateway.json
 
@@ -200,6 +202,20 @@ Restart Claude Code to apply changes.
 ```
 
 이 명령은 `/etc/claude-code/managed-settings.d/50-gateway.json`에 설정을 기록합니다. Claude Code는 이 경로를 최우선으로 읽습니다.
+
+**OIDC 값은 4단계(`gateway-cli login`)의 토큰 캐시에서 자동으로 감지됩니다.** 따로 지정하려면
+`--issuer-url` / `--client-id` 옵션이나 `OIDC_ISSUER_URL` / `OIDC_CLIENT_ID` 환경변수를 쓰세요.
+
+> **`OIDC: (not set)` 경고가 노란색으로 뜨면 반드시 해결하고 넘어가세요.** 이 두 값이 없으면
+> `api-key-helper`가 IDP 대신 **AWS STS(IAM) 모드**로 동작합니다. 결과는 두 가지인데 둘 다
+> 원인을 찾기 어렵습니다 —
+> ① AWS SSO 세션이 있으면 IDP 신원이 아니라 **IAM ARN 기준의 다른 사용자**로 VK가 발급되어
+>   Admin UI 사용자 목록에서 본인 계정을 찾을 수 없고 사용량도 엉뚱한 유저에 쌓입니다.
+> ② AWS SSO 세션이 없으면 VK를 아예 못 받아 Claude Code가 **자체 로그인 화면
+>   (`Not logged in · Please run /login`)** 으로 돌아갑니다. 게이트웨이로 붙지 않습니다.
+>
+> 해결: `gateway-cli login`을 먼저 실행한 뒤 `gateway-cli setup`을 재실행하세요.
+> 현재 상태는 `gateway-cli status`의 `Auth Mode` 줄에서 확인할 수 있습니다.
 
 ### 5.2 수동 설정 (gateway-cli setup을 사용할 수 없는 경우)
 

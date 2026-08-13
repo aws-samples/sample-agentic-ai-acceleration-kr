@@ -58,8 +58,6 @@ export interface ModelCreateForm {
   cache_creation_5m_price_per_1k: number;
   cache_creation_1h_price_per_1k: number;
   cache_read_price_per_1k: number;
-  max_tokens: number;
-  context_window: number;
   description?: string;
   display_name?: string;
 }
@@ -72,12 +70,18 @@ export const ModelCreateSchema = z.object({
   input_price_per_1k: z.number().nonnegative(),
   output_price_per_1k: z.number().nonnegative(),
   cache_creation_5m_price_per_1k: z.number().nonnegative().default(0),
-  // 1h 캐시쓰기 단가 — 과거 스키마 누락으로 폼 값이 strip 되어 백엔드 default 0 으로
-  // 박혀 1시간 캐시 사용분 청구가 누락되던 버그 수정(deepdive Q-pricing).
+  // 1h cache-write unit price. Fixes the bug where the field was missing from this schema, so
+  // the form value was stripped and pinned to the backend default of 0, dropping the charge for
+  // 1-hour cache usage (deepdive Q-pricing).
   cache_creation_1h_price_per_1k: z.number().nonnegative().default(0),
   cache_read_price_per_1k: z.number().nonnegative().default(0),
-  max_tokens: z.number().int().positive(),
-  context_window: z.number().int().positive(),
+  // NOTE: do not put max_tokens / context_window back here. The model create/edit form has no
+  // inputs for either field (they are absent from CreateModelDialog's FormState), and there is
+  // no matching field in the backend ModelCreateRequest or in the model.model_aliases table.
+  // If they stay required, the form has no way to send a value, so safeParse always fails with
+  // {max_tokens: Required, context_window: Required} and the screen shows only "Validation
+  // failed" with no per-field hint, blocking model creation and editing 100%.
+  // (Both fields exist only on the ModelListItem display type and are always filled with 0.)
   description: z.string().max(512).optional(),
   display_name: z.string().max(128).optional(),
 });
