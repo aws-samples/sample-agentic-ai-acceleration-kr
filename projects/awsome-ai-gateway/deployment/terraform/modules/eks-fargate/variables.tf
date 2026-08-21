@@ -44,6 +44,9 @@ variable "addon_versions" {
   })
   # cluster_version 과 짝이 맞아야 한다. 기본값 = 1.34 호환(describe-addon-versions 의 defaultVersion).
   # 기존 클러스터를 단계 업그레이드 중이면 env 의 eks_addon_versions 로 현재 버전 호환값을 pin 할 것.
+  # nullable=false 필수: env 가 null 을 넘겨도 기본값으로 폴백된다. 없으면 null 이 그대로
+  # 들어와 var.addon_versions.coredns 참조가 plan 에서 터진다 (실제 겪음).
+  nullable = false
   default = {
     coredns    = "v1.12.4-eksbuild.18"
     kube_proxy = "v1.34.6-eksbuild.18"
