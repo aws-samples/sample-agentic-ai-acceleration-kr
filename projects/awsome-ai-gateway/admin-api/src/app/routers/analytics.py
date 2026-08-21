@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import Response
@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import CurrentUser, require_admin, require_admin_or_team_leader
 from app.core.db import get_db_session
-from app.core.usage_filters import cost_period_filter, kst_month_expr
+from app.core.usage_filters import cost_period_filter, current_kst_period, kst_month_expr
 from app.models.usage import UsageLog
 
 router = APIRouter(prefix="/admin/analytics", tags=["Analytics"])
@@ -45,9 +45,8 @@ async def get_model_cost_analytics(
     admin: CurrentUser = Depends(require_admin),
     session: AsyncSession = Depends(get_db_session),
 ):
-    now = date.today()
     if not period:
-        period = f"{now.year}-{now.month:02d}"
+        period = current_kst_period()  # KST 월(§59) — pod TZ(UTC) 아님
 
     model_stmt = (
         select(

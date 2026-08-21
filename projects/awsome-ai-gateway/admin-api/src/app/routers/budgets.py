@@ -186,12 +186,12 @@ async def get_team_allocation(
     user: CurrentUser = Depends(require_admin_or_team_leader),
     session: AsyncSession = Depends(get_db_session),
 ):
-    from datetime import date as _date
-
+    from app.core.usage_filters import current_kst_period
     from app.services.budget_service import BudgetService
 
     svc: BudgetService = request.app.state.budget_service
-    effective_period = period or _date.today().strftime("%Y-%m")
+    # KST 월(§59) — date.today() 는 pod TZ(UTC)라 월 경계 첫 9시간에 지난달이 된다.
+    effective_period = period or current_kst_period()
     return await svc.get_team_allocation(
         session,
         team_id=uuid.UUID(team_id),

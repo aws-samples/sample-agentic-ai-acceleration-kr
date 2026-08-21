@@ -38,11 +38,12 @@ async def trigger_aggregation(
 
         raise HTTPException(status_code=403, detail="Not available in production")
 
-    from datetime import datetime, timezone
-
+    from app.core.usage_filters import current_kst_period
     from app.scheduler.roi_aggregator import aggregate_usage
 
-    period = datetime.now(timezone.utc).strftime("%Y-%m")
+    # 스케줄러(scheduler/main.py)와 **같은 월 정의**를 써야 한다 — 수동 트리거가 UTC
+    # 월로 집계하면 월초 9시간 동안 cron 과 다른 달의 행을 만든다(§59).
+    period = current_kst_period()
     await aggregate_usage(session, period)
     return {"status": "ok", "period": period}
 

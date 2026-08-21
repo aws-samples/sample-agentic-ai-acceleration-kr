@@ -162,12 +162,17 @@ async def get_productivity_analytics(
     session: AsyncSession = Depends(get_db_session),
 ):
 
-    from datetime import date
-    now = date.today()
+    # 기본 period 는 **KST 기준 현재월**. date.today() 는 프로세스 로컬 TZ(pod=UTC)를
+    # 따르므로, KST 8/1 00~09시에 호출하면 "2026-07" 이 되어 아래 KST 월 필터와
+    # 어긋난다(사용자에겐 "새 달인데 지난달 지표"로 보임).
+    from app.core.usage_filters import current_kst_period, kst_period_range_filter
+
     if not period:
-        period = f"{now.year}-{now.month:02d}"
+        period = current_kst_period()
 
     # Productivity: code generation stats
+    # 월 경계는 비용 집계(§59)와 **동일하게 KST**. 과거엔 to_char(created_at,'YYYY-MM')
+    # 로 UTC 월이라, ROI 의 분자(수락 라인)와 분모(비용)가 서로 다른 달을 봤다.
     prod_stmt = (
         select(
             func.count().label("total_events"),
@@ -176,7 +181,7 @@ async def get_productivity_analytics(
             func.count().filter(ProductivityEvent.event_type == ProductivityEventType.CODE_ACCEPTED).label("accepted_count"),
             func.count().filter(ProductivityEvent.event_type == ProductivityEventType.CODE_GENERATED).label("generated_count"),
         )
-        .where(func.to_char(ProductivityEvent.created_at, "YYYY-MM") == period)
+        .where(kst_period_range_filter(ProductivityEvent.created_at, period))
     )
     prod_result = await session.execute(prod_stmt)
     prod_row = prod_result.one()
@@ -191,7 +196,7 @@ async def get_productivity_analytics(
             func.coalesce(func.sum(GitEvent.commit_count), 0).label("total_commits"),
         )
         .where(
-            func.to_char(GitEvent.created_at, "YYYY-MM") == period,
+            kst_period_range_filter(GitEvent.created_at, period),
             GitEvent.event_type == GitEventType.COMMIT,
         )
     )
@@ -201,7 +206,7 @@ async def get_productivity_analytics(
     pr_opened_stmt = (
         select(func.count())
         .where(
-            func.to_char(GitEvent.created_at, "YYYY-MM") == period,
+            kst_period_range_filter(GitEvent.created_at, period),
             GitEvent.event_type == GitEventType.PR_OPENED,
         )
     )
@@ -210,7 +215,7 @@ async def get_productivity_analytics(
     pr_merged_stmt = (
         select(func.count())
         .where(
-            func.to_char(GitEvent.created_at, "YYYY-MM") == period,
+            kst_period_range_filter(GitEvent.created_at, period),
             GitEvent.event_type == GitEventType.PR_MERGED,
         )
     )
@@ -219,12 +224,12 @@ async def get_productivity_analytics(
     # Active developers (union of productivity + git)
     dev_prod = (
         select(ProductivityEvent.user_id)
-        .where(func.to_char(ProductivityEvent.created_at, "YYYY-MM") == period)
+        .where(kst_period_range_filter(ProductivityEvent.created_at, period))
     )
     dev_git = (
         select(GitEvent.user_id)
         .where(
-            func.to_char(GitEvent.created_at, "YYYY-MM") == period,
+            kst_period_range_filter(GitEvent.created_at, period),
             GitEvent.user_id.isnot(None),
         )
     )

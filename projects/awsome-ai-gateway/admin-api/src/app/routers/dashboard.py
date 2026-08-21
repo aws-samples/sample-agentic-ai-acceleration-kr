@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Query
@@ -16,22 +15,14 @@ from app.core.usage_filters import (
     client_coalesce_expr,
     client_filter,
     cost_period_filter,
+    current_kst_period,
     kst_month_expr,
 )
 from app.models.auth import Team, User
 from app.models.model import ModelAlias
 from app.models.usage import UsageLog, UsageStatus
-from zoneinfo import ZoneInfo
 
 router = APIRouter(prefix="/admin/dashboard", tags=["Dashboard"])
-
-_KST = ZoneInfo("Asia/Seoul")
-
-
-def _default_period() -> str:
-    # KST 기준(§59) — 데이터 월 버킷이 KST 이므로 기본 기간도 KST 로 통일.
-    # (한국 운영 자산 — 모든 캘린더 경계는 Asia/Seoul.)
-    return datetime.now(_KST).strftime("%Y-%m")
 
 
 @router.get("/summary")
@@ -42,7 +33,7 @@ async def dashboard_summary(
     session: AsyncSession = Depends(get_db_session),
 ):
     if not period:
-        period = _default_period()
+        period = current_kst_period()
 
     # 선택적 앱(client) 필터 — 'all'/None 이면 전체.
     where_clauses = [cost_period_filter(period)]
@@ -90,7 +81,7 @@ async def model_share(
     session: AsyncSession = Depends(get_db_session),
 ):
     if not period:
-        period = _default_period()
+        period = current_kst_period()
 
     where_clauses = [
         # §59 비용 집계 표준: SUCCESS 만 + KST 월 경계.
@@ -161,7 +152,7 @@ async def client_share(
     §59 비용 집계 표준(SUCCESS + KST 월 경계) 동일 적용. admin-ui ClientShareResponse 형태.
     """
     if not period:
-        period = _default_period()
+        period = current_kst_period()
 
     client_col = client_coalesce_expr().label("client")
     stmt = (
@@ -215,7 +206,7 @@ async def top_users(
     PII 금지: sso_subject 미노출(display_name·email 만).
     """
     if not period:
-        period = _default_period()
+        period = current_kst_period()
 
     stmt = (
         select(
@@ -265,7 +256,7 @@ async def top_teams(
     (users.team_id 경유 금지 — 팀 이동 사용자의 과거 비용 오귀속 방지).
     """
     if not period:
-        period = _default_period()
+        period = current_kst_period()
 
     stmt = (
         select(
