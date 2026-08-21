@@ -47,8 +47,21 @@ variable "elasticache_subnet_cidrs" {
 
 variable "eks_cluster_version" {
   # AWS EKS 는 minor version downgrade 불가. 한번 apply 된 버전 이상으로만 올릴 수 있음.
+  # 마이너 업그레이드도 1단계씩만 가능 — 기존 클러스터는 operations.md §8-E 절차로 순차 상향.
   type    = string
-  default = "1.30"
+  default = "1.34"
+}
+
+variable "eks_addon_versions" {
+  # EKS add-on(coredns·kube-proxy·vpc-cni) 버전. null 이면 모듈 기본값(= eks_cluster_version
+  # 기본값과 호환) 사용. 기존 클러스터를 단계 업그레이드할 때만 tfvars 로 현재 단계 호환값을
+  # 지정한다 — 각 버전의 호환값은 operations.md §8-E 의 표 참조.
+  type = object({
+    coredns    = string
+    kube_proxy = string
+    vpc_cni    = string
+  })
+  default = null
 }
 
 variable "aurora_engine_version" {

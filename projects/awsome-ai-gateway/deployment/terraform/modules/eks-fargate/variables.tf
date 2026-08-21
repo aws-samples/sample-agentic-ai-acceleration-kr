@@ -11,7 +11,7 @@ variable "environment" {
 variable "cluster_version" {
   description = "EKS Kubernetes 버전"
   type        = string
-  default     = "1.29"
+  default     = "1.34"
 }
 
 variable "vpc_id" {
@@ -42,10 +42,12 @@ variable "addon_versions" {
     kube_proxy = string
     vpc_cni    = string
   })
+  # cluster_version 과 짝이 맞아야 한다. 기본값 = 1.34 호환(describe-addon-versions 의 defaultVersion).
+  # 기존 클러스터를 단계 업그레이드 중이면 env 의 eks_addon_versions 로 현재 버전 호환값을 pin 할 것.
   default = {
-    coredns    = "v1.11.3-eksbuild.1"
-    kube_proxy = "v1.29.7-eksbuild.2"
-    vpc_cni    = "v1.18.3-eksbuild.1"
+    coredns    = "v1.12.4-eksbuild.18"
+    kube_proxy = "v1.34.6-eksbuild.18"
+    vpc_cni    = "v1.22.4-eksbuild.3"
   }
 }
 
