@@ -13,12 +13,12 @@ data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
 locals {
-  # Bedrock Mantle 서비스 엔드포인트 리전들 (일반 Bedrock 서울과 구별되는 별도 네임스페이스).
-  #   - ap-northeast-1 (Tokyo): Claude Code in-account Mantle(claude-opus-4-8-mantle).
-  #   - us-east-2 (Ohio): Codex in-account Mantle GPT-5.5 (openai.gpt-5.5, Responses API).
-  #     Codex 호출 계정 == gateway-proxy IRSA 계정(859)이라 cross-account assume 불필요 —
-  #     이 in-account 권한만으로 충분(라이브 probe 로 us-east-2 GPT-5.5 200 OK 확인).
-  mantle_regions = ["ap-northeast-1", "us-east-2"]
+  # gateway-proxy IRSA 가 in-account Bedrock Mantle(bedrock-mantle:*) 를 호출할 수 있는 리전.
+  # 배포별로 다르므로 var.mantle_regions 로 주입 (기본값 = Tokyo + Ohio, variables.tf 참조):
+  #   - ap-northeast-1 (Tokyo): Claude Code / Cowork in-account Mantle.
+  #   - us-east-2 (Ohio): Codex in-account Mantle GPT-5.5 (Responses API).
+  #   - 다른 리전 배포는 tfvars 에서 mantle_regions = ["us-east-1"] 처럼 지정.
+  mantle_regions = var.mantle_regions
 }
 
 # ------------------------------------------------------------------------------
