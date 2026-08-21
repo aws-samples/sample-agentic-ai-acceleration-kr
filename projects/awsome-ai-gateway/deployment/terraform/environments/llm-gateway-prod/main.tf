@@ -19,7 +19,7 @@ locals {
 module "vpc" {
   source = "../../modules/vpc"
 
-  aws_region               = var.aws_region
+  aws_region = var.aws_region
 
   project                  = var.project
   environment              = var.environment
@@ -39,6 +39,7 @@ module "eks" {
   project             = var.project
   environment         = var.environment
   cluster_version     = var.eks_cluster_version
+  addon_versions      = var.eks_addon_versions # null => 모듈 기본값(1.34 호환)
   vpc_id              = module.vpc.vpc_id
   private_subnet_ids  = module.vpc.private_subnet_ids
   public_access_cidrs = ["0.0.0.0/0"] # dev는 공개 접근 허용

@@ -37,6 +37,25 @@ resource "helm_release" "external_secrets" {
     value = var.environment == "prod" ? "2" : "1"
   }
 
+  # webhook·cert-controller 는 설치하지 않는다. 검증 웹훅(VWC)은 install-eks.sh 가
+  # 설치 중 제거해 와서 실운영은 수개월간 무-VWC 로 돌았고, 웹훅이 없으면
+  # cert-controller 는 readiness 교착(0/1)만 남긴다. 잘못된 ExternalSecret 은
+  # admission 거절 대신 reconcile 의 SecretSyncedError 로 드러난다.
+  set {
+    name  = "webhook.create"
+    value = "false"
+  }
+  set {
+    name  = "certController.create"
+    value = "false"
+  }
+  # CRD conversion 도 webhook 참조를 끊는다(전략 Webhook → None). 웹훅 없이
+  # Webhook 전략이 남으면 CRD 변환 호출이 죽은 서비스를 가리킨다.
+  set {
+    name  = "crds.conversion.enabled"
+    value = "false"
+  }
+
   atomic          = true
   cleanup_on_fail = true
   timeout         = 600

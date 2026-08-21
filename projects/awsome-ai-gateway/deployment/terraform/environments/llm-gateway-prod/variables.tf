@@ -46,9 +46,27 @@ variable "elasticache_subnet_cidrs" {
 }
 
 variable "eks_cluster_version" {
-  # AWS EKS 는 minor version downgrade 불가. 한번 apply 된 버전 이상으로만 올릴 수 있음.
+  # AWS EKS 는 minor version downgrade 불가. 한번 apply 된 버전 이상으로만 올릴 수 있고,
+  # 올릴 때도 마이너 1단계씩만 가능하다(1.31 → 1.34 같은 점프 불가).
+  # 기본값은 기존 배포가 apply 때 흔들리지 않도록 그대로 둔다 — 신규 설치 권장 버전은
+  # terraform.tfvars.example 에 eks_addon_versions 와 한 쌍으로 적어 두었다.
   type    = string
   default = "1.30"
+}
+
+variable "eks_addon_versions" {
+  # EKS add-on(coredns·kube-proxy·vpc-cni) 버전. null 이면 모듈 기본값(= eks_cluster_version
+  # 기본값과 호환) 사용. eks_cluster_version 을 바꾸는 설치·업그레이드에서는 반드시 같이
+  # 지정한다 — 한 버전의 addon 은 다른 버전에 존재하지 않아 apply 가 실패한다.
+  # 호환값 조회:
+  #   aws eks describe-addon-versions --addon-name coredns --kubernetes-version <ver> \
+  #     --query 'addons[0].addonVersions[?compatibilities[0].defaultVersion==`true`].addonVersion'
+  type = object({
+    coredns    = string
+    kube_proxy = string
+    vpc_cni    = string
+  })
+  default = null
 }
 
 variable "aurora_engine_version" {
