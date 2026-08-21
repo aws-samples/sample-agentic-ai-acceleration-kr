@@ -23,8 +23,10 @@ set -euo pipefail
 # 이 스크립트의 aws 호출(secretsmanager describe-secret 등)은 --region 을 명시하지 않아
 # 셸 기본 리전을 따른다. 리전이 안 잡힌 셸에서 실행하면 Secrets Manager preflight 가
 # 엉뚱한 리전을 뒤져 "Secret 없음" 으로 오판하므로, 추측하지 말고 즉시 중단한다.
-# 우선순위: AWS_REGION > AWS_DEFAULT_REGION. 그 뒤 둘을 통일.
-: "${AWS_REGION:=${AWS_DEFAULT_REGION:-}}"
+# 우선순위: AWS_REGION > AWS_DEFAULT_REGION > ~/.aws/config (aws configure get region).
+# 그 뒤 둘을 통일. config 폴백이 없으면 env 없이 ~/.aws/config 로만 리전을 잡은 셸에서
+# aws CLI 자체는 정상 동작하는데도 이 가드가 거부하는 오탐이 난다.
+: "${AWS_REGION:=${AWS_DEFAULT_REGION:-$(aws configure get region 2>/dev/null)}}"
 if [ -z "$AWS_REGION" ]; then
     echo "ERROR: region is not set. export AWS_DEFAULT_REGION=<region> (e.g. ap-northeast-2) and retry." >&2
     exit 1
@@ -379,14 +381,25 @@ helm_install() {
     aws_account_id=$(aws sts get-caller-identity --query Account --output text)
     local ecr_registry="${aws_account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 
+    # SSRF 방어용 STS 허용 리전(admin-api VK 발급). 클라이언트가 GetCallerIdentity 를
+    # presign 하는 곳 = 배포 리전이므로 배포 리전이 반드시 목록에 있어야 한다.
+    # (values 기본값이 ap-northeast-2 라, 안 넣으면 다른 리전 배포에서 VK 발급 거부.)
+    # 단 helm 의 --set/-f 는 리스트를 병합하지 않고 통째로 치환하므로, 배포 리전만
+    # 넘기면 values 에 적어 둔 다중 리전이 조용히 잘린다 → values 의 목록을 읽어
+    # 배포 리전을 합집합으로 더한 전체 목록을 넘긴다. (블록 스타일 시퀀스 가정 —
+    # 이 repo 의 values 3종 모두 해당. 파싱 실패 시 배포 리전 단독 주입으로 폴백.)
+    STS_REGIONS_CSV=$( {
+        awk '/^[[:space:]]*allowedStsRegions:/{f=1;next}
+             f&&/^[[:space:]]*-/{sub(/^[[:space:]]*-[[:space:]]*/,"");gsub(/"/,"");print;next}
+             f{exit}' "$VALUES_FILE"
+        echo "$AWS_REGION"
+    } | awk 'NF && !seen[$0]++' | paste -sd, -)
+
     # --set 명령 조립
     SET_ARGS=(
         --set "global.imageRegistry=${ecr_registry}"
         --set "aws.region=${AWS_REGION}"
-        # SSRF 방어용 STS 허용 리전(admin-api VK 발급). 클라이언트가 GetCallerIdentity 를
-        # presign 하는 곳 = 배포 리전이므로 aws.region 과 같은 값으로 자동 주입한다.
-        # (values 기본값이 ap-northeast-2 라, 안 주입하면 다른 리전 배포에서 VK 발급 거부.)
-        --set "aws.allowedStsRegions={${AWS_REGION}}"
+        --set "aws.allowedStsRegions={${STS_REGIONS_CSV}}"
         --set "database.external.host=${AURORA_HOST}"
         --set "database.external.name=${AURORA_DB_NAME}"
         --set "redis.external.host=${REDIS_HOST}"
@@ -422,9 +435,9 @@ helm_install() {
     # helm upgrade --install 로 통합: release 없으면 install, 있으면 upgrade.
     # `--cleanup-on-fail` 은 upgrade 경로에서만 유효한 플래그라서, install 모드에서
     # 별도 helm install 명령을 쓰면 에러. upgrade --install 로 통일하면 항상 OK.
-    # rollback 플래그는 Helm 메이저 버전에 따라 다름:
-    #   v3 = --atomic (--rollback-on-failure 는 unknown flag), v4 = --rollback-on-failure.
-    # 사전 요구사항이 Helm >=3.14 이므로 런타임에 감지해 맞는 플래그를 쓴다.
+    # rollback 플래그 분기는 v3 때문에 필요하다: v3 에는 --rollback-on-failure 가 아예
+    # 없어 unknown flag 로 죽는다. 반대로 v4 의 --atomic 은 deprecation warning 일 뿐
+    # 여전히 동작한다. 사전 요구사항이 Helm >=3.14 이므로 런타임에 감지해 골라 쓴다.
     HELM_MAJOR=$(helm version --template '{{.Version}}' 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/')
     if [ "${HELM_MAJOR:-3}" -ge 4 ]; then
         ROLLBACK_FLAG="--rollback-on-failure"
