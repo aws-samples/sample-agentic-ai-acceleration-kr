@@ -32,7 +32,10 @@ variable "bedrock_allowed_model_arns" {
 variable "mantle_regions" {
   description = "gateway-proxy IRSA 가 in-account Bedrock Mantle(bedrock-mantle:CreateInference/GetInference) 를 호출할 수 있는 리전 목록. 배포 리전에 맞춰 tfvars 에서 지정 (예: US 단일계정 = [\"us-east-1\"])."
   type        = list(string)
-  default     = ["ap-northeast-1", "us-east-2"]
+  # default 는 변수를 생략했을 때만 쓰인다. nullable 이 없으면 명시적 null 이 그대로
+  # 전파돼 main.tf 의 for 표현식이 "Iteration over null value" 로 죽는다.
+  nullable = false
+  default  = ["ap-northeast-1", "us-east-2"]
 }
 
 variable "secrets_manager_kms_key_arns" {
