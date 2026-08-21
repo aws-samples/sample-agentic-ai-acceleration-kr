@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, timedelta
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import func, select
@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import CurrentUser, get_current_user
 from app.core.db import get_db_session
-from app.core.usage_filters import cost_period_filter
+from app.core.usage_filters import cost_period_filter, current_kst_period
 from app.models.budget import BudgetConfig, BudgetScope, BudgetUsage
 from app.models.usage import UsageLog
 
@@ -24,8 +24,8 @@ async def get_my_budget(
     user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
-    now = date.today()
-    period = f"{now.year}-{now.month:02d}"
+    # KST 월(§59) — date.today() 는 pod TZ(UTC)라 매월 1일 첫 9시간에 지난달이 된다.
+    period = current_kst_period()
 
     stmt = (
         select(BudgetConfig)
@@ -72,9 +72,8 @@ async def get_my_usage(
     user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
-    now = date.today()
     if not period:
-        period = f"{now.year}-{now.month:02d}"
+        period = current_kst_period()  # KST 월 — 아래 _kst_day 집계와 경계 통일
 
     _kst_day = func.date(func.timezone("Asia/Seoul", UsageLog.requested_at))
     daily_stmt = (

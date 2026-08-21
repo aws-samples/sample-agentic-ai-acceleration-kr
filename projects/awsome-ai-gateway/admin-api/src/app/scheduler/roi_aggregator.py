@@ -9,6 +9,7 @@ from decimal import Decimal
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.usage_filters import kst_period_range_filter
 from app.models.usage import ROIAggregation, ROIScope
 from app.repositories.analytics_repository import AnalyticsRepository
 
@@ -67,9 +68,12 @@ async def aggregate_usage(session: AsyncSession, period: str) -> None:
 
     # 팀 탐색은 KST 월 경계(§59)로 — 비용 집계와 같은 창의 팀을 찾는다. status 필터는
     # 안 함(에러만 있는 팀도 ROI 집계 대상에 포함되도록).
-    from app.core.usage_filters import kst_month_expr
+    # sargable range 로 표현 — kst_month_expr() == period 는 컬럼을 함수로 감싸
+    # requested_at 인덱스를 무력화한다(cost_period_filter docstring 참조).
+    # import 는 모듈 최상단에 있다 — 함수 안에 두면 _aggregate_productivity 처럼
+    # 같은 헬퍼를 쓰는 **다른** 함수에서 NameError 가 난다(실제로 그렇게 터졌다).
     stmt = select(distinct(UsageLog.team_id)).where(
-        kst_month_expr() == period
+        kst_period_range_filter(UsageLog.requested_at, period)
     )
     result = await session.execute(stmt)
     team_ids = [row[0] for row in result]
@@ -117,7 +121,9 @@ async def _aggregate_productivity(session: AsyncSession, period: str) -> dict:
         func.count(distinct(ProductivityEvent.session_id)).label("sessions"),
         func.count().filter(ProductivityEvent.event_type == ProductivityEventType.CODE_GENERATED).label("gen_events"),
         func.count().filter(ProductivityEvent.event_type == ProductivityEventType.CODE_ACCEPTED).label("acc_events"),
-    ).where(func.to_char(ProductivityEvent.created_at, "YYYY-MM") == period)
+    # 월 경계는 아래 비용 집계와 **동일하게 KST** — ROI = accepted_lines / cost 의
+    # 분자·분모가 같은 달을 봐야 한다(과거엔 분자만 UTC 월이었다).
+    ).where(kst_period_range_filter(ProductivityEvent.created_at, period))
     row = (await session.execute(lines_stmt)).one()
 
     lines_gen = int(row.gen or 0)
