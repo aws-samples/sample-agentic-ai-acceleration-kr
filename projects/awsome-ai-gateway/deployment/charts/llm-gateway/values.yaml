@@ -211,7 +211,8 @@ ingress:
   # "alb" (EKS Fargate)
   className: "nginx"
 
-  # ALB(EKS) 어노테이션
+  # ALB(EKS) 어노테이션 — 세 Ingress 에 공통 적용.
+  # Ingress 하나에만 필요한 규칙은 여기 넣지 말고 아래 전용 맵을 쓸 것.
   annotations: {}
 
   # gateway-proxy (사용자 API, data-plane)
@@ -222,6 +223,15 @@ ingress:
     tls:
       enabled: false
       secretName: ""
+    # 이 Ingress 에만 붙는 어노테이션. 공통값을 덮어쓴다.
+    # data-plane 전용 규칙 자리 — 특히 CloudFront 를 오리진 앞에 둔 구성에서:
+    #   alb.ingress.kubernetes.io/security-group-prefix-lists: "pl-xxxxxxxx"
+    # (리전마다 ID 가 다르므로 이름으로 조회할 것:
+    #  aws ec2 describe-managed-prefix-lists --filters
+    #    Name=prefix-list-name,Values=com.amazonaws.global.cloudfront.origin-facing)
+    # ⚠️ 이 값을 위 공통 annotations 에 넣으면 admin-api·admin-ui 까지 임의의
+    #    CloudFront 배포에 열려 IP 제한이 무력화된다.
+    annotations: {}
 
   # admin-ui (관리자 웹)
   adminUi:
@@ -231,6 +241,9 @@ ingress:
     tls:
       enabled: false
       secretName: ""
+    # 이 Ingress 에만 붙는 어노테이션. 공통값과 템플릿 기본값
+    # (healthcheck-path=/api/health, success-codes=200) 을 모두 덮어쓴다.
+    annotations: {}
 
   # admin-api (관리자 REST API)
   adminApi:
@@ -240,6 +253,8 @@ ingress:
     tls:
       enabled: false
       secretName: ""
+    # 이 Ingress 에만 붙는 어노테이션. 공통값을 덮어쓴다.
+    annotations: {}
 
 # ----------------------------------------------------------------------------
 # External Secrets Operator 연동 (ESO 사용 시 K8s Secret 대신 동적 주입)

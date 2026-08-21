@@ -5,7 +5,33 @@
 Gateway(사용자 API), Admin UI(웹), Admin API(REST) 를 각각 별도 Ingress 리소스로 생성.
 - 서로 다른 hostname 사용 → 보안 분리 (data-plane vs control-plane)
 - ALB(EKS) Ingress 템플릿
+
+어노테이션은 두 겹이다.
+- `.Values.ingress.annotations`        — 세 Ingress 공통
+- `.Values.ingress.<이름>.annotations` — 해당 Ingress 전용. 공통값을 덮어쓴다.
+
+전용 겹이 필요한 이유: data-plane 에만 필요한 규칙을 control-plane 에 흘리지
+않기 위해서다. 대표적으로 `security-group-prefix-lists`(CloudFront 오리진
+접근)는 gateway 에만 있어야 한다. 공통 맵에 넣으면 admin-api·admin-ui 까지
+CloudFront 전체에 열려 IP 제한이 무력화된다. 전용 겹이 없던 시절에는 그 규칙을
+values 에 못 넣어 `kubectl annotate` 로만 유지했고, `helm upgrade` 때마다
+사라져 CloudFront 경유 요청이 전부 502 가 됐다.
+
+우선순위(높은 쪽이 이김): Ingress 전용 > 템플릿 기본값 > 공통
 */}}
+
+{{/*
+values 에서 `ingress.<이름>:` 을 null 로 두면(키만 쓰고 비우거나 명시적 null)
+helm 이 차트 기본값을 지워버려 아래 렌더가 nil pointer 로 죽는다. 그 오류
+메시지는 원인을 전혀 알려주지 않으므로, 여기서 먼저 잡아 무엇을 고쳐야 하는지
+말한다. 기본값을 대신 채워넣지는 않는다 — 잘못된 설정이 조용히 배포되는 것보다
+멈추는 편이 안전하다.
+*/}}
+{{- range $sec := list "gateway" "adminUi" "adminApi" }}
+  {{- if kindIs "invalid" (index $.Values.ingress $sec) }}
+    {{- fail (printf "values: ingress.%s 이 null 입니다. 키를 지우거나(차트 기본값 사용) host/path/pathType/tls 를 갖춘 블록을 주십시오. 어노테이션만 추가하려면:\n  ingress:\n    %s:\n      annotations:\n        <key>: <value>" $sec $sec) }}
+  {{- end }}
+{{- end }}
 
 # ----------------------------------------------------------------------------
 # Gateway Proxy Ingress — data-plane (사용자 API)
@@ -18,7 +44,8 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "llm-gateway.componentLabels" (dict "root" . "component" "gateway-proxy") | nindent 4 }}
-  {{- with .Values.ingress.annotations }}
+  {{- $ann := merge (deepCopy (.Values.ingress.gateway.annotations | default dict)) (.Values.ingress.annotations | default dict) }}
+  {{- with $ann }}
   annotations:
     {{- toYaml . | nindent 4 }}
   {{- end }}
@@ -55,14 +82,15 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "llm-gateway.componentLabels" (dict "root" . "component" "admin-ui") | nindent 4 }}
+  {{/*
+    admin-ui (Next.js) 는 /health 가 i18n 미들웨어로 307 리다이렉트되어 ALB 가
+    unhealthy 판정. 실제 헬스 엔드포인트는 /api/health (200). 공통값보다 우선
+    하되, Ingress 전용 값으로는 덮어쓸 수 있게 가운데 겹에 둔다.
+  */}}
+  {{- $defaults := dict "alb.ingress.kubernetes.io/healthcheck-path" "/api/health" "alb.ingress.kubernetes.io/success-codes" "200" }}
+  {{- $ann := merge (deepCopy (.Values.ingress.adminUi.annotations | default dict)) $defaults (.Values.ingress.annotations | default dict) }}
   annotations:
-    {{- with .Values.ingress.annotations }}
-    {{- toYaml . | nindent 4 }}
-    {{- end }}
-    # admin-ui (Next.js) 는 /health 가 i18n 미들웨어로 307 리다이렉트되어 ALB 가 unhealthy 판정.
-    # 실제 헬스 엔드포인트는 /api/health (200). 공통 어노테이션 뒤에 와서 healthcheck-path 를 override.
-    alb.ingress.kubernetes.io/healthcheck-path: /api/health
-    alb.ingress.kubernetes.io/success-codes: "200"
+    {{- toYaml $ann | nindent 4 }}
 spec:
   ingressClassName: {{ .Values.ingress.className | quote }}
   {{- if .Values.ingress.adminUi.tls.enabled }}
@@ -96,7 +124,8 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "llm-gateway.componentLabels" (dict "root" . "component" "admin-api") | nindent 4 }}
-  {{- with .Values.ingress.annotations }}
+  {{- $ann := merge (deepCopy (.Values.ingress.adminApi.annotations | default dict)) (.Values.ingress.annotations | default dict) }}
+  {{- with $ann }}
   annotations:
     {{- toYaml . | nindent 4 }}
   {{- end }}
