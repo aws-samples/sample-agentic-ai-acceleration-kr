@@ -81,6 +81,17 @@ module "alb_controller" {
   aws_region        = var.aws_region
 
   tags = var.tags
+
+  # Fargate 프로파일이 ACTIVE 된 뒤에 helm_release 를 시작해야 한다.
+  # 위 인자(cluster_name/oidc_provider_arn/vpc_id)는 클러스터 생성 직후 확정되므로
+  # 이것만으로는 fargate_profiles·cluster_addons 에 대한 의존이 그래프에 안 잡히고,
+  # terraform 이 프로파일 생성과 helm_release 를 병렬로 돌린다.
+  # Fargate 는 Pod 를 만들 때 매칭되는 프로파일이 있어야 fargate-scheduler 에
+  # 배정한다. 프로파일보다 먼저 생긴 Pod 는 기본 스케줄러에 배정되어, 노드가 없는
+  # Fargate 전용 클러스터에서 영원히 Pending 으로 남는다(나중에 프로파일이 ACTIVE
+  # 돼도 구제되지 않음) → helm timeout(900s) → atomic 으로 uninstall → apply 실패.
+  # 재실행하면 프로파일이 이미 ACTIVE 라 통과하는 것이 이 문제의 증상이다.
+  depends_on = [module.eks]
 }
 
 module "external_secrets" {

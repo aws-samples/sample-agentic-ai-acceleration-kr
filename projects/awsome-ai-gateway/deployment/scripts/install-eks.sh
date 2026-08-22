@@ -19,6 +19,20 @@
 
 set -euo pipefail
 
+# ---- 리전 확정 ----
+# 이 스크립트의 aws 호출(secretsmanager describe-secret 등)은 --region 을 명시하지 않아
+# 셸 기본 리전을 따른다. 리전이 안 잡힌 셸에서 실행하면 Secrets Manager preflight 가
+# 엉뚱한 리전을 뒤져 "Secret 없음" 으로 오판하므로, 추측하지 말고 즉시 중단한다.
+# 우선순위: AWS_REGION > AWS_DEFAULT_REGION > ~/.aws/config (aws configure get region).
+# 그 뒤 둘을 통일. config 폴백이 없으면 env 없이 ~/.aws/config 로만 리전을 잡은 셸에서
+# aws CLI 자체는 정상 동작하는데도 이 가드가 거부하는 오탐이 난다.
+: "${AWS_REGION:=${AWS_DEFAULT_REGION:-$(aws configure get region 2>/dev/null)}}"
+if [ -z "$AWS_REGION" ]; then
+    echo "ERROR: region is not set. export AWS_DEFAULT_REGION=<region> (e.g. ap-northeast-2) and retry." >&2
+    exit 1
+fi
+export AWS_REGION AWS_DEFAULT_REGION="$AWS_REGION"
+
 # ---- 인자 ----
 ENV="${1:-}"
 if [ -z "$ENV" ] || { [ "$ENV" != "dev" ] && [ "$ENV" != "prod" ]; }; then
@@ -367,10 +381,38 @@ helm_install() {
     aws_account_id=$(aws sts get-caller-identity --query Account --output text)
     local ecr_registry="${aws_account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 
+    # SSRF 방어용 STS 허용 리전(admin-api VK 발급). 클라이언트가 GetCallerIdentity 를
+    # presign 하는 곳 = 배포 리전이므로 배포 리전이 반드시 목록에 있어야 한다.
+    # (values 기본값이 ap-northeast-2 라, 안 넣으면 다른 리전 배포에서 VK 발급 거부.)
+    #
+    # 단 helm 의 --set/-f 는 리스트를 병합하지 않고 통째로 치환한다. 배포 리전만
+    # 넘기면 values 에 적어 둔 다중 리전이 조용히 잘리므로(= SSRF allowlist 축소),
+    # 지금 values 로 렌더되는 값을 그대로 읽어 배포 리전을 합집합으로 더한다.
+    # 읽기는 helm 에게 맡긴다 — YAML 을 직접 파싱하면 인라인 주석·flow 스타일
+    # (["a","b"])·차트 기본값 상속에서 조용히 틀린 목록이 나온다(실제로 겪음).
+    local rendered
+    if ! rendered=$(helm template "$RELEASE_NAME" "$CHART_DIR" -f "$VALUES_FILE" 2>&1); then
+        err "helm template 실패 — values 를 렌더할 수 없어 STS 허용 리전을 확정할 수 없음:"
+        printf '%s\n' "$rendered" | tail -5 >&2
+        exit 1
+    fi
+    # 아래 두 곳은 파이프 대신 herestring 을 쓴다 — `printf | grep -q`/`| awk …exit` 는
+    # 소비자가 먼저 닫아 printf 가 SIGPIPE 로 죽고, set -o pipefail 때문에 "못 찾음"
+    # 으로 잘못 판정된다(입력 크기에 따라 간헐적으로 재현).
+    if [[ "$rendered" != *"name: ALLOWED_STS_REGIONS"* ]]; then
+        err "렌더 결과에 ALLOWED_STS_REGIONS 가 없음 — 차트와 스크립트가 어긋났는지 확인 필요"
+        exit 1
+    fi
+    local sts_current
+    sts_current=$(awk '/name: ALLOWED_STS_REGIONS/{getline; sub(/.*value: */,""); gsub(/"/,""); print; exit}' <<<"$rendered")
+    STS_REGIONS_CSV=$(printf '%s\n%s\n' "${sts_current//,/$'\n'}" "$AWS_REGION" |
+        awk 'NF && !seen[$0]++' | paste -sd, -)
+
     # --set 명령 조립
     SET_ARGS=(
         --set "global.imageRegistry=${ecr_registry}"
         --set "aws.region=${AWS_REGION}"
+        --set "aws.allowedStsRegions={${STS_REGIONS_CSV}}"
         --set "database.external.host=${AURORA_HOST}"
         --set "database.external.name=${AURORA_DB_NAME}"
         --set "redis.external.host=${REDIS_HOST}"
@@ -406,7 +448,15 @@ helm_install() {
     # helm upgrade --install 로 통합: release 없으면 install, 있으면 upgrade.
     # `--cleanup-on-fail` 은 upgrade 경로에서만 유효한 플래그라서, install 모드에서
     # 별도 helm install 명령을 쓰면 에러. upgrade --install 로 통일하면 항상 OK.
-    # `--atomic` 은 helm v4 에서 deprecated → `--rollback-on-failure` 사용.
+    # rollback 플래그 분기는 v3 때문에 필요하다: v3 에는 --rollback-on-failure 가 아예
+    # 없어 unknown flag 로 죽는다. 반대로 v4 의 --atomic 은 deprecation warning 일 뿐
+    # 여전히 동작한다. 사전 요구사항이 Helm >=3.14 이므로 런타임에 감지해 골라 쓴다.
+    HELM_MAJOR=$(helm version --template '{{.Version}}' 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/')
+    if [ "${HELM_MAJOR:-3}" -ge 4 ]; then
+        ROLLBACK_FLAG="--rollback-on-failure"
+    else
+        ROLLBACK_FLAG="--atomic"
+    fi
     #
     # DEBUG_MODE=true 로 실행하면 실패 시 rollback/cleanup 을 하지 않아 실패한 Pod 와
     # Deployment 가 그대로 남음 → `kubectl logs <pod> --previous` 로 crash 원인 조사 가능.
@@ -426,7 +476,7 @@ helm_install() {
                 --values "$VALUES_FILE" \
                 "${SET_ARGS[@]}" \
                 --force-conflicts \
-                --rollback-on-failure \
+                "$ROLLBACK_FLAG" \
                 --cleanup-on-fail \
                 --timeout 15m \
                 --wait
@@ -435,7 +485,7 @@ helm_install() {
                 --namespace "$NAMESPACE" \
                 --values "$VALUES_FILE" \
                 "${SET_ARGS[@]}" \
-                --rollback-on-failure \
+                "$ROLLBACK_FLAG" \
                 --cleanup-on-fail \
                 --timeout 15m \
                 --wait

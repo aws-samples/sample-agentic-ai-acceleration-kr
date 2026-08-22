@@ -36,7 +36,10 @@ if aws s3api head-bucket --bucket "${TFSTATE_BUCKET}" 2>/dev/null; then
     echo "✓ S3 bucket ${TFSTATE_BUCKET} 이미 존재"
 else
     echo "==> S3 bucket 생성: ${TFSTATE_BUCKET}"
-    if [ "${AWS_REGION}" = "ap-northeast-2" ]; then
+    # LocationConstraint 를 거부하는 리전은 us-east-1 뿐이고, 나머지는 모두 요구한다.
+    # CLI 가 --region 으로부터 자동 보완하지 않는다 — 실측: ap-northeast-2 에서 생략하면
+    # IllegalLocationConstraintException, us-east-1 에서 지정하면 InvalidLocationConstraint.
+    if [ "${AWS_REGION}" = "us-east-1" ]; then
         aws s3api create-bucket --bucket "${TFSTATE_BUCKET}" --region "${AWS_REGION}"
     else
         aws s3api create-bucket \
