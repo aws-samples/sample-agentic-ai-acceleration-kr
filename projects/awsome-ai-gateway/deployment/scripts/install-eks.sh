@@ -384,16 +384,29 @@ helm_install() {
     # SSRF 방어용 STS 허용 리전(admin-api VK 발급). 클라이언트가 GetCallerIdentity 를
     # presign 하는 곳 = 배포 리전이므로 배포 리전이 반드시 목록에 있어야 한다.
     # (values 기본값이 ap-northeast-2 라, 안 넣으면 다른 리전 배포에서 VK 발급 거부.)
-    # 단 helm 의 --set/-f 는 리스트를 병합하지 않고 통째로 치환하므로, 배포 리전만
-    # 넘기면 values 에 적어 둔 다중 리전이 조용히 잘린다 → values 의 목록을 읽어
-    # 배포 리전을 합집합으로 더한 전체 목록을 넘긴다. (블록 스타일 시퀀스 가정 —
-    # 이 repo 의 values 3종 모두 해당. 파싱 실패 시 배포 리전 단독 주입으로 폴백.)
-    STS_REGIONS_CSV=$( {
-        awk '/^[[:space:]]*allowedStsRegions:/{f=1;next}
-             f&&/^[[:space:]]*-/{sub(/^[[:space:]]*-[[:space:]]*/,"");gsub(/"/,"");print;next}
-             f{exit}' "$VALUES_FILE"
-        echo "$AWS_REGION"
-    } | awk 'NF && !seen[$0]++' | paste -sd, -)
+    #
+    # 단 helm 의 --set/-f 는 리스트를 병합하지 않고 통째로 치환한다. 배포 리전만
+    # 넘기면 values 에 적어 둔 다중 리전이 조용히 잘리므로(= SSRF allowlist 축소),
+    # 지금 values 로 렌더되는 값을 그대로 읽어 배포 리전을 합집합으로 더한다.
+    # 읽기는 helm 에게 맡긴다 — YAML 을 직접 파싱하면 인라인 주석·flow 스타일
+    # (["a","b"])·차트 기본값 상속에서 조용히 틀린 목록이 나온다(실제로 겪음).
+    local rendered
+    if ! rendered=$(helm template "$RELEASE_NAME" "$CHART_DIR" -f "$VALUES_FILE" 2>&1); then
+        err "helm template 실패 — values 를 렌더할 수 없어 STS 허용 리전을 확정할 수 없음:"
+        printf '%s\n' "$rendered" | tail -5 >&2
+        exit 1
+    fi
+    # 아래 두 곳은 파이프 대신 herestring 을 쓴다 — `printf | grep -q`/`| awk …exit` 는
+    # 소비자가 먼저 닫아 printf 가 SIGPIPE 로 죽고, set -o pipefail 때문에 "못 찾음"
+    # 으로 잘못 판정된다(입력 크기에 따라 간헐적으로 재현).
+    if [[ "$rendered" != *"name: ALLOWED_STS_REGIONS"* ]]; then
+        err "렌더 결과에 ALLOWED_STS_REGIONS 가 없음 — 차트와 스크립트가 어긋났는지 확인 필요"
+        exit 1
+    fi
+    local sts_current
+    sts_current=$(awk '/name: ALLOWED_STS_REGIONS/{getline; sub(/.*value: */,""); gsub(/"/,""); print; exit}' <<<"$rendered")
+    STS_REGIONS_CSV=$(printf '%s\n%s\n' "${sts_current//,/$'\n'}" "$AWS_REGION" |
+        awk 'NF && !seen[$0]++' | paste -sd, -)
 
     # --set 명령 조립
     SET_ARGS=(
