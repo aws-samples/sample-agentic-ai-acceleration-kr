@@ -38,25 +38,22 @@ def status(ctx: click.Context) -> None:
         if otel:
             click.echo(f"    OTEL Endpoint:   {otel}")
 
-        # api-key-helper only runs in OIDC mode when BOTH OIDC keys are present
-        # (api_key_helper.main._detect_mode). With either one missing it silently
-        # falls back to STS(IAM), so the VK is issued for the wrong user or Claude
-        # Code drops back to first-party login — surface the mode here in status.
+        # OIDC 두 키가 모두 있어야 api-key-helper 가 OIDC 모드로 동작한다
+        # (api_key_helper.main._detect_mode). 하나라도 없으면 STS(IAM) 로 조용히
+        # 떨어져 잘못된 사용자로 VK 가 발급되거나 1P 로그인으로 되돌아가므로
+        # 상태 화면에서 바로 보이게 한다.
         issuer, client = env.get("OIDC_ISSUER_URL"), env.get("OIDC_CLIENT_ID")
         if issuer and client:
             click.echo(f"    OIDC Issuer:     {issuer}")
             click.echo(f"    OIDC Client ID:  {client}")
-            click.echo(_("    Auth Mode:       OIDC (IDP identity)"))
+            click.echo("    Auth Mode:       OIDC (IDP 신원 기준)")
         else:
             click.secho(
-                _("    Auth Mode:       STS (IAM ARN identity) — OIDC not configured"),
-                fg="yellow",
+                "    Auth Mode:       STS (IAM ARN 기준) — OIDC 미설정", fg="yellow"
             )
             click.secho(
-                _(
-                    "                     To use IDP login, re-run 'gateway-cli setup'"
-                    " (auto-detected when run after login)"
-                ),
+                "                     IDP 로그인을 쓰려면 'gateway-cli setup' 재실행"
+                " (login 후 실행 시 자동 감지)",
                 fg="yellow",
             )
     else:

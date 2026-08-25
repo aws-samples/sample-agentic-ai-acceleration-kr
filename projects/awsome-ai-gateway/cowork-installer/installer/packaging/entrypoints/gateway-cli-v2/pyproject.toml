@@ -1,0 +1,61 @@
+[build-system]
+requires = ["poetry-core>=1.9"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "gateway-cli-v2"
+version = "0.1.0"
+description = "LLM Gateway CLI v2 - Onboarding-card-driven setup wizard for end users"
+authors = []
+readme = "README.md"
+
+packages = [
+    { include = "cli", from = "src" },
+    { include = "api_key_helper",  from = "src" },
+    { include = "gateway_cli_oidc", from = "src" },
+]
+
+[tool.poetry.dependencies]
+python    = ">=3.11,<4.0"
+click     = ">=8.1"
+structlog = ">=24.4"
+platformdirs = ">=4.3"
+boto3     = ">=1.35"
+requests  = ">=2.32"
+PyYAML    = ">=6.0"
+# Delegates TLS verification to the OS trust store (Windows SChannel / macOS
+# Security framework) so the corporate proxy CA — whose Basic Constraints are
+# not marked critical — validates under the frozen build's OpenSSL 3.x.
+# Requires Python >= 3.10 (we require >= 3.11).
+truststore = ">=0.10"
+
+[tool.poetry.group.dev.dependencies]
+pytest        = ">=8.3"
+pytest-mock   = ">=3.14"
+pytest-cov    = ">=6.0"
+responses     = ">=0.25"
+ruff          = ">=0.8"
+pyinstaller   = ">=6.11"
+
+[tool.poetry.scripts]
+api-key-helper        = "api_key_helper.main:main"
+gateway-cli           = "cli.main:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.ruff.lint.isort]
+# Merge multiple `from X import ...` (including aliased names) into one block.
+combine-as-imports = true
+
+[tool.ruff.lint.per-file-ignores]
+# Copyright header line intentionally exceeds the line-length limit in all source files.
+"*.py" = ["E501"]

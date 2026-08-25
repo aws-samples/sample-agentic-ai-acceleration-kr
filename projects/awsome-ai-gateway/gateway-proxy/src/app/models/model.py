@@ -15,7 +15,7 @@ _provider_enum = Enum(
     "BEDROCK",
     "OPENMODEL",
     "BEDROCK_MANTLE",
-    "BEDROCK_MANTLE_OPENAI",  # Codex → 859 Mantle GPT-5.5 (migration 0016)
+    "BEDROCK_MANTLE_OPENAI",  # Codex → 123 Mantle GPT-5.5 (migration 0016)
     name="provider",
     schema="model",
     create_type=False,

@@ -1,0 +1,19 @@
+{
+  "__comment": "Guideline 1-4: build-time custom-key injection. Copy this file to packaging/site-extra.json and edit. build.ps1 bundles it into the .exe; `gateway-cli setup` deep-merges each section into the settings files. gateway-cli's own keys (OTEL, ANTHROPIC_BASE_URL, apiKeyHelper, availableModels, ...) always win on conflict; every other key here is merged in and org keys are preserved. All injected keys are recorded under the private _gatewayCli marker so `gateway-cli disable` unmerges them cleanly. Delete this __comment key in the real file (Claude Code ignores unknown keys, but keep it clean).",
+
+  "managed": {
+    "env": {
+      "HTTPS_PROXY": "http://proxy.example.com:8080",
+      "NO_PROXY": "localhost,.example.com"
+    },
+    "permissions": {
+      "allow": ["Bash(git*)"]
+    }
+  },
+
+  "user": {
+    "env": {
+      "MY_TEAM_FLAG": "1"
+    }
+  }
+}

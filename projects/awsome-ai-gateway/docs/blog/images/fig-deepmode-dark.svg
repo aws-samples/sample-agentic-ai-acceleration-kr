@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="860" viewBox="0 0 1180 860" font-family="'Segoe UI','Apple SD Gothic Neo',Helvetica,Arial,sans-serif">
+  <rect width="1180" height="860" fill="#0c0d0f"/>
+  <text x="40" y="44" font-size="18" font-weight="700" fill="#e6edf3">BI Insight (deep mode) — 계획 우선(plan-first) → 실행 → 투명한 검증</text>
+  <text x="40" y="66" font-size="12" fill="#8b98a5">5-agent (Orchestrator + SQL + Code + Validator + Viz) · powered by Bedrock Claude</text>
+
+  <!-- user q -->
+  <rect x="760" y="92" width="380" height="34" rx="9" fill="#1b3a36"/>
+  <text x="1124" y="114" font-size="12" fill="#d6f5ef" text-anchor="end">Opus 4.8 모델별 비용 패턴 종합 분석해줘</text>
+
+  <!-- PLAN CARD -->
+  <rect x="40" y="150" width="1100" height="168" rx="12" fill="#10161c" stroke="#1f6f63"/>
+  <text x="62" y="180" font-size="14" font-weight="700" fill="#2dd4bf">📋  Opus 4.8 사용량·비용 + 모델별 비용 패턴 종합 분석</text>
+  <g font-size="12.5" fill="#c9d4de">
+    <text x="62" y="210">① Opus 4.8 모델의 총 호출수·토큰·비용 집계 (KST 기준)</text>
+    <rect x="1050" y="198" width="60" height="20" rx="5" fill="#16242c"/><text x="1080" y="212" font-size="10" fill="#7fd3c4" text-anchor="middle">SQL</text>
+    <text x="62" y="238">② 모델별 비용/호출/평균비용 집계 + 전체 대비 점유율 산출</text>
+    <rect x="1050" y="226" width="60" height="20" rx="5" fill="#16242c"/><text x="1080" y="240" font-size="10" fill="#7fd3c4" text-anchor="middle">SQL</text>
+    <text x="62" y="266">③ 모델별 일별 비용 추이 조회 (패턴/추세 파악용)</text>
+    <rect x="1044" y="254" width="72" height="20" rx="5" fill="#2a2233"/><text x="1080" y="268" font-size="10" fill="#c4a5e8" text-anchor="middle">Python</text>
+    <text x="62" y="294">④ 모델별 비용 점유율·증감 등 파생 통계 재집계 + 이상치 검정</text>
+    <rect x="1050" y="282" width="60" height="20" rx="5" fill="#3a2e16"/><text x="1080" y="296" font-size="10" fill="#e8c87f" text-anchor="middle">검증</text>
+  </g>
+  <rect x="62" y="298" width="150" height="26" rx="6" fill="#1f6f63"/>
+  <text x="137" y="315" font-size="12" font-weight="700" fill="#0c0d0f" text-anchor="middle">▶ 이 계획으로 진행</text>
+
+  <!-- after approval: answer + tool transparency -->
+  <text x="40" y="360" font-size="13" font-weight="700" fill="#8b98a5">실행 결과</text>
+  <text x="40" y="384" font-size="12.5" fill="#c9d4de">비용은 두 팀에 거의 균등 분산 — AWS-AI-Specialist $709.41(50.2%), Default Team $705.07(49.8%)로</text>
+  <text x="40" y="404" font-size="12.5" fill="#c9d4de">격차는 $4.33(0.6%p)에 불과합니다. 호출 수도 7,961 대 7,775로 비슷해 팀 단위 비용 쏠림이 사실상 없는 구조입니다.</text>
+
+  <!-- WARN reconciliation banner -->
+  <rect x="40" y="424" width="1100" height="40" rx="8" fill="#2a2310" stroke="#a8801f"/>
+  <text x="58" y="449" font-size="12" fill="#e8c87f">⚠️  검증 참고: 팀 이름(name) 기준 집계라 동명이인 시 한 행으로 합쳐질 수 있습니다 — reconciliation gate WARN (fail-soft, 답변 차단 안 함)</text>
+
+  <!-- tool cards -->
+  <g>
+    <rect x="40" y="478" width="1100" height="32" rx="8" fill="#15181d" stroke="#232830"/>
+    <text x="58" y="499" font-size="12" fill="#9fe7d6">▾  ◧ SQL Specialist 호출 — 실행된 SQL · 결과 12행 · L3 self-consistency PASS (agreement 1.0)</text>
+  </g>
+  <!-- expanded sql -->
+  <rect x="40" y="512" width="1100" height="118" rx="8" fill="#0a0e12" stroke="#1c222a"/>
+  <g font-family="'SF Mono',Menlo,Consolas,monospace" font-size="11.5" fill="#9db4c8">
+    <text x="58" y="534"><tspan fill="#c792ea">SELECT</tspan> t.name <tspan fill="#c792ea">AS</tspan> team, <tspan fill="#82aaff">SUM</tspan>(u.cost_usd) <tspan fill="#c792ea">AS</tspan> cost, <tspan fill="#82aaff">COUNT</tspan>(*) <tspan fill="#c792ea">AS</tspan> calls</text>
+    <text x="58" y="554"><tspan fill="#c792ea">FROM</tspan> usage.usage_logs u <tspan fill="#c792ea">JOIN</tspan> auth.teams t <tspan fill="#c792ea">ON</tspan> t.id = u.team_id</text>
+    <text x="58" y="574"><tspan fill="#c792ea">WHERE</tspan> u.status = <tspan fill="#c3e88d">'SUCCESS'</tspan>  <tspan fill="#546e7a">-- L1 대시보드 일관성 가드</tspan></text>
+    <text x="58" y="594">  <tspan fill="#c792ea">AND</tspan> u.requested_at <tspan fill="#c792ea">AT TIME ZONE</tspan> <tspan fill="#c3e88d">'Asia/Seoul'</tspan> >= date_trunc(<tspan fill="#c3e88d">'month'</tspan>, now())</text>
+    <text x="58" y="614"><tspan fill="#c792ea">GROUP BY</tspan> t.name <tspan fill="#c792ea">ORDER BY</tspan> cost <tspan fill="#c792ea">DESC</tspan> <tspan fill="#c792ea">LIMIT</tspan> <tspan fill="#f78c6c">1000</tspan>;</text>
+  </g>
+
+  <g>
+    <rect x="40" y="642" width="540" height="32" rx="8" fill="#15181d" stroke="#232830"/>
+    <text x="58" y="663" font-size="12" fill="#9fe7d6">▸  ◉ SQL Validator 검증 · PASS</text>
+  </g>
+  <g>
+    <rect x="600" y="642" width="540" height="32" rx="8" fill="#15181d" stroke="#232830"/>
+    <text x="618" y="663" font-size="12" fill="#9fe7d6">▸  ◫ Chart spec 생성 · bar</text>
+  </g>
+
+  <!-- chart -->
+  <rect x="40" y="688" width="1100" height="150" rx="10" fill="#15181d" stroke="#232830"/>
+  <text x="58" y="712" font-size="12" fill="#8b98a5">팀별 총 비용 (USD, 이번 달)</text>
+  <rect x="220" y="730" width="320" height="86" fill="#2dd4bf" opacity="0.85"/>
+  <rect x="640" y="732" width="320" height="84" fill="#2dd4bf" opacity="0.6"/>
+  <text x="380" y="832" font-size="11" fill="#9fb3c8" text-anchor="middle">AWS-AI-Specialist · $709.41</text>
+  <text x="800" y="832" font-size="11" fill="#9fb3c8" text-anchor="middle">Default Team · $705.07</text>
+</svg>

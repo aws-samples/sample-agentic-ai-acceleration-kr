@@ -206,7 +206,7 @@ Restart Claude Code to apply changes.
 **OIDC 값은 4단계(`gateway-cli login`)의 토큰 캐시에서 자동으로 감지됩니다.** 따로 지정하려면
 `--issuer-url` / `--client-id` 옵션이나 `OIDC_ISSUER_URL` / `OIDC_CLIENT_ID` 환경변수를 쓰세요.
 
-> **`OIDC: (not set)` 경고가 노란색으로 뜨면 반드시 해결하고 넘어가세요.** 이 두 값이 없으면
+> **`OIDC: (미설정)` 경고가 노란색으로 뜨면 반드시 해결하고 넘어가세요.** 이 두 값이 없으면
 > `api-key-helper`가 IDP 대신 **AWS STS(IAM) 모드**로 동작합니다. 결과는 두 가지인데 둘 다
 > 원인을 찾기 어렵습니다 —
 > ① AWS SSO 세션이 있으면 IDP 신원이 아니라 **IAM ARN 기준의 다른 사용자**로 VK가 발급되어
@@ -560,27 +560,27 @@ claude
 
 ```bash
 # Cognito (OIDC IDP)
-export OIDC_ISSUER_URL="https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_XXXXXXXXX"
-export OIDC_CLIENT_ID="<COGNITO_APP_CLIENT_ID>"
+export OIDC_ISSUER_URL="https://cognito-idp.ap-northeast-2.amazonaws.com/<COGNITO_USER_POOL_ID_PROD>"
+export OIDC_CLIENT_ID="<OIDC_CLIENT_ID_PROD>"
 
 # Hosted UI (브라우저 로그인 페이지)
 # https://llm-gateway-prod-vanilla-auth-123456789012.auth.ap-northeast-2.amazoncognito.com/login
 
 # ALB endpoints (도메인 적용 전 — 평문 HTTP)
-export ANTHROPIC_BASE_URL="http://<ALB_DNS>"
-export ADMIN_API_URL="http://<ALB_DNS>"
+export ANTHROPIC_BASE_URL="http://<GATEWAY_HOST>"
+export ADMIN_API_URL="http://<ADMIN_API_HOST>"
 
 # Admin UI (관리자 대시보드 — 운영자만)
-# http://<ALB_DNS>
+# http://<ADMIN_UI_HOST>
 ```
 
 ### B.2 dev (개발/검증용 — 일반 사용자는 사용하지 않음)
 
 ```bash
-export OIDC_ISSUER_URL="https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_XXXXXXXXX"
-export OIDC_CLIENT_ID="<COGNITO_APP_CLIENT_ID>"
-export ANTHROPIC_BASE_URL="http://<ALB_DNS>"
-export ADMIN_API_URL="http://<ALB_DNS>"
+export OIDC_ISSUER_URL="https://cognito-idp.ap-northeast-2.amazonaws.com/<COGNITO_USER_POOL_ID_DEV>"
+export OIDC_CLIENT_ID="<OIDC_CLIENT_ID_DEV>"
+export ANTHROPIC_BASE_URL="http://<GATEWAY_HOST>"
+export ADMIN_API_URL="http://<ADMIN_API_HOST>"
 ```
 
 > 두 환경 모두 동일한 Cognito 그룹 컨벤션을 사용합니다 (`ClaudeAdmin`,

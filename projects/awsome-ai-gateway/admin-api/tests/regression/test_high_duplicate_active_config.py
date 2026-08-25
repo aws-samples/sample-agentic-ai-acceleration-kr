@@ -12,12 +12,8 @@ Fix, two independent layers:
   1. ``pg_advisory_xact_lock`` on the logical key in the write path (``app/repositories/_locks.py``),
      so the second caller *succeeds* — it waits, then correctly supersedes — rather than merely
      failing safely;
-  2. partial UNIQUE indexes as the database-level backstop for any writer that skips the lock.
-     Migration ``0024`` is their sole owner: it dedupes first and only then creates them. The init
-     SQL must NOT also create them, because ``run_migration.sh`` applies ``db/init/*.sql`` under
-     ``set -e`` *before* running alembic, so an index created there aborts the upgrade on exactly
-     the installations that still carry duplicates. Fresh installs are covered all the same — both
-     the cloud script and the docker-compose ``migration`` service run ``alembic upgrade head``.
+  2. partial UNIQUE indexes (migration ``0024``, and ``db/init/02_create_tables.sql`` for fresh
+     installs) as the database-level backstop for any writer that skips the lock.
 
 Both regressions share one fix, one migration and one test rig, so they share one file.
 
@@ -34,13 +30,28 @@ because each is easy to get wrong in a way that still looks correct:
 
 The static assertions run everywhere. The behavioural proofs need real PostgreSQL — MVCC snapshot
 semantics are the thing under test, so a mock or SQLite would prove nothing — and are skipped
-unless ``PROOF_DSN`` is set. They CREATE and DROP the ``auth`` / ``budget`` / ``model`` schemas, so
-they refuse to run against anything but a scratch database (see ``_require_scratch_db``)::
+unless ``PROOF_DSN`` is set::
 
     docker run -d --name pg-proof -p 55432:5432 -e POSTGRES_PASSWORD=proof \\
         -e POSTGRES_DB=gwproof postgres:16-alpine
     PROOF_DSN=postgresql+asyncpg://postgres:proof@127.0.0.1:55432/gwproof \\
         pytest tests/regression/test_high_duplicate_active_config.py
+
+⚠️ These fixtures ``DROP SCHEMA auth/budget/model CASCADE`` and rebuild only the four tables this
+file needs. That is destructive to *any* other DB test sharing the same ``PROOF_DSN``, because the
+rebuild does not restore the rest of the schema. Measured before this was fixed: running the suite
+left ``model`` holding just ``model_aliases`` and ``rate_limit_configs`` — ``model_pricings``,
+``routing_profiles``, ``team_allowed_models`` and ``user_allowed_models`` were gone, and
+``test_high_model_registry_claude5.py`` failed with ``relation "model.routing_profiles" does not
+exist``. Reversing the two files' order turned ``2 failed`` back into ``45 passed``, which is the
+proof that order, not either file's logic, was the variable. This file always passed either way —
+the damage only ever showed up in whatever ran next, so it could never self-detect.
+
+Fix: the fixtures do not touch ``PROOF_DSN``'s database at all. They create their own
+``<dbname>_dupcfg`` database, drop and rebuild schemas *inside* it, and drop it on teardown.
+Isolation is structural — the destructive DDL can no longer reach a database anything else reads.
+Schema-prefix isolation was ruled out because the ORM hardcodes ``__table_args__ = {"schema":
+"budget"}`` / ``{"schema": "model"}``, so the repositories under test would not follow a rename.
 """
 from __future__ import annotations
 
@@ -187,22 +198,15 @@ def test_migration_0024_dedupes_before_creating_the_indexes():
 
 
 def _index_ddl(name: str) -> str:
-    """The shipped CREATE statement for one index, as *executable* SQL.
+    """The shipped CREATE statement for one index, taken from db/init/02_create_tables.sql.
 
-    Migration 0024 is the single owner of these indexes — see
-    ``test_init_sql_does_not_create_the_indexes`` for why the init SQL must not create them too.
-    So the DDL is recovered from 0024's source, which spells each statement as adjacent Python
-    string literals; the literal quoting and newlines are stripped here so the behavioural proofs
-    below can execute this exact text rather than a copy, and the rig cannot drift away from what
-    customers actually install.
+    The behavioural proofs below run against this exact text rather than a copy, so the rig cannot
+    drift away from what customers actually install.
     """
-    ddl = _migration_index_ddl(name)
-    # Splice the adjacent literals together by deleting each literal boundary (a closing quote,
-    # whitespace, an optional f-prefix, an opening quote), then shed the trailing `)` and quote.
-    sql = re.sub(r'"\s*f?"', "", ddl).rstrip().rstrip(")").rstrip().rstrip('"').strip()
-    assert sql.startswith("CREATE UNIQUE INDEX"), f"recovered DDL for {name} looks wrong: {sql!r}"
-    assert '"' not in sql, f"literal boundary left in recovered DDL for {name}: {sql!r}"
-    return sql
+    src = _INIT_SQL.read_text()
+    match = re.search(rf"CREATE UNIQUE INDEX IF NOT EXISTS {name}\b.*?;", src, re.DOTALL)
+    assert match, f"{name} not found in {_INIT_SQL.name}"
+    return match.group(0).rstrip(";")
 
 
 def _migration_index_ddl(name: str) -> str:
@@ -227,36 +231,17 @@ def _migration_index_ddl(name: str) -> str:
 
 
 def _all_index_ddl(name: str) -> list[tuple[str, str]]:
-    """(source label, emitted DDL) for every place the index is defined — 0024 alone."""
-    return [(_MIGRATION.name, _migration_index_ddl(name))]
+    """(source label, emitted DDL) for both places the index is defined."""
+    return [(_INIT_SQL.name, _index_ddl(name)), (_MIGRATION.name, _migration_index_ddl(name))]
 
 
 @pytest.mark.unit
-def test_migration_0024_defines_both_indexes():
-    """Both installation paths converge on 0024, so it is the only definition that has to exist.
-    Fresh installs apply db/init and then `alembic upgrade head`; upgrades run the same script.
-    run_migration.sh puts `alembic upgrade head` (line 74) outside the cloud-mode branch that ends
-    at line 71, and docker-compose gives local installs a dedicated `migration` service that every
-    app service waits on, so no shipped path stops after the init SQL."""
+def test_both_ddl_sources_define_both_indexes():
+    """Fresh installs run db/init; upgrades run migration 0024. A guard that only checked one
+    would let the other rot."""
     for name in ("uq_budget_configs_active", "uq_rate_limit_configs_active"):
         for label, ddl in _all_index_ddl(name):
             assert name in ddl, f"{label}: {name} missing"
-
-
-@pytest.mark.unit
-def test_init_sql_does_not_create_the_indexes():
-    """The init SQL must NOT create them, or upgrades abort before 0024 can repair anything.
-
-    run_migration.sh applies init/0[1-7]*.sql with `psql -v ON_ERROR_STOP=1` (line 42) under
-    `set -e` (line 21) and only then runs alembic (line 74). Creating a unique index in the init
-    SQL therefore fails on precisely the installations that already carry duplicate active rows —
-    the corruption 0024 exists to remove — and `set -e` kills the job while the duplicates remain.
-    """
-    src = _INIT_SQL.read_text()
-    for name in ("uq_budget_configs_active", "uq_rate_limit_configs_active"):
-        assert f"CREATE UNIQUE INDEX IF NOT EXISTS {name}" not in src, (
-            f"{_INIT_SQL.name} must not create {name}; migration 0024 creates it after deduping"
-        )
 
 
 @pytest.mark.unit
@@ -307,7 +292,7 @@ _ACTOR = uuid.UUID("00000000-0000-0000-0000-0000000000ff")
 
 # Minimal slice of the asset schema: the two tables under test plus the FK targets they need.
 # Enum members and the client CHECK mirror db/init/02_create_tables.sql; the unique indexes are
-# read verbatim out of migration 0024 by _index_ddl(), which owns them.
+# read from that file verbatim by _index_ddl().
 _BASE_DDL = [
     "DROP SCHEMA IF EXISTS budget CASCADE",
     "DROP SCHEMA IF EXISTS model CASCADE",
@@ -361,17 +346,71 @@ _BASE_DDL = [
 def _require_scratch_db(dsn: str) -> None:
     """Refuse to run against anything that is not obviously a throwaway database.
 
-    These fixtures DROP SCHEMA ... CASCADE on auth/budget/model. Pointed at a real gateway database
-    that would destroy every user, budget and model row, so the guard is deliberately blunt: the
-    database name has to say it is scratch.
+    Even though the destructive DDL now lands in a private ``_dupcfg`` database, this guard stays:
+    creating and dropping a sibling database next to a production one is still not something to do
+    by accident, and the name is the only signal available before connecting.
     """
     dbname = dsn.rsplit("/", 1)[-1].split("?")[0].lower()
     if not any(token in dbname for token in ("proof", "test", "scratch", "tmp")):
         pytest.fail(
-            f"PROOF_DSN points at database {dbname!r}. These tests DROP the auth/budget/model "
-            f"schemas, so they only run against a scratch database whose name contains "
+            f"PROOF_DSN points at database {dbname!r}. These tests create a sibling "
+            f"'<dbname>_dupcfg' database and DROP the auth/budget/model schemas inside it, so "
+            f"they only run against a scratch database whose name contains "
             f"'proof', 'test', 'scratch' or 'tmp'."
         )
+
+
+# The private database these fixtures own outright. Suffixed rather than randomised so a crashed
+# run leaves one predictable leftover to drop, not an unbounded pile of them; the DROP below is
+# unconditional at setup, so a leftover from a previous crash is cleaned up rather than inherited.
+_OWNED_DB_SUFFIX = "_dupcfg"
+
+
+def _split_dsn(dsn: str) -> tuple[str, str]:
+    """('postgresql+asyncpg://u:p@h:5432', 'gwproof') — prefix and database name."""
+    prefix, dbname = dsn.rsplit("/", 1)
+    return prefix, dbname.split("?")[0]
+
+
+async def _recreate_owned_db() -> str:
+    """Drop and create this file's private database. Returns its DSN.
+
+    CREATE/DROP DATABASE cannot run inside a transaction block, hence AUTOCOMMIT. The connection
+    is made to ``postgres`` rather than to PROOF_DSN's database because you cannot drop the
+    database you are connected to.
+    """
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    prefix, dbname = _split_dsn(PROOF_DSN)
+    owned = f"{dbname}{_OWNED_DB_SUFFIX}"
+    admin = create_async_engine(f"{prefix}/postgres", isolation_level="AUTOCOMMIT")
+    try:
+        async with admin.connect() as conn:
+            # WITH (FORCE) so a leaked connection from a crashed run cannot block the drop —
+            # PostgreSQL 13+. Without it the failure mode is "database is being accessed by other
+            # users", which historically got misread as a transient and skipped past, leaving a
+            # half-built database behind.
+            await conn.execute(text(f'DROP DATABASE IF EXISTS "{owned}" WITH (FORCE)'))
+            await conn.execute(text(f'CREATE DATABASE "{owned}"'))
+    finally:
+        await admin.dispose()
+    return f"{prefix}/{owned}"
+
+
+async def _drop_owned_db() -> None:
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    prefix, dbname = _split_dsn(PROOF_DSN)
+    admin = create_async_engine(f"{prefix}/postgres", isolation_level="AUTOCOMMIT")
+    try:
+        async with admin.connect() as conn:
+            await conn.execute(
+                text(f'DROP DATABASE IF EXISTS "{dbname}{_OWNED_DB_SUFFIX}" WITH (FORCE)')
+            )
+    finally:
+        await admin.dispose()
 
 
 async def _bootstrap(*, with_indexes: bool):
@@ -385,8 +424,11 @@ async def _bootstrap(*, with_indexes: bool):
     if with_indexes:
         ddl += [_index_ddl("uq_budget_configs_active"), _index_ddl("uq_rate_limit_configs_active")]
 
-    engine = create_async_engine(PROOF_DSN)
+    # gen_random_uuid() lives in pgcrypto on PostgreSQL < 13 and is built in from 13 on; the
+    # shipped DDL relies on it, so make it available before the tables that default to it.
+    engine = create_async_engine(await _recreate_owned_db())
     async with engine.begin() as conn:
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pgcrypto"))
         for statement in ddl:
             await conn.execute(text(statement))
         await conn.execute(text("INSERT INTO auth.users (id) VALUES (:i)"), {"i": _ACTOR})
@@ -399,6 +441,7 @@ async def sm():
     engine, maker = await _bootstrap(with_indexes=True)
     yield maker
     await engine.dispose()
+    await _drop_owned_db()
 
 
 @pytest.fixture
@@ -408,6 +451,7 @@ async def sm_no_index():
     engine, maker = await _bootstrap(with_indexes=False)
     yield maker
     await engine.dispose()
+    await _drop_owned_db()
 
 
 def _budget(scope_id: uuid.UUID, amount: str, client: str | None = None):

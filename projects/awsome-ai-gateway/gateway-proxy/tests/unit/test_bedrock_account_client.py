@@ -1,9 +1,9 @@
 # Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
-"""Unit tests for cross-account Bedrock native (claude-code → 374).
+"""Unit tests for cross-account Bedrock native (claude-code → 333).
 
 Covers: BedrockAccountClientProvider assume+cache+expiry-rebuild, and
-BedrockAdapter's client_resolver + transparent 859 fallback on resolver failure.
+BedrockAdapter's client_resolver + transparent 123 fallback on resolver failure.
 """
 from __future__ import annotations
 
@@ -43,18 +43,18 @@ async def test_provider_assumes_and_caches(monkeypatch):
     import app.services.bedrock_account_client as mod
     monkeypatch.setattr(mod.boto3, "client", lambda svc, **kw: {"svc": svc, "region": kw.get("region_name"), "creds": kw.get("aws_access_key_id")})
 
-    c1 = await prov.get_client("arn:aws:iam::345678901234:role/x", "ap-northeast-2", "ext-id")
+    c1 = await prov.get_client("arn:aws:iam::123456789012:role/x", "ap-northeast-2", "ext-id")
     assert c1["svc"] == "bedrock-runtime" and c1["region"] == "ap-northeast-2"
     assert sts.calls == 1
     assert sts.last_kwargs["ExternalId"] == "ext-id"
     assert sts.last_kwargs["RoleArn"].endswith(":role/x")
 
     # 캐시 적중 (같은 role+region) → assume 재호출 안 함
-    c2 = await prov.get_client("arn:aws:iam::345678901234:role/x", "ap-northeast-2", "ext-id")
+    c2 = await prov.get_client("arn:aws:iam::123456789012:role/x", "ap-northeast-2", "ext-id")
     assert sts.calls == 1 and c2 is c1
 
     # 다른 region → 별도 클라이언트
-    c3 = await prov.get_client("arn:aws:iam::345678901234:role/x", "us-east-1", "ext-id")
+    c3 = await prov.get_client("arn:aws:iam::123456789012:role/x", "us-east-1", "ext-id")
     assert sts.calls == 2 and c3 is not c1 and c3["region"] == "us-east-1"
 
 
@@ -86,20 +86,20 @@ async def test_adapter_backward_compat_inaccount():
 @pytest.mark.asyncio
 async def test_adapter_resolver_used_when_present():
     async def resolver():
-        return "xacct-374-client"
-    a = BedrockAdapter(bedrock_client=None, client_resolver=resolver, fallback_client="in-account-859")
+        return "xacct-333-client"
+    a = BedrockAdapter(bedrock_client=None, client_resolver=resolver, fallback_client="in-account-123")
     got = await a._get_client()
-    assert got == "xacct-374-client"
+    assert got == "xacct-333-client"
 
 
 @pytest.mark.asyncio
 async def test_adapter_transparent_fallback_on_resolver_failure():
-    # 핵심 안전장치: assume 실패 시 859 로 투명 폴백 (claude-code 안 죽음)
+    # 핵심 안전장치: assume 실패 시 123 로 투명 폴백 (claude-code 안 죽음)
     async def failing_resolver():
         raise RuntimeError("assume failed / bad trust")
-    a = BedrockAdapter(bedrock_client=None, client_resolver=failing_resolver, fallback_client="in-account-859")
+    a = BedrockAdapter(bedrock_client=None, client_resolver=failing_resolver, fallback_client="in-account-123")
     got = await a._get_client()
-    assert got == "in-account-859"
+    assert got == "in-account-123"
 
 
 @pytest.mark.asyncio

@@ -47,9 +47,9 @@ class _CachedBearer:
 class MantleCredentialBroker:
     """Mint short-lived Mantle bearer tokens, supporting two credential paths.
 
-    - Cross-account (Cowork / 905): ``account_role_arn`` is set → AssumeRole via
+    - Cross-account (Cowork / 222): ``account_role_arn`` is set → AssumeRole via
       STS to obtain temporary creds, then mint bearer.
-    - In-account (Claude Code / 374): ``account_role_arn`` is None → use the
+    - In-account (Claude Code / 333): ``account_role_arn`` is None → use the
       pod's own IRSA credentials directly (no AssumeRole needed).
 
     Holds NO long-lived account keys. Caches assumed creds (~1h) and bearer
@@ -67,7 +67,7 @@ class MantleCredentialBroker:
         self._lock = asyncio.Lock()
 
     def _in_account_creds(self) -> Credentials:
-        """Pod's own IRSA credentials (no AssumeRole) for in-account Mantle (374)."""
+        """Pod's own IRSA credentials (no AssumeRole) for in-account Mantle (333)."""
         import boto3
         raw = boto3.Session().get_credentials()
         if raw is None:

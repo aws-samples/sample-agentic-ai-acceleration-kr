@@ -70,18 +70,16 @@ export const ModelCreateSchema = z.object({
   input_price_per_1k: z.number().nonnegative(),
   output_price_per_1k: z.number().nonnegative(),
   cache_creation_5m_price_per_1k: z.number().nonnegative().default(0),
-  // 1h cache-write unit price. Fixes the bug where the field was missing from this schema, so
-  // the form value was stripped and pinned to the backend default of 0, dropping the charge for
-  // 1-hour cache usage (deepdive Q-pricing).
+  // 1h 캐시쓰기 단가 — 과거 스키마 누락으로 폼 값이 strip 되어 백엔드 default 0 으로
+  // 박혀 1시간 캐시 사용분 청구가 누락되던 버그 수정(deepdive Q-pricing).
   cache_creation_1h_price_per_1k: z.number().nonnegative().default(0),
   cache_read_price_per_1k: z.number().nonnegative().default(0),
-  // NOTE: do not put max_tokens / context_window back here. The model create/edit form has no
-  // inputs for either field (they are absent from CreateModelDialog's FormState), and there is
-  // no matching field in the backend ModelCreateRequest or in the model.model_aliases table.
-  // If they stay required, the form has no way to send a value, so safeParse always fails with
-  // {max_tokens: Required, context_window: Required} and the screen shows only "Validation
-  // failed" with no per-field hint, blocking model creation and editing 100%.
-  // (Both fields exist only on the ModelListItem display type and are always filled with 0.)
+  // NOTE: max_tokens / context_window 를 여기에 두면 안 된다. 모델 추가/편집 폼에는 두 필드의
+  // 입력란이 없고(CreateModelDialog 의 FormState 에도 없음), 백엔드 ModelCreateRequest 와
+  // model.model_aliases 테이블에도 대응 필드가 없다. required 로 남겨두면 폼이 값을 보낼 방법이
+  // 없어 safeParse 가 항상 {max_tokens: Required, context_window: Required} 로 실패하고,
+  // 화면에는 필드 단위 안내 없이 "Validation failed" 만 떠서 모델 등록·편집이 100% 막힌다.
+  // (두 필드는 ModelListItem 표시용 타입에만 존재하며 항상 0 으로 채워진다.)
   description: z.string().max(512).optional(),
   display_name: z.string().max(128).optional(),
 });

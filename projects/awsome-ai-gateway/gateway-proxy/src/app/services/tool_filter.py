@@ -1,5 +1,4 @@
-# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
-# SPDX-License-Identifier: MIT-0
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 """Filter unsupported tool types before sending to Bedrock/Mantle.
 
@@ -24,6 +23,7 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 # Tool type prefixes that Bedrock/Mantle do not support.
+# These are Anthropic-native built-in tools, not standard function tools.
 _UNSUPPORTED_TOOL_PREFIXES = (
     "web_search_",
     "code_execution_",

@@ -18,6 +18,8 @@ WORKDIR /work
 
 # entrypoint: env(GW_URL, GATEWAY_VK)로 codex config 를 생성한 뒤 codex 실행.
 # config.toml: 게이트웨이를 OpenAI provider 로, wire_api=responses(GPT-5.x Responses API),
-# env_key=GATEWAY_VK 로 Bearer 인증. model 은 게이트웨이 alias 'codex-gpt'(또는 openai.gpt-5.5).
+# env_key=GATEWAY_VK 로 Bearer 인증. model 문자열은 서버가 무시하고 routing profile 의
+# default_model 로 강제 라우팅한다(0028 적용 시 codex-gpt-5.6-terra, 미적용 시 codex-gpt).
+# 클라이언트 쪽 값은 Codex 내장 메타데이터 정확도에만 영향 — entrypoint.sh 주석 참고.
 COPY --chown=node:node entrypoint.sh /home/node/entrypoint.sh
 ENTRYPOINT ["/home/node/entrypoint.sh"]

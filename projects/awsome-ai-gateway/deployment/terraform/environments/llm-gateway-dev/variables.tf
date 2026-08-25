@@ -46,27 +46,9 @@ variable "elasticache_subnet_cidrs" {
 }
 
 variable "eks_cluster_version" {
-  # AWS EKS 는 minor version downgrade 불가. 한번 apply 된 버전 이상으로만 올릴 수 있고,
-  # 올릴 때도 마이너 1단계씩만 가능하다(1.31 → 1.34 같은 점프 불가).
-  # 기본값은 기존 배포가 apply 때 흔들리지 않도록 그대로 둔다 — 신규 설치 권장 버전은
-  # terraform.tfvars.example 에 eks_addon_versions 와 한 쌍으로 적어 두었다.
+  # AWS EKS 는 minor version downgrade 불가. 한번 apply 된 버전 이상으로만 올릴 수 있음.
   type    = string
   default = "1.30"
-}
-
-variable "eks_addon_versions" {
-  # EKS add-on(coredns·kube-proxy·vpc-cni) 버전. null 이면 모듈 기본값(= eks_cluster_version
-  # 기본값과 호환) 사용. eks_cluster_version 을 바꾸는 설치·업그레이드에서는 반드시 같이
-  # 지정한다 — 한 버전의 addon 은 다른 버전에 존재하지 않아 apply 가 실패한다.
-  # 호환값 조회:
-  #   aws eks describe-addon-versions --addon-name coredns --kubernetes-version <ver> \
-  #     --query 'addons[0].addonVersions[?compatibilities[0].defaultVersion==`true`].addonVersion'
-  type = object({
-    coredns    = string
-    kube_proxy = string
-    vpc_cni    = string
-  })
-  default = null
 }
 
 variable "aurora_engine_version" {
@@ -141,12 +123,28 @@ variable "cognito_groups" {
 variable "bedrock_allowed_model_arns" {
   # 애플리케이션은 `global.anthropic.*` (cross-region inference profile) 로 호출.
   # IAM 은 inference-profile + 호출될 foundation-model 양쪽에 InvokeModel 허용 필요.
+  #
+  # ⚠️ **거부는 "이름을 안 쓴 쪽"에서 난다.** 프로파일 패턴(`global.anthropic.claude-*`)은
+  # 세대에 무관하게 매칭되므로, foundation-model 줄만 구세대에 고정돼 있으면 신모델이
+  # 조용히 AccessDenied 가 된다 — 프로파일은 통과했는데 그 프로파일이 가리키는
+  # foundation-model 이 막힌 것이다. 실측(2026-08-19, federation token 으로 이 목록을
+  # 그대로 세션 정책에 넣어 실호출):
+  #     claude-4-* 만 있던 목록  → global.anthropic.claude-opus-5   AccessDenied
+  #                                  (resource: foundation-model/anthropic.claude-opus-5)
+  #     아래 5·6행 추가 후        → opus-5 / sonnet-5 둘 다 200 OK
+  # 그래서 **신모델 등록 마이그레이션(0027 등)을 넣을 때 이 목록도 같이 늘려야 한다.**
+  # DB 에 alias 를 넣는 것만으로는 호출되지 않는다.
   type = list(string)
   default = [
     # Foundation models (실제 추론이 실행되는 리소스)
     "arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-4-*",
     "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-*",
     "arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-*",
+    # Claude 5 (migration 0027). 세대 전체를 `claude-*-5*` 로 열지 않고 모델별로 적는 이유는
+    # fable-5 를 IAM 에서도 계속 막아 두기 위해서다(0027 이 의도적으로 미등록 — apne2
+    # 프로파일 부재). 실측으로 fable-5 는 이 목록에서 AccessDenied 유지됨을 확인했다.
+    "arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-5*",
+    "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-5*",
     # Global cross-region inference profiles (application 이 호출하는 엔트리포인트)
     "arn:aws:bedrock:*::inference-profile/global.anthropic.claude-*",
     "arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-*",
@@ -155,34 +153,26 @@ variable "bedrock_allowed_model_arns" {
   ]
 }
 
-variable "mantle_regions" {
-  # gateway-proxy IRSA 가 in-account Bedrock Mantle 을 호출할 수 있는 리전.
-  # 기본 = Tokyo(Claude Code/Cowork) + Ohio(Codex). US 단일계정 배포는 ["us-east-1"].
-  type     = list(string)
-  nullable = false
-  default  = ["ap-northeast-1", "us-east-2"]
-}
-
 variable "eks_access_entries" {
   type    = any
   default = {}
 }
 
 variable "cowork_role_arn" {
-  # Cowork cross-account Mantle role (905, Tokyo Opus 4.8). gateway-proxy AssumeRole into it.
+  # Cowork cross-account Mantle role (222, Tokyo Opus 4.8). gateway-proxy AssumeRole into it.
   # Must match model.routing_profiles.account_role_arn for client=cowork (migration 0009).
-  # The 905 role's trust must allow this env's gateway-proxy IRSA + sts:ExternalId=cowork-bedrock.
+  # The 222 role's trust must allow this env's gateway-proxy IRSA + sts:ExternalId=cowork-bedrock.
   type    = string
-  default = "arn:aws:iam::234567890123:role/llm-gateway-cowork-bedrock"
+  default = "arn:aws:iam::222233334444:role/llm-gateway-cowork-bedrock"
 }
 
-variable "claude_code_374_role_arn" {
-  # Claude Code cross-account Bedrock NATIVE role (374). gateway-proxy AssumeRole into it,
-  # builds a 374 bedrock-runtime client (boto3 invoke_model). Must match
+variable "claude_code_333_role_arn" {
+  # Claude Code cross-account Bedrock NATIVE role (333). gateway-proxy AssumeRole into it,
+  # builds a 333 bedrock-runtime client (boto3 invoke_model). Must match
   # model.routing_profiles.account_role_arn for client=claude-code (migration 0022).
-  # The 374 role trust must allow this env's gateway-proxy IRSA + sts:ExternalId=claude-code-bedrock.
+  # The 333 role trust must allow this env's gateway-proxy IRSA + sts:ExternalId=claude-code-bedrock.
   type    = string
-  default = "arn:aws:iam::345678901234:role/llm-gateway-claude-code-bedrock"
+  default = "arn:aws:iam::333344445555:role/llm-gateway-claude-code-bedrock"
 }
 
 variable "tags" {

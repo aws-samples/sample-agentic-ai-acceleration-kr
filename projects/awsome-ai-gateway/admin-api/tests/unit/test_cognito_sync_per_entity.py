@@ -92,6 +92,8 @@ async def test_sync_user_updates_existing(monkeypatch):
     repo.get_by_sso_subject = AsyncMock(return_value=existing)
     repo.create_user = AsyncMock()
     repo.list_users = AsyncMock(return_value=[])
+    # update path flushes pending mutations before counting (cognito_sync_service.py:327)
+    repo.flush = AsyncMock()
     import app.services.cognito_sync_service as mod
     monkeypatch.setattr(mod, "UserRepository", lambda sess: repo)
 
@@ -276,6 +278,8 @@ async def test_sync_user_returns_user_id_on_update(monkeypatch):
     repo = MagicMock()
     repo.get_by_sso_subject = AsyncMock(return_value=existing)
     repo.create_user = AsyncMock()
+    # update path flushes pending mutations before counting (cognito_sync_service.py:327)
+    repo.flush = AsyncMock()
     import app.services.cognito_sync_service as mod
     monkeypatch.setattr(mod, "UserRepository", lambda sess: repo)
 

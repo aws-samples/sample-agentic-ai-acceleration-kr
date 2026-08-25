@@ -1,0 +1,156 @@
+<mxfile host="app.diagrams.net" type="device">
+  <diagram name="LLM-Gateway-Architecture" id="llm-gateway-arch">
+    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1700" pageHeight="1300" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- ===================== TITLE ===================== -->
+        <mxCell id="title" value="LLM Gateway — Architecture (AWS EKS Fargate, ap-northeast-2)" style="text;html=1;fontSize=20;fontStyle=1;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="40" y="20" width="900" height="36" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== DATA PLANE (lane) ===================== -->
+        <mxCell id="dp-lane" value="DATA PLANE — 사용자 LLM 요청 (gateway-proxy)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;verticalAlign=top;fontStyle=1;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="40" y="70" width="800" height="430" as="geometry" />
+        </mxCell>
+        <mxCell id="cc" value="Claude Code\n(api-key-helper)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="70" y="120" width="130" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="cli" value="gateway-cli\nlogin (OIDC PKCE) →\nVK 자동 발급" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="70" y="220" width="130" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="gwproxy" value="gateway-proxy (FastAPI)\nVK 인증 → 예산 → Rate Limit\n→ 모델접근제어 → 다운그레이드\n→ Bedrock 프록시 → 비용추적\n(SSE 스트리밍)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="280" y="130" width="230" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="bedrock" value="AWS Bedrock\n(Claude Opus/Sonnet/Haiku\nglobal.* cross-region)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
+          <mxGeometry x="590" y="135" width="180" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="dp-redis" value="ElastiCache (Valkey)\nVK캐시·RPM/TPM·예산상태\ncost:stream" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="280" y="320" width="200" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="dp-aurora" value="Aurora PostgreSQL\nauth/usage/budget/model\n(usage_logs, virtual_keys)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="540" y="320" width="200" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="costworker" value="cost-recorder-worker\ncost:stream → usage_logs\n+ 일일 집계" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="280" y="420" width="200" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="notifworker" value="notification-worker\n예산 임계 알림" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="540" y="420" width="200" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- DP edges -->
+        <mxCell id="e1" style="endArrow=block;html=1;" edge="1" parent="1" source="cc" target="gwproxy"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e2" style="endArrow=block;html=1;dashed=1;" edge="1" parent="1" source="cli" target="gwproxy"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e3" style="endArrow=block;html=1;" edge="1" parent="1" source="gwproxy" target="bedrock"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e4" style="endArrow=block;html=1;" edge="1" parent="1" source="gwproxy" target="dp-redis"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e5" style="endArrow=block;html=1;" edge="1" parent="1" source="gwproxy" target="dp-aurora"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e6" style="endArrow=block;html=1;" edge="1" parent="1" source="dp-redis" target="costworker"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e7" style="endArrow=block;html=1;" edge="1" parent="1" source="costworker" target="dp-aurora"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <!-- ===================== CONTROL PLANE (lane) ===================== -->
+        <mxCell id="cp-lane" value="CONTROL PLANE — 관리 (admin-ui / admin-api)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;verticalAlign=top;fontStyle=1;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="880" y="70" width="780" height="430" as="geometry" />
+        </mxCell>
+        <mxCell id="adminui" value="admin-ui (Next.js 14)\n대시보드·모니터링·분석·예산\n사용자/팀·모델·RateLimit·키\n/chat (BI) · Glass 디자인" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="910" y="130" width="230" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="adminapi" value="admin-api (FastAPI)\nVK발급·CRUD(사용자/팀/모델/\n예산/RateLimit)·분석·ROI\nCognito JWT (ADMIN/TEAM_LEADER)\n/admin/chat/* (BI proxy, SigV4)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1210" y="130" width="250" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="cognito" value="Cognito User Pool\nOIDC/PKCE · 그룹→역할" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1490" y="135" width="150" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="cp-aurora" value="Aurora (7 schemas)\n+ audit / notification\n/ chat_agent" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1210" y="320" width="250" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="gitwebhook" value="GitHub webhook\n→ 생산성/ROI 이벤트" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="910" y="320" width="230" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- CP edges -->
+        <mxCell id="e10" style="endArrow=block;html=1;" edge="1" parent="1" source="adminui" target="adminapi"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e11" style="endArrow=block;html=1;dashed=1;" edge="1" parent="1" source="adminapi" target="cognito"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e12" style="endArrow=block;html=1;" edge="1" parent="1" source="adminapi" target="cp-aurora"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e13" style="endArrow=block;html=1;" edge="1" parent="1" source="gitwebhook" target="adminapi"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <!-- ===================== BI 5-AGENT (lane) ===================== -->
+        <mxCell id="bi-lane" value="AI BI 어시스턴트 — Bedrock AgentCore Runtime (5-agent Strands)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;verticalAlign=top;fontStyle=1;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="40" y="530" width="1620" height="360" as="geometry" />
+        </mxCell>
+        <mxCell id="orch" value="① Orchestrator (Opus 4.7)\n의도분류·위임·최종응답\ndeterministic-tool-first" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="70" y="590" width="220" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="sqlspec" value="② SQL Specialist (Sonnet 4.6)\ntext2SQL + 자체수정(3회)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="350" y="570" width="220" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="validator" value="③ SQL Validator (Opus 4.7)\n의미검증 5항목 → PASS/WARN/FAIL" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="350" y="650" width="220" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="codespec" value="④ Code Specialist (Sonnet 4.6)\nexecute_python: outlier/STL/\nSARIMAX/heatmap" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="350" y="730" width="220" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="vizspec" value="⑤ Viz Specialist (Haiku 4.5)\n차트 종류 결정 → render_chart" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="70" y="730" width="220" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="querydb" value="query_db Lambda\nsqlglot AST 검증 + 화이트리스트\n+ EXPLAIN cost + LIMIT + 10s\nread-only (gateway_chat_reader)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="650" y="565" width="240" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="codeinterp" value="Code Interpreter\n(microVM sandbox)\npandas/sklearn/statsmodels" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="650" y="730" width="240" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="bi-aurora" value="Aurora (read-only)\nusage/auth/budget/model" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="960" y="575" width="200" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="s3stage" value="S3 staging (KMS)\n대용량 결과 전달, 1d TTL" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="960" y="740" width="200" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="harness" value="정확도 하네스\n· 구조화 envelope (JSON only)\n· reconciliation gate (숫자 검증)\n· tool 투명성 (tool_call/result)\n· golden test 17→33→50→67%" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;align=left;" vertex="1" parent="1">
+          <mxGeometry x="1230" y="575" width="280" height="150" as="geometry" />
+        </mxCell>
+
+        <!-- BI edges -->
+        <mxCell id="b0" style="endArrow=block;html=1;startArrow=none;" edge="1" parent="1" source="adminapi" target="orch"><mxGeometry relative="1" as="geometry" /><mxPoint x="900" y="400" as="sourcePoint"/></mxCell>
+        <mxCell id="b1" style="endArrow=block;html=1;" edge="1" parent="1" source="orch" target="sqlspec"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="b2" style="endArrow=block;html=1;" edge="1" parent="1" source="orch" target="validator"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="b3" style="endArrow=block;html=1;" edge="1" parent="1" source="orch" target="codespec"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="b4" style="endArrow=block;html=1;" edge="1" parent="1" source="orch" target="vizspec"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="b5" style="endArrow=block;html=1;" edge="1" parent="1" source="sqlspec" target="querydb"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="b6" style="endArrow=block;html=1;" edge="1" parent="1" source="querydb" target="bi-aurora"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="b7" style="endArrow=block;html=1;" edge="1" parent="1" source="codespec" target="codeinterp"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="b8" style="endArrow=block;html=1;" edge="1" parent="1" source="querydb" target="s3stage"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="b9" style="endArrow=block;html=1;dashed=1;" edge="1" parent="1" source="codeinterp" target="s3stage"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <!-- ===================== INFRA (lane) ===================== -->
+        <mxCell id="infra-lane" value="인프라 — Terraform 모듈 (EKS Fargate / VPC 3-tier subnets)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;verticalAlign=top;fontStyle=1;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="40" y="920" width="1620" height="180" as="geometry" />
+        </mxCell>
+        <mxCell id="i1" value="VPC\n(public/private/db/cache)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#999999;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="70" y="970" width="180" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="i2" value="EKS Fargate\n+ ALB Ingress" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#999999;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="280" y="970" width="180" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="i3" value="Aurora PostgreSQL\n(RDS Proxy, pgvector)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#999999;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="490" y="970" width="180" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="i4" value="ElastiCache Valkey\n(cluster mode)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#999999;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="700" y="970" width="180" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="i5" value="Cognito\n(OIDC pool)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#999999;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="910" y="970" width="150" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="i6" value="IRSA + External\nSecrets Operator" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#999999;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1090" y="970" width="170" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="i7" value="agentcore-runtime\n(ECR·S3·KMS·Lambda·CI권한)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#999999;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1290" y="970" width="220" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="infra-note" value="dev / prod 2환경 · AWS 123456789012 · Helm (values-eks-fargate-{dev,prod}.yaml)" style="text;html=1;fontSize=11;align=left;" vertex="1" parent="1">
+          <mxGeometry x="70" y="1050" width="900" height="20" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

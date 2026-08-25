@@ -31,22 +31,3 @@ msgstr "설정 요약"
 
 msgid "Gateway URL is required. Use --gateway-url option or set in config.yaml."
 msgstr "Gateway URL이 필요합니다. --gateway-url 옵션을 지정하거나 config.yaml에 설정하세요."
-
-msgid "  OIDC:            (not set) — api-key-helper will run in STS(IAM) mode."
-msgstr "  OIDC:            (미설정) — api-key-helper 가 STS(IAM) 모드로 동작합니다."
-
-msgid ""
-"                   To use IDP login: run 'gateway-cli login' and retry, or\n"
-"                   pass --issuer-url / --client-id."
-msgstr ""
-"                   IDP 로그인을 쓰려면: gateway-cli login 후 재실행하거나\n"
-"                   --issuer-url / --client-id 를 지정하세요."
-
-msgid "    Auth Mode:       OIDC (IDP identity)"
-msgstr "    Auth Mode:       OIDC (IDP 신원 기준)"
-
-msgid "    Auth Mode:       STS (IAM ARN identity) — OIDC not configured"
-msgstr "    Auth Mode:       STS (IAM ARN 기준) — OIDC 미설정"
-
-msgid "                     To use IDP login, re-run 'gateway-cli setup' (auto-detected when run after login)"
-msgstr "                     IDP 로그인을 쓰려면 'gateway-cli setup' 재실행 (login 후 실행 시 자동 감지)"

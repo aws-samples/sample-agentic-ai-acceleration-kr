@@ -1,0 +1,10 @@
+{
+  "__comment": "Optional custom-key injection for Cowork (Claude Desktop). Copy this file to packaging/site-extra.json and edit. build.ps1 bundles it into the .exe; `gateway-cli-cowork setup` merges each key into the OS-native managed-config store (Windows registry HKCU\\SOFTWARE\\Policies\\Claude / macOS configLibrary). This is a FLAT MAP whose top-level keys must be real Claude Desktop third-party managed-config keys (see https://claude.com/docs/third-party/claude-desktop/configuration). Any key gateway-cli owns (inferenceProvider, inferenceGatewayBaseUrl, inferenceModels, credential keys, deploymentOrganizationUuid) is ignored on conflict, and any unrecognized key (e.g. the old Claude Code env/permissions/managed/user sections) is dropped with a warning. Injected keys are recorded so `gateway-cli-cowork disable` unmerges them cleanly. Delete this __comment key in the real file.",
+
+  "inferenceCustomHeaders": { "X-Tenant-Id": "acme" },
+  "disableAutoUpdates": "true",
+
+  "otlpEndpoint": "https://otel.example.com:4318",
+  "otlpProtocol": "http/protobuf",
+  "otlpHeaders": { "Authorization": "Bearer <token>" }
+}

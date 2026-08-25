@@ -23,7 +23,14 @@ set -e
 MASTER_URL="${DB_MASTER_URL:-}"
 APP_USER="${APP_DB_USER:-}"
 APP_PASSWORD="${APP_DB_PASSWORD:-}"
-SCHEMAS="auth model budget usage audit notification public"
+# chat_agent 를 반드시 포함할 것. 이 스키마의 **테이블은 alembic**(0005)이 만들지만
+# 스키마 자체는 01_create_schemas.sql 이 이 루프보다 먼저 만들어 두므로, 여기서
+# GRANT + ALTER DEFAULT PRIVILEGES 를 걸면 뒤이어 alembic(master)이 만드는 테이블에도
+# 권한이 자동 적용된다. 누락 시 배포는 성공하지만(alembic 은 DB_MASTER_URL 로 실행 —
+# db/env.py:15-18) 런타임 앱유저(gateway)가 chat 세션을 만들 때
+# `permission denied for schema chat_agent` 로 500. 실측 검증: 누락=재현, 추가=해소,
+# 재실행=멱등(2026-08-14, PostgreSQL 16).
+SCHEMAS="auth model budget usage audit notification chat_agent public"
 
 # psql용: password에 특수문자가 있으면 URL 파싱이 깨지므로 PGPASSWORD 환경변수 사용.
 # DB_MASTER_PASSWORD는 K8s Secret에서 직접 주입됨 (Helm template env).

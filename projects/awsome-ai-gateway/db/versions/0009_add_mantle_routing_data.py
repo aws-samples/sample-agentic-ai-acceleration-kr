@@ -47,7 +47,7 @@ def upgrade() -> None:
             ('cowork-opus', 'BEDROCK_MANTLE', 'anthropic.claude-opus-4-8',
              'https://bedrock-mantle.ap-northeast-1.api.aws/anthropic',
              'ANTHROPIC_MESSAGES', 'ACTIVE',
-             'Cowork -> 905 Bedrock Mantle Opus 4.8 (Tokyo)', '{SYSTEM_USER}')
+             'Cowork -> 222 Bedrock Mantle Opus 4.8 (Tokyo)', '{SYSTEM_USER}')
         ON CONFLICT (alias) DO NOTHING
         """
     )
@@ -67,14 +67,14 @@ def upgrade() -> None:
         """
     )
 
-    # 4) cowork routing_profiles row (905 Mantle, Tokyo)
+    # 4) cowork routing_profiles row (222 Mantle, Tokyo)
     op.execute(
         """
         INSERT INTO model.routing_profiles
             (client, backend, account_role_arn, region, default_model, external_id, enabled)
         VALUES
             ('cowork', 'mantle',
-             'arn:aws:iam::234567890123:role/llm-gateway-cowork-bedrock',
+             'arn:aws:iam::222233334444:role/llm-gateway-cowork-bedrock',
              'ap-northeast-1', 'cowork-opus', 'cowork-bedrock', true)
         ON CONFLICT (client) DO NOTHING
         """

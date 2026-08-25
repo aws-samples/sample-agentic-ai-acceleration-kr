@@ -14,7 +14,7 @@ from app.schemas.routing import RoutingProfileSchema
 def _profile():
     return RoutingProfileSchema(
         client="cowork", backend="mantle",
-        account_role_arn="arn:aws:iam::234567890123:role/llm-gateway-cowork-bedrock",
+        account_role_arn="arn:aws:iam::123456789012:role/llm-gateway-cowork-bedrock",
         region="ap-northeast-1", default_model="cowork-opus", external_id="cowork-bedrock",
     )
 

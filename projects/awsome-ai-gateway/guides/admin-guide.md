@@ -866,28 +866,28 @@ claude
 
 | 항목 | 값 |
 |---|---|
-| Cognito User Pool | `ap-northeast-2_XXXXXXXXX` |
-| OIDC Issuer | `https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_XXXXXXXXX` |
-| OIDC Client ID (PKCE public) | `<COGNITO_APP_CLIENT_ID>` |
+| Cognito User Pool | `<COGNITO_USER_POOL_ID_PROD>` |
+| OIDC Issuer | `https://cognito-idp.ap-northeast-2.amazonaws.com/<COGNITO_USER_POOL_ID_PROD>` |
+| OIDC Client ID (PKCE public) | `<OIDC_CLIENT_ID_PROD>` |
 | Hosted UI | `https://llm-gateway-prod-vanilla-auth-123456789012.auth.ap-northeast-2.amazoncognito.com/login` |
-| Admin UI | `http://<ALB_DNS>` |
-| Admin API | `http://<ALB_DNS>` |
-| Gateway Proxy | `http://<ALB_DNS>` |
+| Admin UI | `http://<ADMIN_UI_HOST>` |
+| Admin API | `http://<ADMIN_API_HOST>` |
+| Gateway Proxy | `http://<GATEWAY_HOST>` |
 | Aurora cluster | `llm-gateway-prod` (multi-AZ, db.r7g.large) |
-| ElastiCache | `<ELASTICACHE_ENDPOINT>` (cluster mode) |
-| Bootstrap admin | `admin@example.com` (group `ClaudeAdmin`) |
+| ElastiCache | `clustercfg.llm-gateway-prod...` (cluster mode) |
+| Bootstrap admin | `kyutae-ai@amazon.com` (group `ClaudeAdmin`) |
 | Cognito groups (등록됨) | `ClaudeAdmin`, `Claude_AWS-AI-Specialist` |
 
 ### D.2 dev (검증/개발 환경)
 
 | 항목 | 값 |
 |---|---|
-| Cognito User Pool | `ap-northeast-2_XXXXXXXXX` |
-| OIDC Issuer | `https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_XXXXXXXXX` |
-| OIDC Client ID (PKCE public) | `<COGNITO_APP_CLIENT_ID>` |
+| Cognito User Pool | `<COGNITO_USER_POOL_ID_DEV>` |
+| OIDC Issuer | `https://cognito-idp.ap-northeast-2.amazonaws.com/<COGNITO_USER_POOL_ID_DEV>` |
+| OIDC Client ID (PKCE public) | `<OIDC_CLIENT_ID_DEV>` |
 | Admin UI | (별도 ALB — `kubectl get ingress -n llm-gateway-dev` 로 확인) |
-| Admin API | `http://<ALB_DNS>` |
-| Gateway Proxy | `http://<ALB_DNS>` |
+| Admin API | `http://<ADMIN_API_HOST>` |
+| Gateway Proxy | `http://<GATEWAY_HOST>` |
 | Cognito groups (등록됨) | `ClaudeAdmin`, `Claude_AWS-AI-Specialist` |
 
 > 두 환경 모두 동일 그룹 컨벤션(`ClaudeAdmin`, `Claude_<team>`,

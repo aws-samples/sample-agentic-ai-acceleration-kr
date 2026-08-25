@@ -69,11 +69,76 @@ values.local.yaml
 *.tmp
 .playwright-mcp/
 
-# Agent orchestration work artifacts (inventories, workflow scripts, session state) — not deliverable
+# OMC orchestration work artifacts (inventories, workflow scripts, session state) — not deliverable
 .omc/
-.superpowers/
-docs/superpowers/
-
-# Security scan output — reviewer-only, may embed live resource identifiers
+scan-report.json
+SECURITY-FINDINGS.md
+scan-report*.json
 *scan-report*.json
 SECURITY-FINDINGS*.md
+
+# Customer-specific engagement notes (contain customer names / tenant details) — never in a PR
+# 확장자 무관(.md/.html/.pdf 등) — 렌더링 산출물도 같은 내용을 담으므로 함께 제외한다.
+customersetup.md
+customersetup*.md
+customersetup*.*
+customer checklist.md
+customer*checklist*.md
+customer*checklist*.*
+# 위 두 패턴은 파일명을 정확히 알아야 걸린다. `customer-troubleshooting-401.md` 처럼
+# 새로 만든 customer* 문서가 패턴을 비껴가 `git add -A` 에 휩쓸리는 일을 막기 위해
+# 접두사 전체를 막는다. 레포에 들어가야 하는 운영 문서라면 customer 접두사를 떼고
+# docs/guides/ 로 옮길 것(그러면 이 규칙에 걸리지 않는다).
+customer-*.md
+customer_*.md
+# ⚠️ 위 패턴은 모두 **파일명이 customer 로 시작할 때만** 걸린다. 실제로 이 구멍으로
+# `docs/customer-comm/` 4개 파일(고객사 담당자 실명·사내 조직명 포함)이 `2766f2b` 에서
+# 추적되어 버렸다 — 디렉터리명이 customer 로 시작해도 파일명은 `comm_cognito`,
+# `Identification_comm.md` 라서 어떤 패턴에도 걸리지 않았다. 그래서 **디렉터리 단위**로
+# 막는다. 고객 커뮤니케이션 원문/회신초안은 개발·배포 산출물이 아니므로 레포에 넣지 않는다.
+docs/customer-comm/
+**/customer-comm/
+
+# 에이전트 작업 스캐폴딩(플랜/스펙) — 개발·배포에 필요한 산출물이 아니다.
+# 한때 docs/superpowers/plans/ 2개 파일이 git-tracked 였다(2026-08-19 추적 해제).
+# 플랜의 결론은 DEVLOG/deepdive 에 남기고, 진행용 체크리스트 자체는 레포에 두지 않는다.
+docs/superpowers/
+.claude/
+CLAUDE.local.md
+
+# 개발용 devlog / 진행 기록 — 납품물이 아니라 PR 에서 제외(디스크엔 보존).
+# 결론·근거는 남기되 개발 과정 로그 자체는 배포 산출물에 넣지 않는다.
+# (2026-08-25 추적 해제: 이 브랜치에서만 추가됐던 신규 파일)
+devlog_websearch.md
+Added_Capability.md
+
+# _archive/ — 마이그레이션 이력·구계정 산출물 등 "우리 로컬 기록"용 디렉터리.
+# 개발·배포 산출물이 아니므로 git 에 넣지 않는다(디스크엔 보존 — 삭제 아님).
+# (2026-08-25 `git rm -r --cached _archive` 로 55개 추적 해제. 로컬 기록으로만 유지.)
+_archive/
+
+# Office 바이너리 문서(발표자료/PRFAQ/블로그 docx 등) — 배포·개발 산출물이 아니라
+# "우리 로컬 기록"이다. 납품물은 .md 소스(README, PRFAQ-*.md, docs/**/*.md)이고
+# .pptx/.docx/.pdf 는 그 렌더링/편집본이라 git 에 넣지 않는다(디스크엔 보존 — 삭제 아님).
+# (2026-08-25 `git rm --cached` 로 8개 추적 해제: 루트 5개 + docs/AWSome-AI-Gateway-Status.docx
+#  + docs/blog/Part1·Part2.docx. 로컬 기록으로만 유지.)
+# 예외로 특정 office 파일을 꼭 넣어야 하면 `git add -f <경로>` 로 강제 추가할 것.
+*.pptx
+*.docx
+*.pdf
+
+# ASH(Automated Security Helper) 보안 스캔 산출물 — 내부 리뷰용, 납품물 아님.
+# 46K줄 HTML/요약 MD 에 구계정ID·시크릿스캔 히트 경로가 대량 박혀 있어 PR 에 넣지 않는다.
+# (기존 scan-report*/SECURITY-FINDINGS* 제외 정책과 동류. 디스크엔 보존.)
+docs/ASH-Security-Scan-Report.html
+docs/ASH-SECURITY-SCAN.md
+docs/ASH-*
+
+# 로컬 backport 분석 / 스크래치 devlog — 납품물 아니다(디스크 보존, 로컬 기록용).
+phase2-backport-analysis.md
+*-backport-analysis.md
+
+# 스크린샷 캡처 — 프로젝트 자산이 아니라 개발 중 캡처. PR 에 넣지 않는다.
+스크린샷*.png
+Screenshot*.png
+Screen Shot*.png

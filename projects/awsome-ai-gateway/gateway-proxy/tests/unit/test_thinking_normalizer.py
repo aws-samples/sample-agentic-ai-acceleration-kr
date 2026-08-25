@@ -1,5 +1,4 @@
-# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
-# SPDX-License-Identifier: MIT-0
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 """Unit tests for per-model `thinking` normalization.
 
@@ -24,6 +23,9 @@ def _body(**kw):
     b = {"model": "x", "max_tokens": 2048, "messages": [{"role": "user", "content": "hi"}]}
     b.update(kw)
     return b
+
+
+# --- adaptive-only family (Opus 4.7 / 4.8): enabled → adaptive -----------------
 
 
 @pytest.mark.parametrize("model_id", [OPUS_47, OPUS_48])
@@ -61,6 +63,9 @@ def test_output_config_kept_on_adaptive_family():
     assert b["output_config"] == {"effort": "high"}
 
 
+# --- legacy-only family (Haiku 4.5): adaptive → enabled -----------------------
+
+
 def test_adaptive_converted_to_enabled():
     b = normalize_thinking(_body(thinking={"type": "adaptive"}), HAIKU_45)
     assert b["thinking"]["type"] == "enabled"
@@ -92,6 +97,9 @@ def test_enabled_untouched_on_legacy_family():
         _body(thinking={"type": "enabled", "budget_tokens": 1024}), HAIKU_45
     )
     assert b["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+
+
+# --- pass-through cases -------------------------------------------------------
 
 
 def test_disabled_never_touched():

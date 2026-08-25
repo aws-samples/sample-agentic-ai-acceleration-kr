@@ -103,7 +103,7 @@ class TestSSRFPrevention:
                 user.is_active = True
 
                 MockUserRepo.return_value.get_by_sso_subject = AsyncMock(return_value=user)
-                MockBudgetRepo.return_value.get_active_config = AsyncMock(return_value=None)
+                MockBudgetRepo.return_value.get_first_active_config = AsyncMock(return_value=None)
 
                 result = await cli_service.verify_sts_and_issue_key(mock_session, data=data)
 
@@ -196,7 +196,7 @@ class TestAutoProvisioning:
                 MockUserRepo.return_value.create_user = AsyncMock(return_value=new_user)
 
                 MockBudgetRepo.return_value.upsert_config = AsyncMock()
-                MockBudgetRepo.return_value.get_active_config = AsyncMock(return_value=None)
+                MockBudgetRepo.return_value.get_first_active_config = AsyncMock(return_value=None)
 
                 result = await cli_service.verify_sts_and_issue_key(mock_session, data=data)
 

@@ -85,15 +85,15 @@ def build_gateway_settings(
         "GATEWAY_CLI_GATEWAY_URL": admin_api_url,
     }
 
-    # OIDC (IDP) — the two vars api-key-helper requires to operate in OIDC mode.
-    # ADMIN_API_URL is not written separately: gateway_cli_oidc.load_oidc_config_from_env
-    # falls back to ``ADMIN_API_URL or GATEWAY_CLI_GATEWAY_URL``, so the key above already
-    # covers that role (writing the same value under two keys drifts once only one is updated).
+    # OIDC (IDP) — api-key-helper 가 OIDC 모드로 동작하기 위한 필수 2개.
+    # ADMIN_API_URL 은 별도로 쓰지 않는다: gateway_cli_oidc.load_oidc_config_from_env 가
+    # ``ADMIN_API_URL or GATEWAY_CLI_GATEWAY_URL`` 로 폴백하므로 위 키가 이미 그 역할을 한다
+    # (같은 값을 두 키로 중복 기록하면 나중에 한쪽만 수정돼 어긋난다).
     if oidc_issuer_url and oidc_client_id:
         env["OIDC_ISSUER_URL"] = oidc_issuer_url.rstrip("/")
         env["OIDC_CLIENT_ID"] = oidc_client_id
-        # audience is optional — needed only when admin-api's OIDC_AUDIENCE check is enabled.
-        # An empty string is omitted instead: audience handling differs per IDP and can cause 401.
+        # audience 는 선택 — admin-api 의 OIDC_AUDIENCE 검증이 켜져 있을 때만 필요.
+        # 빈 문자열을 쓰면 IDP 마다 audience 해석이 달라 401 을 유발할 수 있어 생략한다.
         if oidc_audience:
             env["OIDC_AUDIENCE"] = oidc_audience
 

@@ -211,8 +211,7 @@ ingress:
   # "alb" (EKS Fargate)
   className: "nginx"
 
-  # ALB(EKS) 어노테이션 — 세 Ingress 에 공통 적용.
-  # Ingress 하나에만 필요한 규칙은 여기 넣지 말고 아래 전용 맵을 쓸 것.
+  # ALB(EKS) 어노테이션
   annotations: {}
 
   # gateway-proxy (사용자 API, data-plane)
@@ -223,15 +222,6 @@ ingress:
     tls:
       enabled: false
       secretName: ""
-    # 이 Ingress 에만 붙는 어노테이션. 공통값을 덮어쓴다.
-    # data-plane 전용 규칙 자리 — 특히 CloudFront 를 오리진 앞에 둔 구성에서:
-    #   alb.ingress.kubernetes.io/security-group-prefix-lists: "pl-xxxxxxxx"
-    # (리전마다 ID 가 다르므로 이름으로 조회할 것:
-    #  aws ec2 describe-managed-prefix-lists --filters
-    #    Name=prefix-list-name,Values=com.amazonaws.global.cloudfront.origin-facing)
-    # ⚠️ 이 값을 위 공통 annotations 에 넣으면 admin-api·admin-ui 까지 임의의
-    #    CloudFront 배포에 열려 IP 제한이 무력화된다.
-    annotations: {}
 
   # admin-ui (관리자 웹)
   adminUi:
@@ -241,9 +231,6 @@ ingress:
     tls:
       enabled: false
       secretName: ""
-    # 이 Ingress 에만 붙는 어노테이션. 공통값과 템플릿 기본값
-    # (healthcheck-path=/api/health, success-codes=200) 을 모두 덮어쓴다.
-    annotations: {}
 
   # admin-api (관리자 REST API)
   adminApi:
@@ -253,8 +240,6 @@ ingress:
     tls:
       enabled: false
       secretName: ""
-    # 이 Ingress 에만 붙는 어노테이션. 공통값을 덮어쓴다.
-    annotations: {}
 
 # ----------------------------------------------------------------------------
 # External Secrets Operator 연동 (ESO 사용 시 K8s Secret 대신 동적 주입)
@@ -344,6 +329,20 @@ gatewayProxy:
     type: "ClusterIP"
     port: 8000
     targetPort: 8000
+
+  # SSE 스트리밍 타임아웃 (→ configmap 의 STREAM_IDLE_TIMEOUT /
+  # STREAM_DISCONNECT_DRAIN_TIMEOUT). config.py 의 기본값과 동일하게 둔다.
+  #
+  # ⚠️ **idleTimeout 은 ALB idle_timeout 보다 반드시 작아야 한다.**
+  #   dev  ALB 300s → 240 (values-eks-fargate-dev.yaml)
+  #   prod ALB 600s → 540 (values-eks-fargate-prod.yaml)
+  # 크거나 같으면 ALB 가 먼저 끊어 클라이언트가 truncated stream 을 본다(원인 추적이
+  # 어려운 실패). ALB 의 idle_timeout 을 바꿀 때 이 값도 함께 내려/올려야 한다.
+  # 아래쪽 하한은 upstream 첫 토큰 지연 — Opus extended thinking 은 60s 를 넘긴다.
+  streaming:
+    idleTimeout: 240
+    # 클라이언트 끊김 후 upstream 을 계속 소비해 usage 를 보존하는 상한(과금 정확성).
+    disconnectDrainTimeout: 30
 
   # SSE 장시간 연결 수용 → HPA는 CPU 기반 + 충분한 maxReplicas 필요
   resources:

@@ -128,10 +128,9 @@ export function CreateModelDialog({ isOpen, onClose, editModel }: CreateModelDia
         });
         onClose();
       } else {
-        // Field-error keys with no matching input in this form cannot be rendered by the JSX
-        // below, so they just disappear. That is exactly why the max_tokens/context_window
-        // schema drift showed up only as a "Validation failed" with no cause. Merge the
-        // unrenderable keys into the top-level error message so they are always visible.
+        // 필드 에러 중 이 폼에 대응 입력란이 없는 키는 아래 JSX 로 렌더될 수 없어 그냥 사라진다.
+        // 실제로 그래서 max_tokens/context_window 스키마 드리프트가 원인 없는 "Validation failed"
+        // 로만 보였다. 렌더 불가한 키는 상단 에러 메시지에 합쳐 항상 화면에 노출한다.
         const fe = (!result.success && result.fieldErrors) || {};
         const orphanKeys = Object.keys(fe).filter((k) => !(k in form));
         setError(
@@ -203,10 +202,9 @@ export function CreateModelDialog({ isOpen, onClose, editModel }: CreateModelDia
               <option value="">{t('selectProvider')}</option>
               <option value="BEDROCK">BEDROCK</option>
               <option value="OPENMODEL">OPENMODEL</option>
-              {/* Mantle providers need endpoint_url and api_format, so they are normally seeded
-                  by a migration. The options are still exposed here so the provider dropdown
-                  matches the stored value when editing existing cowork-opus / codex-gpt models
-                  (unit price, etc.). */}
+              {/* Mantle 계열은 endpoint_url·api_format 이 필요해 보통 마이그레이션으로 시드되지만,
+                  기존 cowork-opus / codex-gpt 모델 편집(단가 등) 시 provider 드롭다운이 값과
+                  매칭되도록 옵션을 노출한다. */}
               <option value="BEDROCK_MANTLE">BEDROCK_MANTLE (Cowork · Opus)</option>
               <option value="BEDROCK_MANTLE_OPENAI">BEDROCK_MANTLE_OPENAI (Codex · GPT)</option>
             </select>

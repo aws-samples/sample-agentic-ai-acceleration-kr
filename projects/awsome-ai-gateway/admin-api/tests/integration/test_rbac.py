@@ -79,7 +79,12 @@ class TestCLIEndpointsNoAuth:
 
     async def test_cli_download_no_auth_required(self, client: AsyncClient):
         resp = await client.get("/cli/download/darwin/arm64")
-        assert resp.status_code == 200
+        # No auth gate: 200 when the built CLI tarball is present in CLI_DIST_DIR,
+        # 404 when it isn't (router-level tests don't build the artifact). Either
+        # way the endpoint must not be auth-gated (never 401/403). Mirrors
+        # test_health_no_auth_required's infra-tolerant assertion.
+        assert resp.status_code in (200, 404)
+        assert resp.status_code not in (401, 403)
 
 
 class TestHealthEndpoint:

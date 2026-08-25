@@ -65,7 +65,7 @@ module "vpc" {
 # ==============================================================================
 # VPC Endpoints — Bedrock PrivateLink (NAT 미경유, VPC 내부 직접 연결)
 # ------------------------------------------------------------------------------
-# Pod → ENI (VPC Endpoint) → Bedrock/STS. 퍼블릭 인터넷을 경유하지 않음.
+# Pod → ENI (VPC Endpoint) → Bedrock. 퍼블릭 인터넷을 경유하지 않음.
 # private_dns_enabled=true: 기존 bedrock-runtime.{region}.amazonaws.com 호출이
 # 코드 변경 없이 자동으로 VPC Endpoint 프라이빗 IP로 해석됨.
 # ==============================================================================

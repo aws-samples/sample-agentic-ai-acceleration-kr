@@ -26,7 +26,7 @@ class MantleAdapter(ProviderAdapter):
 
     NOT boto3 invoke_model. Targets POST {endpoint}/v1/messages on
     bedrock-mantle.{region}.api.aws/anthropic using a short-lived bearer minted
-    by MantleCredentialBroker (which assumes the cross-account 905 role).
+    by MantleCredentialBroker (which assumes the cross-account 222 role).
     Used for Cowork -> Tokyo Opus 4.8.
     """
 
@@ -60,7 +60,12 @@ class MantleAdapter(ProviderAdapter):
 
         body = resp.content
         if resp.status_code != 200:
-            logger.warning("mantle_http_error", status=resp.status_code, model_id=model_id)
+            logger.warning(
+                "mantle_http_error",
+                status=resp.status_code,
+                model_id=model_id,
+                error_body=body[:500].decode("utf-8", "replace"),
+            )
             return resp.status_code, body, {}, TokenUsage()
 
         try:
@@ -102,10 +107,17 @@ class MantleAdapter(ProviderAdapter):
 
         if resp.status_code != 200:
             status = resp.status_code
+            err_body = b""
             try:
-                await resp.aread()
+                err_body = await resp.aread()
             except Exception:
                 pass
+            logger.warning(
+                "mantle_stream_http_error",
+                status=status,
+                model_id=model_id,
+                error_body=err_body[:500].decode("utf-8", "replace"),
+            )
             await cm.__aexit__(None, None, None)
 
             async def _http_err() -> AsyncIterator[bytes]:

@@ -52,9 +52,9 @@ class BedrockAdapter(ProviderAdapter):
 
     두 모드:
     - in-account(기본): bedrock_client 고정. resolver/fallback None → 기존과 동일 동작.
-    - cross-account(claude-code→374): client_resolver = async () -> boto3 client
+    - cross-account(claude-code→333): client_resolver = async () -> boto3 client
       (STS assume 후 대상 계정 bedrock-runtime). assume/build 실패 시 fallback_client
-      (in-account 859)로 **투명 폴백** → claude-code 절대 안 죽음(사용자 결정).
+      (in-account 123)로 **투명 폴백** → claude-code 절대 안 죽음(사용자 결정).
     """
 
     def __init__(self, bedrock_client, client_resolver=None, fallback_client=None) -> None:

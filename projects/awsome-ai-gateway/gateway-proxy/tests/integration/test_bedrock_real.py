@@ -31,16 +31,38 @@ from app.middleware.rate_limit import RateLimitMiddleware
 from app.providers.bedrock_adapter import BedrockAdapter
 from app.providers.registry import ProviderRegistry
 from app.routers import bedrock
-from app.schemas.domain import ProviderType
+from app.schemas.domain import (
+    ApiFormat,
+    AuthContext,
+    AuthType,
+    ModelConfigSchema,
+    ModelPricingSchema,
+    ModelStatus,
+    ProviderType,
+    Role,
+)
 from app.security.event_detector import SecurityEventDetector
 from app.services.cost_recorder import CostRecorder
 from app.services.lua_loader import LuaScriptLoader
 
 
 def _aws_credentials_available() -> bool:
-    """Return True only when boto3 can resolve AWS credentials without errors."""
+    """Return True only when boto3 can actually resolve AND validate AWS credentials.
+
+    ⚠️ `boto3.client(...)` alone NEVER raises without creds (creds resolve lazily at
+    call time), so the old guard always returned True → these live tests never skipped
+    and hard-failed in CI (DEVLOG §68.3). Make the gate real by calling STS
+    GetCallerIdentity with a short timeout: no creds / offline → skip.
+    """
     try:
-        boto3.client("bedrock-runtime", region_name="ap-northeast-2")
+        from botocore.config import Config
+
+        sts = boto3.client(
+            "sts",
+            region_name="ap-northeast-2",
+            config=Config(connect_timeout=3, read_timeout=3, retries={"max_attempts": 1}),
+        )
+        sts.get_caller_identity()
         return True
     except Exception:
         return False
@@ -75,86 +97,101 @@ LuaScriptLoader.load_all(_SCRIPT_DIR)
 # ---------------------------------------------------------------------------
 
 
-def _rl_ok():
-    return json.dumps(
-        {
-            "allowed": True,
-            "remaining": 59,
-            "limit": 60,
-            "retry_after": None,
-            "window_reset": 0,
-        }
-    ).encode()
+def _auth_context_json(allowed_models=None):
+    """Serialized AuthContext for the Redis-first VK cache-hit path (key:cache:vk:*)."""
+    return AuthContext(
+        user_id=USER_ID,
+        team_id=TEAM_ID,
+        dept_id=DEPT_ID,
+        roles=[Role.USER],
+        auth_type=AuthType.VIRTUAL_KEY,
+        key_id=None,
+        allowed_models=allowed_models,
+        allowed_clients=None,
+        sso_subject=None,
+    ).model_dump_json()
 
 
-def _budget_ok():
-    return json.dumps(
-        {
-            "allowed": True,
-            "reason": None,
-            "used_usd": 50,
-            "remaining_usd": 950,
-            "limit_usd": 1000,
-            "policy": "hard_block",
-            "throttle_active": False,
-            "throttle_rpm_pct": 50,
-            "threshold_pct": 5,
-            "soft_warning": False,
-        }
-    ).encode()
+def _model_config_json():
+    """Serialized ModelConfigSchema for RouterService's model:{ref} cache hit.
+
+    실제 Bedrock 모델 ID/리전을 그대로 사용 — Router 는 캐시 히트로 DB 를 건너뛰고,
+    반환된 provider_model_id 로 실제 Bedrock 을 호출한다.
+    """
+    return ModelConfigSchema(
+        provider_model_id=MODEL_ID,
+        alias="claude-sonnet-4-6",
+        provider=ProviderType.BEDROCK,
+        api_format=ApiFormat.BEDROCK_NATIVE,
+        endpoint=REGION,
+        pricing=ModelPricingSchema(input_per_1k=Decimal("0.003"), output_per_1k=Decimal("0.015")),
+        status=ModelStatus.ACTIVE,
+    ).model_dump_json()
+
+
+def _budget_user_passthrough():
+    # USER config 미설정 → pass-through (Q 정책). config_present=false.
+    return {
+        "allowed": True, "reason": None, "used_usd": 0, "remaining_usd": 0,
+        "limit_usd": 0, "policy": "hard_block", "throttle_active": False,
+        "throttle_rpm_pct": 50, "threshold_pct": 0, "soft_warning": False,
+        "scope": "user", "config_present": False, "app_clients": [],
+    }
+
+
+def _budget_team_ok(used=50, limit=1000):
+    return {
+        "allowed": True, "reason": None, "used_usd": used,
+        "remaining_usd": limit - used, "limit_usd": limit, "policy": "hard_block",
+        "throttle_active": False, "throttle_rpm_pct": 50,
+        "threshold_pct": int(used / limit * 100), "soft_warning": False,
+        "scope": "team", "config_present": True, "app_clients": [],
+    }
 
 
 def _build_redis():
+    """Redis-first key-aware / scope-aware mock (test_bedrock_e2e.py 와 동일 구조)."""
     redis = AsyncMock()
-    redis.get = AsyncMock(return_value=None)
+    auth_json = _auth_context_json()
+    model_json = _model_config_json()
+    cache_key = f"key:cache:vk:{VK_HASH}"
+    model_key = f"model:{MODEL_ID}"
+
+    def _get(key, *args, **kwargs):
+        if key == cache_key:
+            return auth_json  # VKAuthStrategy 캐시 히트
+        if key == model_key:
+            return model_json  # RouterService 모델 캐시 히트
+        return None  # rl:config:* miss → DB → 빈 결과 → 무제한
+
+    redis.get = AsyncMock(side_effect=_get)
+    redis.exists = AsyncMock(return_value=1)
     redis.set = AsyncMock()
     redis.setex = AsyncMock()
+    redis.delete = AsyncMock()
     redis.ping = AsyncMock(return_value=True)
-    redis.eval = AsyncMock(side_effect=[_rl_ok(), _budget_ok()])
+
+    user_resp = _budget_user_passthrough()
+    team_resp = _budget_team_ok()
+
+    def _eval(script, numkeys, *argv):
+        label = argv[numkeys] if len(argv) > numkeys else ""
+        if label == "team":
+            return json.dumps(team_resp).encode()
+        return json.dumps(user_resp).encode()
+
+    redis.eval = AsyncMock(side_effect=_eval)
     return redis
 
 
 def _build_db_session():
+    # Redis-first: DB 는 (1) VK 캐시 히트 시 User.is_active 재확인, (2) rate-limit
+    # config 조회(빈 결과=무제한) 두 경로에서만 접근. generic result 로 둘 다 충족.
     session = AsyncMock()
-
-    vk = MagicMock()
-    vk.key_hash = VK_HASH
-    vk.user_id = USER_ID
-    vk.status = "active"
-    vk.expires_at = None
-    vk.allowed_models = None
-    vk.id = "vk-real-001"
-    vk_res = MagicMock()
-    vk_res.scalar_one_or_none.return_value = vk
-
-    user = MagicMock()
-    user.id = USER_ID
-    user.team_id = TEAM_ID
-    user.dept_id = DEPT_ID
-    user.roles = ["USER"]
-    user.is_active = True
-    user_res = MagicMock()
-    user_res.scalar_one_or_none.return_value = user
-
-    # ModelConfig — 실제 모델 ID & 리전
-    mc = MagicMock()
-    mc.provider_model_id = MODEL_ID
-    mc.alias = None
-    mc.provider = "BEDROCK"
-    mc.api_format = "BEDROCK_NATIVE"
-    mc.endpoint = REGION
-    mc.status = "ACTIVE"
-    mc_res = MagicMock()
-    mc_res.scalar_one_or_none.return_value = mc
-
-    pricing = MagicMock()
-    pricing.model_alias = MODEL_ID  # NEEDS_CONTEXT: alias value TBD in Task 3 RouterService rewrite
-    pricing.input_per_1k = Decimal("0.003")
-    pricing.output_per_1k = Decimal("0.015")
-    pr_res = MagicMock()
-    pr_res.scalar_one_or_none.return_value = pricing
-
-    session.execute = AsyncMock(side_effect=[vk_res, user_res, mc_res, pr_res])
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = True
+    result.scalars.return_value.all.return_value = []
+    session.execute = AsyncMock(return_value=result)
     return session
 
 
@@ -235,9 +272,11 @@ async def test_real_bedrock_invoke():
     print(f"[invoke] usage: {body.get('usage', {})}")
 
     # 미들웨어 헤더 검증
+    # NOTE: x-ratelimit-remaining 은 Redis-DOWN in-memory fallback 경로에서만
+    # 방출된다(rate_limit.py:119/124). 정상 /model/ 경로는 방출하지 않으므로
+    # 어서션에서 제외 (KI-07 / DEVLOG §68.3).
     assert "x-request-id" in resp.headers
     assert "x-budget-remaining" in resp.headers
-    assert "x-ratelimit-remaining" in resp.headers
 
 
 @_SKIP_REAL

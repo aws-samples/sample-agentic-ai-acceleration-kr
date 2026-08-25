@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="640" viewBox="0 0 1180 640" font-family="'Segoe UI',Helvetica,Arial,sans-serif">
+  <rect width="1180" height="640" fill="#ffffff"/>
+  <text x="24" y="36" font-size="20" font-weight="700" fill="#232F3E">admin-chat-agent — 5-에이전트 패턴과 정확도 하네스</text>
+  <text x="24" y="58" font-size="13" fill="#697586">Orchestrator가 specialist를 도구처럼 호출(agents-as-tools)하고, 모든 숫자는 결정적 도구의 실행 결과에서만 나온다.</text>
+
+  <defs>
+    <marker id="a2" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#8C4FFF"/></marker>
+    <marker id="a3" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#98A2B3"/></marker>
+  </defs>
+
+  <!-- Orchestrator -->
+  <g>
+    <rect x="40" y="120" width="210" height="150" rx="12" fill="#E8F8F5" stroke="#01A88D" stroke-width="2"/>
+    <text x="145" y="148" text-anchor="middle" font-size="14" font-weight="700" fill="#01885C">Orchestrator</text>
+    <text x="145" y="167" text-anchor="middle" font-size="11" fill="#475467">Opus 4.8</text>
+    <text x="145" y="190" text-anchor="middle" font-size="11" fill="#475467">의도 분류 · 위임</text>
+    <text x="145" y="207" text-anchor="middle" font-size="11" fill="#475467">최종 응답 합성</text>
+    <text x="145" y="230" text-anchor="middle" font-size="10.5" fill="#01885C">deterministic-</text>
+    <text x="145" y="245" text-anchor="middle" font-size="10.5" fill="#01885C">tool-first</text>
+    <text x="145" y="262" text-anchor="middle" font-size="10" fill="#98A2B3">effort · prompt cache</text>
+  </g>
+
+  <!-- specialists -->
+  <g>
+    <rect x="330" y="92" width="200" height="56" rx="10" fill="#ffffff" stroke="#01A88D" stroke-width="1.5"/>
+    <text x="430" y="116" text-anchor="middle" font-size="12.5" font-weight="700" fill="#01885C">② SQL Specialist</text>
+    <text x="430" y="134" text-anchor="middle" font-size="10.5" fill="#475467">text2SQL · 자체수정</text>
+  </g>
+  <g>
+    <rect x="330" y="162" width="200" height="56" rx="10" fill="#ffffff" stroke="#01A88D" stroke-width="1.5"/>
+    <text x="430" y="186" text-anchor="middle" font-size="12.5" font-weight="700" fill="#01885C">③ SQL Validator</text>
+    <text x="430" y="204" text-anchor="middle" font-size="10.5" fill="#475467">PASS / WARN / FAIL</text>
+  </g>
+  <g>
+    <rect x="330" y="232" width="200" height="56" rx="10" fill="#ffffff" stroke="#01A88D" stroke-width="1.5"/>
+    <text x="430" y="256" text-anchor="middle" font-size="12.5" font-weight="700" fill="#01885C">④ Code Specialist</text>
+    <text x="430" y="274" text-anchor="middle" font-size="10.5" fill="#475467">execute_python</text>
+  </g>
+  <g>
+    <rect x="330" y="302" width="200" height="56" rx="10" fill="#ffffff" stroke="#01A88D" stroke-width="1.5"/>
+    <text x="430" y="326" text-anchor="middle" font-size="12.5" font-weight="700" fill="#01885C">⑤ Viz Specialist</text>
+    <text x="430" y="344" text-anchor="middle" font-size="10.5" fill="#475467">render_chart spec</text>
+  </g>
+
+  <!-- delegate arrows -->
+  <line x1="250" y1="150" x2="328" y2="120" stroke="#8C4FFF" stroke-width="1.8" marker-end="url(#a2)"/>
+  <line x1="250" y1="175" x2="328" y2="190" stroke="#8C4FFF" stroke-width="1.8" marker-end="url(#a2)"/>
+  <line x1="250" y1="215" x2="328" y2="260" stroke="#8C4FFF" stroke-width="1.8" marker-end="url(#a2)"/>
+  <line x1="250" y1="240" x2="328" y2="330" stroke="#8C4FFF" stroke-width="1.8" marker-end="url(#a2)"/>
+  <text x="262" y="135" font-size="10" fill="#6D28D9">ask_*_specialist (@tool)</text>
+
+  <!-- deterministic tools column -->
+  <g>
+    <rect x="610" y="92" width="220" height="70" rx="10" fill="#FFF4E5" stroke="#ED7100" stroke-width="1.5"/>
+    <text x="720" y="116" text-anchor="middle" font-size="12.5" font-weight="700" fill="#B45309">query_db (Lambda)</text>
+    <text x="720" y="134" text-anchor="middle" font-size="10" fill="#475467">sqlglot AST · whitelist · EXPLAIN</text>
+    <text x="720" y="150" text-anchor="middle" font-size="10" fill="#475467">LIMIT · 10s · read-only role</text>
+  </g>
+  <g>
+    <rect x="610" y="176" width="220" height="44" rx="10" fill="#FFF4E5" stroke="#ED7100" stroke-width="1.5"/>
+    <text x="720" y="203" text-anchor="middle" font-size="12.5" font-weight="700" fill="#B45309">get_schema (Lambda)</text>
+  </g>
+  <g>
+    <rect x="610" y="232" width="220" height="56" rx="10" fill="#E6F6F7" stroke="#01A88D" stroke-width="1.5"/>
+    <text x="720" y="256" text-anchor="middle" font-size="12.5" font-weight="700" fill="#01885C">Code Interpreter</text>
+    <text x="720" y="274" text-anchor="middle" font-size="10" fill="#475467">microVM · pandas/sklearn/statsmodels</text>
+  </g>
+
+  <line x1="530" y1="120" x2="608" y2="120" stroke="#ED7100" stroke-width="1.6" marker-end="url(#a3)"/>
+  <line x1="530" y1="260" x2="608" y2="258" stroke="#ED7100" stroke-width="1.6" marker-end="url(#a3)"/>
+
+  <!-- stores -->
+  <g>
+    <rect x="900" y="92" width="240" height="56" rx="10" fill="#EEF4FF" stroke="#527FFF" stroke-width="1.5"/>
+    <text x="1020" y="116" text-anchor="middle" font-size="12" font-weight="700" fill="#3538CD">Aurora (read-only)</text>
+    <text x="1020" y="134" text-anchor="middle" font-size="10" fill="#475467">gateway_chat_reader</text>
+  </g>
+  <g>
+    <rect x="900" y="232" width="240" height="56" rx="10" fill="#F2F6E8" stroke="#7AA116" stroke-width="1.5"/>
+    <text x="1020" y="256" text-anchor="middle" font-size="12" font-weight="700" fill="#5A7D0E">S3 staging (KMS)</text>
+    <text x="1020" y="274" text-anchor="middle" font-size="10" fill="#475467">대용량 결과 · 차트 · 리포트</text>
+  </g>
+  <line x1="830" y1="120" x2="898" y2="120" stroke="#98A2B3" stroke-width="1.5" marker-end="url(#a3)"/>
+  <line x1="830" y1="260" x2="898" y2="260" stroke="#98A2B3" stroke-width="1.5" marker-end="url(#a3)"/>
+
+  <!-- harness band -->
+  <rect x="40" y="400" width="1100" height="210" rx="12" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="1.4"/>
+  <text x="60" y="428" font-size="14" font-weight="700" fill="#334155">정확도 하네스 (Harness) — 모델 바깥의 통제 장치</text>
+
+  <g>
+    <rect x="60" y="446" width="255" height="146" rx="10" fill="#ffffff" stroke="#94A3B8" stroke-width="1.2"/>
+    <text x="76" y="470" font-size="12.5" font-weight="700" fill="#0F172A">① 구조화 envelope</text>
+    <text x="76" y="492" font-size="10.5" fill="#475467">각 specialist는 JSON만 반환</text>
+    <text x="76" y="509" font-size="10.5" fill="#475467">{sql,rows} / {code,result_summary}</text>
+    <text x="76" y="526" font-size="10.5" fill="#475467">/ {verdict} / {kind,x,y}</text>
+    <text x="76" y="548" font-size="10.5" fill="#475467">산문·표 금지 → orchestrator는</text>
+    <text x="76" y="565" font-size="10.5" fill="#475467">필드를 핸들로 인용</text>
+  </g>
+  <g>
+    <rect x="333" y="446" width="255" height="146" rx="10" fill="#ffffff" stroke="#94A3B8" stroke-width="1.2"/>
+    <text x="349" y="470" font-size="12.5" font-weight="700" fill="#0F172A">② 다층 검증</text>
+    <text x="349" y="492" font-size="10.5" fill="#475467">L0 sql_guard (컬럼·TZ·fan-out)</text>
+    <text x="349" y="509" font-size="10.5" fill="#475467">L1 대시보드 일관성</text>
+    <text x="349" y="526" font-size="10.5" fill="#475467">L2 Validator(의미 검증)</text>
+    <text x="349" y="543" font-size="10.5" fill="#475467">L3 실행 기반 self-consistency</text>
+    <text x="349" y="560" font-size="10.5" fill="#475467">(k-후보 투표) · L4/L5 옵션</text>
+  </g>
+  <g>
+    <rect x="606" y="446" width="255" height="146" rx="10" fill="#ffffff" stroke="#94A3B8" stroke-width="1.2"/>
+    <text x="622" y="470" font-size="12.5" font-weight="700" fill="#0F172A">③ Reconciliation gate</text>
+    <text x="622" y="492" font-size="10.5" fill="#475467">최종 텍스트의 모든 숫자가</text>
+    <text x="622" y="509" font-size="10.5" fill="#475467">실행 결과에서 유래했는지 검사</text>
+    <text x="622" y="526" font-size="10.5" fill="#475467">미유래 시 WARN (fail-soft)</text>
+    <text x="622" y="543" font-size="10.5" fill="#475467">%·연도·기간 표현은</text>
+    <text x="622" y="560" font-size="10.5" fill="#475467">false-positive 필터로 제외</text>
+  </g>
+  <g>
+    <rect x="879" y="446" width="245" height="146" rx="10" fill="#ffffff" stroke="#94A3B8" stroke-width="1.2"/>
+    <text x="895" y="470" font-size="12.5" font-weight="700" fill="#0F172A">④ 도구 투명성</text>
+    <text x="895" y="492" font-size="10.5" fill="#475467">tool_call / tool_result 이벤트</text>
+    <text x="895" y="509" font-size="10.5" fill="#475467">실행된 SQL·Python·검증을</text>
+    <text x="895" y="526" font-size="10.5" fill="#475467">UI에 그대로 렌더 + 인라인 재실행</text>
+    <text x="895" y="548" font-size="10.5" fill="#475467">heartbeat로 침묵 구간 생존신호</text>
+    <text x="895" y="565" font-size="10.5" fill="#475467">→ 신뢰 가능한 답변</text>
+  </g>
+</svg>

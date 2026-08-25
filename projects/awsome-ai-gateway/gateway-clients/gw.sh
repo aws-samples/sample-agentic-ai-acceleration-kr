@@ -14,11 +14,11 @@
 # VK 는 ~/.gateway-vk 파일(plain VK 문자열, 600)에서 읽는다. 1시간 만료 → 만료 시 `gw.sh vk` 재실행.
 set -euo pipefail
 
-# ── 설정 (게이트웨이 dev ALB) ──────────────────────────────────────────────
-GW_URL="${GW_URL:-http://<ALB_DNS>}"
-ADMIN_URL="${ADMIN_URL:-http://<ALB_DNS>}"
-OIDC_ISSUER_URL="${OIDC_ISSUER_URL:-https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_XXXXXXXXX}"
-OIDC_CLIENT_ID="${OIDC_CLIENT_ID:-<COGNITO_APP_CLIENT_ID>}"
+# ── 설정 (게이트웨이 접속 좌표 — 아래 값을 채우거나 환경변수로 오버라이드) ──────────
+GW_URL="${GW_URL:-<GATEWAY_URL>}"
+ADMIN_URL="${ADMIN_URL:-<ADMIN_API_URL>}"
+OIDC_ISSUER_URL="${OIDC_ISSUER_URL:-https://cognito-idp.ap-northeast-2.amazonaws.com/<COGNITO_USER_POOL_ID>}"
+OIDC_CLIENT_ID="${OIDC_CLIENT_ID:-<OIDC_CLIENT_ID>}"
 VK_FILE="$HOME/.gateway-vk"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # docker 또는 finch

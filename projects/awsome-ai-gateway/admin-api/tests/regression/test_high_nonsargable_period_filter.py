@@ -547,12 +547,23 @@ async def test_period_filter_uses_index_not_seq_scan():
                     )
                 )
             ).scalar()
-            if not has_index:
-                pytest.skip("0026 미적용 DB — alembic upgrade head 후 재실행")
+            # ⚠️ 인덱스 부재는 **skip 이 아니라 실패**다. 과거엔 skip 이었는데, 그러면
+            # 이 테스트가 막아야 하는 바로 그 회귀(0026 이 유실/롤백되어 인덱스가 사라짐)
+            # 에서 조용히 통과한다 — 성능 가드의 유일한 실증 테스트가 침묵하는 것이다.
+            # 실측: 인덱스만 DROP 하고 돌리면 `32 passed, 1 skipped` 로 초록이었다.
+            # DSN 이 주어졌다는 것은 "0026 적용된 DB 를 준다"는 계약이므로, 안 지켜졌으면
+            # 그 사실을 실패로 알린다. DB 없는 환경은 위 `@_DB` 가 이미 걸러낸다.
+            assert has_index, (
+                "idx_usage_logs_requested_at 이 없다 — 0026 미적용/유실. "
+                "PROOF_DSN 은 `alembic upgrade head` 를 마친 DB 를 가리켜야 한다. "
+                "(이 조건을 skip 으로 두면 인덱스 유실 회귀를 못 잡는다)"
+            )
 
             rows = (
                 await conn.execute(text("SELECT count(*) FROM usage.usage_logs"))
             ).scalar()
+            # 행 수 부족은 진짜 skip 사유다 — 플래너가 소규모 테이블에서 Seq Scan 을
+            # 고르는 것은 정상 동작이고, 인덱스 유실과 달리 코드 결함이 아니다.
             if rows < 50_000:
                 pytest.skip(
                     f"행이 {rows}개뿐 — 소규모 테이블에선 플래너가 Seq Scan 을 고르는 게 "

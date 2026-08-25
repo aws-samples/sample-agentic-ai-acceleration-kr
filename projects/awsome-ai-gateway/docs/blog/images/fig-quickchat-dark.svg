@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="620" viewBox="0 0 1180 620" font-family="'Segoe UI','Apple SD Gothic Neo',Helvetica,Arial,sans-serif">
+  <rect width="1180" height="620" fill="#0c0d0f"/>
+  <!-- left: a monitoring page (context) -->
+  <rect x="0" y="0" width="720" height="620" fill="#0f1115"/>
+  <text x="32" y="46" font-size="17" font-weight="700" fill="#e6edf3">실시간 모니터링</text>
+  <text x="32" y="68" font-size="12" fill="#8b98a5">최근 1시간 요약 · Quick Chat은 어느 화면에서나 우측 드로어로 열린다</text>
+  <!-- KPI tiles -->
+  <g>
+    <rect x="32" y="92" width="150" height="78" rx="10" fill="#15181d" stroke="#232830"/>
+    <text x="48" y="116" font-size="11" fill="#8b98a5">총 요청</text>
+    <text x="48" y="146" font-size="24" font-weight="700" fill="#e6edf3">2,481</text>
+  </g>
+  <g>
+    <rect x="196" y="92" width="150" height="78" rx="10" fill="#15181d" stroke="#232830"/>
+    <text x="212" y="116" font-size="11" fill="#8b98a5">평균 지연</text>
+    <text x="212" y="146" font-size="24" font-weight="700" fill="#e6edf3">2.4s</text>
+  </g>
+  <g>
+    <rect x="360" y="92" width="150" height="78" rx="10" fill="#15181d" stroke="#232830"/>
+    <text x="376" y="116" font-size="11" fill="#8b98a5">총 비용</text>
+    <text x="376" y="146" font-size="24" font-weight="700" fill="#2dd4bf">$80.86</text>
+  </g>
+  <g>
+    <rect x="524" y="92" width="150" height="78" rx="10" fill="#15181d" stroke="#232830"/>
+    <text x="540" y="116" font-size="11" fill="#8b98a5">429 거절</text>
+    <text x="540" y="146" font-size="24" font-weight="700" fill="#f59e0b">6</text>
+  </g>
+  <!-- faux chart -->
+  <rect x="32" y="190" width="642" height="160" rx="10" fill="#15181d" stroke="#232830"/>
+  <polyline points="60,320 140,300 220,310 300,270 380,280 460,230 540,250 620,210" fill="none" stroke="#2dd4bf" stroke-width="2.5"/>
+  <text x="48" y="214" font-size="11" fill="#8b98a5">분당 요청 추이</text>
+
+  <!-- right: Quick Chat drawer -->
+  <rect x="720" y="0" width="460" height="620" fill="#111418" stroke="#232830"/>
+  <text x="744" y="40" font-size="15" font-weight="700" fill="#e6edf3">Admin BI Chat</text>
+  <text x="744" y="60" font-size="11" fill="#8b98a5">Quick Chat · 5-agent · powered by Bedrock Claude</text>
+  <text x="1120" y="40" font-size="11" fill="#5b6673" text-anchor="end">session 776583d6</text>
+  <line x1="744" y1="74" x2="1156" y2="74" stroke="#232830"/>
+
+  <!-- user bubble -->
+  <rect x="900" y="92" width="256" height="34" rx="9" fill="#1b3a36"/>
+  <text x="1140" y="114" font-size="12" fill="#d6f5ef" text-anchor="end">지난 24h 429 가장 많이 받은 사용자</text>
+
+  <!-- agent: thinking + tool stream -->
+  <text x="744" y="152" font-size="11" fill="#8b98a5">Admin Chat</text>
+  <text x="744" y="174" font-size="12" fill="#c9d4de">429를 가장 많이 받은 사용자 5명을 조회했습니다.</text>
+
+  <!-- heartbeat phase chip -->
+  <rect x="744" y="190" width="150" height="22" rx="11" fill="#1a2230"/>
+  <circle cx="758" cy="201" r="3" fill="#2dd4bf"/>
+  <text x="768" y="205" font-size="10" fill="#9fb3c8">SQL 생성 중 · 4.2s</text>
+
+  <!-- tool_call cards (collapsed) -->
+  <g>
+    <rect x="744" y="224" width="412" height="34" rx="8" fill="#15181d" stroke="#232830"/>
+    <text x="760" y="245" font-size="12" fill="#9fe7d6">▸  ◧ SQL Specialist 호출</text>
+  </g>
+  <g>
+    <rect x="744" y="266" width="412" height="34" rx="8" fill="#15181d" stroke="#232830"/>
+    <text x="760" y="287" font-size="12" fill="#9fe7d6">▸  ◉ SQL Validator 검증 · PASS</text>
+  </g>
+
+  <!-- result table (mini) -->
+  <rect x="744" y="312" width="412" height="150" rx="8" fill="#15181d" stroke="#232830"/>
+  <text x="760" y="334" font-size="11" fill="#8b98a5">지난 24h 429 Top 5</text>
+  <line x1="760" y1="344" x2="1140" y2="344" stroke="#232830"/>
+  <g font-size="11" fill="#c9d4de">
+    <text x="760" y="364">synthetic-user07@example.com</text><text x="1140" y="364" text-anchor="end" fill="#f59e0b">38</text>
+    <text x="760" y="386">synthetic-user12@example.com</text><text x="1140" y="386" text-anchor="end" fill="#f59e0b">29</text>
+    <text x="760" y="408">synthetic-user03@example.com</text><text x="1140" y="408" text-anchor="end" fill="#e6edf3">11</text>
+    <text x="760" y="430">synthetic-user20@example.com</text><text x="1140" y="430" text-anchor="end" fill="#e6edf3">7</text>
+    <text x="760" y="452">synthetic-user01@example.com</text><text x="1140" y="452" text-anchor="end" fill="#e6edf3">4</text>
+  </g>
+
+  <!-- input -->
+  <rect x="744" y="556" width="412" height="40" rx="20" fill="#0c0d0f" stroke="#2a313b"/>
+  <text x="766" y="581" font-size="12" fill="#5b6673">자연어로 질문하세요. Enter로 전송…</text>
+  <circle cx="1134" cy="576" r="15" fill="#2dd4bf"/>
+  <path d="M1128,576 L1140,576 M1135,571 L1140,576 L1135,581" stroke="#0c0d0f" stroke-width="1.6" fill="none"/>
+
+  <!-- caption -->
+  <text x="32" y="600" font-size="11" fill="#5b6673">Quick Chat — 컨텍스트(좌측 화면)를 유지한 채 우측 드로어에서 즉답. 실시간 토큰 스트리밍 + tool_call/tool_result 투명 렌더.</text>
+</svg>

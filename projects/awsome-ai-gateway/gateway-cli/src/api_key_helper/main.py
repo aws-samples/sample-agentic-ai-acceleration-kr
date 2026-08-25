@@ -359,13 +359,11 @@ def _detect_mode(explicit_mode: str | None) -> str:
 
     Explicit override > env auto-detect > legacy sts default.
 
-    Partial configuration is warned about: when only one of the two vars is set
-    the OIDC intent is obvious, yet the mode silently falls back to STS and the
-    user — who did log in through the IDP — is provisioned as a *different user*
-    keyed on the IAM ARN (auto-provisioning in admin-api
-    services/cli_service.py: email = ``<session_name>@unknown``). The user then
-    cannot find their own account in the Admin UI user list and usage
-    accumulates under that ARN user — very hard to track down.
+    부분 설정은 경고한다. 둘 중 하나만 있으면 OIDC 의도가 명백한데도 조용히 STS 로
+    떨어져, 사용자는 IDP 로그인을 했는데도 IAM ARN 기준으로 *다른 사용자* 로
+    프로비저닝된다 (admin-api services/cli_service.py 의 auto-provisioning:
+    email = ``<session_name>@unknown``). 그러면 Admin UI 사용자 목록에서 자기
+    계정을 찾을 수 없고 사용량도 그 ARN 유저에 쌓인다 — 원인 파악이 매우 어렵다.
     """
     if explicit_mode in ("oidc", "sts"):
         return explicit_mode
@@ -376,9 +374,9 @@ def _detect_mode(explicit_mode: str | None) -> str:
     if issuer or client_id:
         missing = "OIDC_CLIENT_ID" if issuer else "OIDC_ISSUER_URL"
         print(
-            f"Warning: {missing} is not set, so STS(IAM) mode is used instead of OIDC. "
-            "The VK is issued for your AWS IAM ARN, not your IDP login identity. "
-            f"To use OIDC, set {missing} or pass --auth-mode oidc.",
+            f"경고: {missing} 가 없어 OIDC 대신 STS(IAM) 모드로 동작합니다. "
+            "IDP 로그인 신원이 아니라 AWS IAM ARN 으로 VK 가 발급됩니다. "
+            f"OIDC 를 쓰려면 {missing} 를 설정하거나 --auth-mode oidc 를 주세요.",
             file=sys.stderr,
         )
     return "sts"

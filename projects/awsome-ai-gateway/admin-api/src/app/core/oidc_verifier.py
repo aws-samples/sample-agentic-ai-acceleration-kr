@@ -13,8 +13,8 @@ Design notes
 - ``kid`` 매칭으로 정확한 키 선택 → key rotation 안전.
 - jose 의 ``jwt.decode`` 가 sig + exp + nbf + iat + aud + iss 를 모두 검증.
 - ``RS256`` 만 허용 (alg=none, HS256 차단).
-- JWKS fetch is serialized with ``asyncio.Lock`` — holding a blocking lock across
-  an ``await`` stalls the single-threaded event loop forever (see regression #51).
+- JWKS fetch 직렬화는 ``asyncio.Lock`` — blocking lock 을 ``await`` 구간에 걸면
+  단일 스레드 event loop 가 영구 정지한다 (regression #51 참조).
 
 This class is **read-only** w.r.t. database. User/team provisioning happens in
 ``app.services.oidc_service``.
@@ -42,9 +42,9 @@ class OIDCConfigError(Exception):
 class OIDCVerifier:
     """OIDC JWT verifier — issuer discovery + JWKS cache + signature/claim 검증.
 
-    One instance per worker in a multi-worker deployment (httpx.AsyncClient is reused).
-    Concurrent JWKS fetches are collapsed into one by ``asyncio.Lock`` — the instance
-    must only be used inside the event loop that owns it, never shared across threads.
+    멀티 worker 환경에서 worker 별 1개 인스턴스 (httpx.AsyncClient 재사용).
+    동시 JWKS fetch 는 ``asyncio.Lock`` 으로 1회로 합쳐진다 — 인스턴스는 소유한
+    event loop 안에서만 사용해야 하며, 다른 스레드에서 공유하면 안 된다.
     """
 
     _ALLOWED_ALGS = ("RS256", "RS384", "RS512")
@@ -85,10 +85,9 @@ class OIDCVerifier:
         self._jwks_uri: str | None = None
         self._jwks_keys: dict[str, dict] = {}  # kid -> JWK dict
         self._jwks_fetched_at: float = 0.0
-        # asyncio.Lock (NOT threading.Lock): _ensure_jwks_async awaits while holding
-        # the lock. With a blocking lock the second request parks the OS thread, so
-        # the event loop itself stops — it cannot even read the JWKS response, and
-        # there is no recovery.
+        # asyncio.Lock (NOT threading.Lock): _ensure_jwks_async 가 lock 을 잡은 채
+        # await 한다. blocking lock 이면 두 번째 요청이 OS 스레드를 park 시켜
+        # event loop 자체가 멈추고, JWKS 응답을 읽을 수도 없어 복구 불가.
         self._lock = asyncio.Lock()
 
     # ------------------------------------------------------------------

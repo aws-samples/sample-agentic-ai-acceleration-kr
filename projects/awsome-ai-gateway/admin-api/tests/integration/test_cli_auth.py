@@ -78,12 +78,13 @@ class TestCLIVirtualKeyIssuance:
             user.role = UserRole.DEVELOPER
             user.team_id = uuid.UUID(default_team_id)
             user.is_active = True
+            user.sso_subject = None  # serialized into auth-context cache JSON by KeyService
             MockUserRepo.return_value.get_by_sso_subject = AsyncMock(return_value=user)
-            MockBudgetRepo.return_value.get_active_config = AsyncMock(return_value=None)
+            MockBudgetRepo.return_value.get_first_active_config = AsyncMock(return_value=None)
 
             key_repo = MockKeyRepo.return_value
-            key_repo.expire_active_keys = AsyncMock(return_value=0)
-            key_repo.create = AsyncMock(side_effect=lambda vk: vk)
+            # issue_key now expires + inserts in one CTE: expire_and_create(user_id, vk) -> (expired_count, new_id)
+            key_repo.expire_and_create = AsyncMock(return_value=(0, uuid.uuid4()))
             mock_audit.log = AsyncMock()
 
             resp = await client.post(

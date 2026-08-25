@@ -35,11 +35,11 @@
    claude-code               codex                          cowork
    Bedrock NATIVE            Bedrock Mantle                 Bedrock Mantle
    (boto3 invoke_model)      (OpenAI Responses API)         (Anthropic Messages)
-   계정 374445650473          계정 859 in-account             계정 905418156477
+   계정 333344445555          계정 123 in-account             계정 222233334444
    (ap-northeast-2)          (us-east-2, 오하이오)           (ap-northeast-1, 도쿄)
-   STS AssumeRole(374 role)  assume 없음 — pod IRSA 직접      STS AssumeRole(905 role)
+   STS AssumeRole(333 role)  assume 없음 — pod IRSA 직접      STS AssumeRole(222 role)
    ExternalId=claude-code-…  Mantle GPT-5.5                 ExternalId=cowork-…
-   실패 시 859 in-account     bearer(BedrockTokenGenerator)   Opus 4.8 (cowork-opus)
+   실패 시 123 in-account     bearer(BedrockTokenGenerator)   Opus 4.8 (cowork-opus)
    투명 폴백(절대 안 죽음)     httpx AsyncClient               httpx AsyncClient
           │
           ▼
@@ -67,16 +67,53 @@ WebSearch(MCP over httpx, SigV4/IRSA, us-east-1 전용) 호출 → 결과 재투
 
 | 항목 | 계정 | region | 백엔드 | API 규격 | cross-account |
 |------|------|--------|--------|------|---------------|
-| 메인 배포 (게이트웨이 전 서비스 + Aurora + AgentCore Runtime/웹서치 GW + ECR) | `859741818597` | ap-northeast-2 | — | — | gateway-proxy IRSA 가 이 계정 |
-| claude-code | `374445650473` | ap-northeast-2 | Bedrock NATIVE (invoke_model) | Anthropic Messages | STS AssumeRole(ExternalId=`claude-code-bedrock`), 실패 시 859 in-account 투명 폴백 |
-| codex | `859741818597` (in-account) | us-east-2 | Bedrock Mantle GPT-5.5 | OpenAI Responses (`/v1/responses`) | 없음 — pod IRSA creds 직접 사용 |
-| cowork | `905418156477` | ap-northeast-1 | Bedrock Mantle Opus 4.8 | Anthropic Messages | STS AssumeRole(ExternalId=`cowork-bedrock`) |
+| 메인 배포 (게이트웨이 전 서비스 + Aurora + AgentCore Runtime/웹서치 GW + ECR) | `123456789012` | ap-northeast-2 | — | — | gateway-proxy IRSA 가 이 계정 |
+| claude-code | `333344445555` | ap-northeast-2 | Bedrock NATIVE (invoke_model) | Anthropic Messages | STS AssumeRole(ExternalId=`claude-code-bedrock`), 실패 시 123 in-account 투명 폴백 |
+| codex | `123456789012` (in-account) | us-east-2 | Bedrock Mantle GPT-5.5 | OpenAI Responses (`/v1/responses`) | 없음 — pod IRSA creds 직접 사용 |
+| cowork | `222233334444` | ap-northeast-1 | Bedrock Mantle Opus 4.8 | Anthropic Messages | STS AssumeRole(ExternalId=`cowork-bedrock`) |
 
-- cross-account는 `STS AssumeRole(DurationSeconds=3600)` + 선택적 `ExternalId`. claude-code(374 native)의 클라이언트는 `BedrockAccountClientProvider`가 `(role_arn, region, external_id)` 키로 vend/캐시합니다. assume 실패 시 게이트웨이는 859 in-account 클라이언트로 투명 폴백하므로 claude-code 요청은 죽지 않습니다.
+- cross-account는 `STS AssumeRole(DurationSeconds=3600)` + 선택적 `ExternalId`. claude-code(333 native)의 클라이언트는 `BedrockAccountClientProvider`가 `(role_arn, region, external_id)` 키로 vend/캐시합니다. assume 실패 시 게이트웨이는 123 in-account 클라이언트로 투명 폴백하므로 claude-code 요청은 죽지 않습니다.
 - codex/cowork Mantle bearer는 `MantleCredentialBroker`가 assumed creds에서 `BedrockTokenGenerator`로 발급해 `(role, region)`으로 캐시합니다.
 - provider registry는 4개 어댑터: `BEDROCK`(boto3), `OPENMODEL`(httpx vLLM), `BEDROCK_MANTLE`(cowork), `BEDROCK_MANTLE_OPENAI`(codex).
 
 > 컴포넌트·계정·데이터플레인 전체 상세는 레포 루트 [`ARCHITECTURE.md`](ARCHITECTURE.md) 및 [`devlog_websearch.md`](devlog_websearch.md) 참조.
+
+**지원 모델과 등록 방식**
+
+모델 허용 목록은 **DB 주도**입니다. `services/router_service.py` 가 `model.model_aliases` 에서
+alias 를 해석하고(Redis 300s 캐시) `status='INACTIVE'` 로만 차단합니다. 따라서 신모델 개방은
+**마이그레이션으로 alias 행을 추가**하는 일이며, Helm 의 `BEDROCK_ALLOWED_MODELS` 값은
+읽는 코드가 없는 dead config 입니다(에러도 없이 무시됩니다 — chart 주석에 명시).
+
+| 계열 | alias | 백엔드 엔트리포인트 | 등록 |
+|------|-------|--------------------|------|
+| Claude 5 | `claude-opus-5`, `claude-sonnet-5` | `global.anthropic.claude-{opus,sonnet}-5` | migration `0027` |
+| Claude 4.x | `claude-opus-4-*`, `claude-sonnet-4-*`, `claude-haiku-4-5` | `global.anthropic.claude-*` | baseline~`0004` |
+| GPT-5.6 (codex) | `codex-gpt-5.6-{sol,terra,luna}` | `openai.gpt-5.6-*` (Mantle, us-east-2) | migration `0025` |
+| GPT-5.5 (codex) | `codex-gpt` | `openai.gpt-5.5` (Mantle, us-east-2) | migration `0017` |
+
+- codex 의 기본 모델은 `0028` 에서 `codex-gpt`(5.5) → **`codex-gpt-5.6-terra`** 로 전환됩니다.
+  적용 후 `routing_profile:codex` Redis 캐시를 지우거나 TTL(300s) 을 기다려야 반영됩니다.
+- **Fable 5 는 의도적으로 미등록**입니다 — ap-northeast-2 에 inference profile 이 없습니다.
+- ⚠️ **마이그레이션만으로는 부족합니다.** `global.anthropic.*` inference profile 을 호출하려면 IAM 이
+  **프로파일과 그 프로파일이 가리키는 foundation-model 양쪽**에 `bedrock:InvokeModel` 을 허용해야
+  합니다. 프로파일 패턴은 세대에 무관하게 매칭되지만 foundation-model 패턴은 세대가 박혀 있어,
+  이쪽을 같이 늘리지 않으면 **신모델이 조용히 AccessDenied** 가 됩니다. 신모델 추가 시
+  `deployment/terraform/environments/llm-gateway-{dev,prod}/variables.tf` 의
+  `bedrock_allowed_model_arns` 를 함께 수정하고 apply 하세요.
+  (Mantle/GPT 계열은 리소스가 모델 와일드카드라 모델 추가엔 IAM 변경이 불필요하고 **리전** 추가에만 필요합니다.)
+
+**SSE 스트리밍 타임아웃**
+
+| 값 | 기본 | dev | prod | 의미 |
+|----|------|-----|------|------|
+| `STREAM_IDLE_TIMEOUT` | 240 | 240 | 540 | 청크 간 무응답 상한. 초과 시 `event: error`(timeout_error) 프레임을 보내고 정상 종료하며 **그때까지의 토큰은 usage 로 기록**됩니다. |
+| `STREAM_DISCONNECT_DRAIN_TIMEOUT` | 30 | 30 | 30 | 클라이언트가 끊은 뒤에도 upstream 을 계속 소비하는 상한. 0 이면 조기 취소된 요청의 과금이 유실됩니다. |
+
+⚠️ `STREAM_IDLE_TIMEOUT` 은 **반드시 ALB `idle_timeout` 보다 작아야** 합니다(dev 300s / prod 600s).
+같거나 크면 ALB 가 먼저 끊어 클라이언트가 깔끔한 SSE 에러 프레임 대신 truncated stream 을 봅니다.
+반대쪽 하한은 upstream 첫 토큰 지연입니다 — Opus extended thinking 은 60s 를 넘깁니다.
+값은 `gatewayProxy.streaming.{idleTimeout,disconnectDrainTimeout}` 로 조정합니다.
 
 ---
 
@@ -169,11 +206,11 @@ AWSome AI Gateway는 **re-origination(요청 재구성 발신)** 방식입니다
 
 배포 단계별 상세 절차: [`deployment/docs/eks-fargate/`](deployment/docs/eks-fargate/) — 01 사전조건 ~ 07 Cognito 온보딩 + `troubleshooting.md`. 시크릿 계약: [`deployment/docs/secrets-contract.md`](deployment/docs/secrets-contract.md).
 
-> **현재 deliverable 의 배포 환경**: AWS 계정 `859741818597` (ap-northeast-2)
+> **현재 deliverable 의 배포 환경**: AWS 계정 `123456789012` (ap-northeast-2)
 > 에 dev / prod 두 EKS Fargate 환경(둘 다 EKS 1.30) 운영. 구체 endpoint/Cognito
 > pool/ALB DNS 는 각 가이드의 **부록** 참조 — user-guide §B, admin-guide §D,
-> deployer-guide §E. claude-code(374)·cowork(905)는 cross-account, codex(859)는
-> in-account 로, 게이트웨이는 859 에서 각 백엔드로 라우팅합니다.
+> deployer-guide §E. claude-code(333)·cowork(222)는 cross-account, codex(123)는
+> in-account 로, 게이트웨이는 123 에서 각 백엔드로 라우팅합니다.
 >
 > **다른 계정에 적용 시**: `terraform.tfvars` (gitignored), `backend.tf` 의
 > `-backend-config`, `values-eks-fargate-{dev,prod}.yaml` 안의 `# CHANGE_ME`
@@ -201,7 +238,7 @@ Helm이 배포하는 워크로드는 6 Deployment + 1 Job이고, admin-chat-agen
 | **scheduler** | ROI 집계(aggregate_usage) + VK 만료 정리(expire_virtual_keys). **admin-api 이미지 재사용**(command=`python -m app.scheduler.main`), `replicaCount:1` 고정 singleton (Deployment) |
 | **notification-worker** | 예산 임계값 알림 발송 (기본 배포는 provider=mock, 미발송) (Deployment) |
 | **cost-recorder-worker** | Redis Stream → Aurora 비용 기록 + 일일 집계 (Deployment) |
-| **migration** | Alembic DB 마이그레이션. helm pre-install/pre-upgrade **Job**(head=`0022`) |
+| **migration** | Alembic DB 마이그레이션. helm pre-install/pre-upgrade **Job**(head=`0028`) |
 | **admin-chat-agent** | BI 어시스턴트. **EKS 미배포** — Bedrock AgentCore Runtime(arm64 microVM)에 호스팅되고, admin-api가 SigV4로 InvokeAgentRuntime 호출. 차트에는 `AGENTCORE_RUNTIME_ARN` env로만 연결 |
 
 ---
@@ -216,17 +253,17 @@ Helm이 배포하는 워크로드는 6 Deployment + 1 Job이고, admin-chat-agen
 | `admin-chat-agent/` | BI 어시스턴트 — Strands agents-as-tools + AgentCore Runtime, `lambdas/`(query_db/get_schema), `config/`(schema_whitelist, golden_examples), `tests/`(골든 테스트) |
 | `cost-recorder-worker/` | Redis Stream → Aurora 비용 기록 워커 |
 | `notification-worker/` | 예산 임계값 알림 워커 |
-| `db/` | Alembic 마이그레이션 소스 (`alembic.ini`·`env.py`·`versions/`·`init/`; head=`0022`) |
+| `db/` | Alembic 마이그레이션 소스 (`alembic.ini`·`env.py`·`versions/`·`init/`; head=`0028`) |
 | `gateway-cli/` | 사용자 CLI (`gateway-cli`, `api-key-helper`, `statusline` 콘솔 스크립트) |
 | `gateway-clients/` | claude-code/codex 격리 컨테이너 유틸(`claude-box`/`codex-box` + `gw.sh`). Cowork(GUI)은 제외 |
 | `scripts/` | 온보딩 스크립트(`onboard-macos-linux.sh`, `onboard-windows.ps1`) + IAM 스크립트 |
-| `deployment/charts/llm-gateway/` | Helm chart (active). values: `values.yaml`(base) + eks-fargate `{dev,prod,prod-loadtest}` + onprem `{dev,prod}` (총 6개) |
+| `deployment/charts/llm-gateway/` | Helm chart (active). values: `values.yaml`(base) + eks-fargate `{dev,prod,prod-loadtest}` (총 4개). on-prem 배포물은 `83b4ffe` 에서 제거됨 — EKS 전용 |
 | `deployment/terraform/environments/llm-gateway-{dev,prod}/` | Terraform workspace (active) |
 | `deployment/terraform/modules/` | VPC, EKS Fargate, Aurora, ElastiCache, Cognito, IRSA, ALB, ESO 모듈 |
 | `deployment/docs/` | 단계별 배포 절차(`eks-fargate/`) + 시크릿 계약(`secrets-contract.md`) |
 | `docs/` | 스펙(`admin-chat-agent-spec.md`)·아키텍처 drawio·클라이언트 연동 가이드(`guides/connect.md`, `guides/COWORK-GATEWAY-SETUP.md`) |
 | `guides/` | 최종 가이드 (배포자/어드민/사용자/QUICKSTART) — 부록에 현재 운영 환경 값 |
-| `_archive/` | 옛 자산(옛 계정 `374445650473` charts·terraform 포함) + 마이그레이션 로그. 빌드/배포 미참조 — history 보존용 |
+| `_archive/` | 옛 자산(옛 계정 `333344445555` charts·terraform 포함) + 마이그레이션 로그. 빌드/배포 미참조 — history 보존용 |
 
 ---
 

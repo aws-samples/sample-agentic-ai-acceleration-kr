@@ -13,7 +13,7 @@ from app.services.mantle_credentials import MantleCredentialBroker
 def _profile():
     return RoutingProfileSchema(
         client="cowork", backend="mantle",
-        account_role_arn="arn:aws:iam::234567890123:role/llm-gateway-cowork-bedrock",
+        account_role_arn="arn:aws:iam::123456789012:role/llm-gateway-cowork-bedrock",
         region="ap-northeast-1", default_model="cowork-opus", external_id="cowork-bedrock",
     )
 
@@ -171,7 +171,7 @@ async def test_cross_account_branch_still_assumes_role(monkeypatch):
     broker = mc.MantleCredentialBroker(sts_client=sts, now=lambda: 1000.0)
     monkeypatch.setattr(mc, "BedrockTokenGenerator", lambda: type("G", (), {"get_token": lambda self, c, r: "TOK"})())
     profile = RoutingProfileSchema(client="cowork", backend="mantle",
-                                   account_role_arn="arn:aws:iam::234567890123:role/llm-gateway-cowork-bedrock",
+                                   account_role_arn="arn:aws:iam::123456789012:role/llm-gateway-cowork-bedrock",
                                    region="ap-northeast-1", default_model="cowork-opus",
                                    external_id="cowork-bedrock", enabled=True)
     token = await broker.bearer_token(profile)

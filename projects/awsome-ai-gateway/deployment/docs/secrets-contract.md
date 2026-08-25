@@ -67,7 +67,8 @@
   애플리케이션 Pod
 ```
 
-**활성화**: `values-onprem-*.yaml` 에서 `externalSecrets.enabled: false` (기본값).
+**활성화**: `externalSecrets.enabled: false` (base `values.yaml` 기본값). on-prem values 는
+`83b4ffe` 에서 제거되었으므로, 이 경로를 쓰려면 EKS values 에서 해당 키를 직접 false 로 둔다.
 
 **장점**:
 - 외부 의존성 없음 — 사내 K8s만 있으면 동작

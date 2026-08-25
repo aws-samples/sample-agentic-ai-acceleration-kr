@@ -91,7 +91,7 @@ ON CONFLICT (id) DO NOTHING;
 --    동일해야 한다(fresh-init DB vs migrated DB 수렴). cowork-opus(BEDROCK_MANTLE)는 여기 없고
 --    migration 0009 가 생성 + 0012 가 라벨 백필한다. 라벨 수정 시 두 곳 모두 갱신할 것.
 -- ⚠️ BEDROCK_MANTLE alias 는 init SQL 에 없고 라이브-시드 전용(cowork-opus 와 동일 기조):
---    'claude-opus-4-8-mantle'(Claude Code · Opus 4.8 (Mantle), 374 in-account, Tokyo) +
+--    'claude-opus-4-8-mantle'(Claude Code · Opus 4.8 (Mantle), 333 in-account, Tokyo) +
 --    model.routing_profiles 의 'claude-code'(backend=mantle, account_role_arn=NULL=in-account,
 --    region=ap-northeast-1, default_model=NULL) 도 라이브에서 직접 INSERT (2026-06-24).
 INSERT INTO model.model_aliases (alias, provider, provider_model_id, endpoint_url, api_format, status, description, display_name, created_by) VALUES
@@ -122,6 +122,12 @@ INSERT INTO model.model_aliases (alias, provider, provider_model_id, endpoint_ur
     ('global.anthropic.claude-opus-4-8', 'BEDROCK', 'global.anthropic.claude-opus-4-8', NULL, 'BEDROCK_NATIVE', 'ACTIVE',
      'Claude Opus 4.8 1M context (Global, full ID)',
      'Claude Code · Opus 4.8',
+     '00000000-0000-4000-a000-000000000010'),
+    -- OPENMODEL 레퍼런스 (자가호스팅 OpenAI-compatible). endpoint_url 은 배포자 설정이라 NULL.
+    -- 가격은 migration 0029 가 넣는다(pricing 은 migration-owned — 0003 이 init pricing 을 DROP+recreate).
+    ('llama-3-70b', 'OPENMODEL', 'meta-llama/Llama-3.1-70B-Instruct', NULL, 'OPENAI_COMPATIBLE', 'ACTIVE',
+     'Meta Llama 3.1 70B Instruct — OpenAI-compatible OpenModel 레퍼런스 (endpoint 배포자 설정)',
+     'Llama 3 70B (OpenModel)',
      '00000000-0000-4000-a000-000000000010')
 ON CONFLICT (alias) DO NOTHING;
 

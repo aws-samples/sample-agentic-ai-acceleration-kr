@@ -1,8 +1,8 @@
 # LLM Gateway — Architecture & Data Flows
 
 > **메인 배포 계정: `123456789012` (ap-northeast-2, dev/prod EKS Fargate).** 게이트웨이 전 서비스 + Aurora + AgentCore Runtime + AgentCore 웹서치 Gateway + ECR 가 이 계정에 있고 `gateway-proxy` IRSA 도 이 계정에 속한다.
-> **3-client × 멀티계정 백엔드:** `claude-code` → **345678901234** cross-account Bedrock **NATIVE** (실패 시 859 in-account 투명 폴백), `codex` → **859 in-account** Mantle GPT-5.5 (us-east-2), `cowork` → **234567890123** cross-account Mantle Opus 4.8 (도쿄 ap-northeast-1).
-> Last updated: 2026-07-09 (3-client 라우팅 + claude-code→374 cross-account native 컷오버(0022) + 서버사이드 웹서치(0021) + resilience 반영).
+> **3-client × 멀티계정 백엔드:** `claude-code` → **333344445555** cross-account Bedrock **NATIVE** (실패 시 123 in-account 투명 폴백), `codex` → **123 in-account** Mantle GPT-5.5 (us-east-2), `cowork` → **222233334444** cross-account Mantle Opus 4.8 (도쿄 ap-northeast-1).
+> Last updated: 2026-07-09 (3-client 라우팅 + claude-code→333 cross-account native 컷오버(0022) + 서버사이드 웹서치(0021) + resilience 반영).
 
 이 문서는 **as-built** 시스템을 기술한다: 배포된 컴포넌트, 데이터 스토어, 인증 모델, 3-client × 멀티계정 데이터플로우(요청/비용·사용량/client 태그/cross-account/웹서치), 그리고 resilience/scale 특성. 기능별 근거는 `deepdive.md`, 부하 분석은 `devlog_websearch.md §부하 분석`, 사용자 온보딩은 `guides/QUICKSTART.md` 참조.
 
@@ -21,9 +21,9 @@ LLM Gateway 는 사내 코딩 에이전트 **3-client** — **Claude Code**, **C
 
 | client | 진입 경로 | 백엔드 종류 | 대상 계정/리전 | 방언 |
 |---|---|---|---|---|
-| **claude-code** | `/v1/messages` | Bedrock **native** (boto3 `invoke_model`) | 345678901234 / ap-northeast-2 (cross-account, 실패 시 859 폴백) | Anthropic Messages |
-| **codex** | `/v1/responses` | Bedrock **Mantle** (async httpx bearer, GPT-5.5) | 859 in-account / us-east-2 (오하이오) | OpenAI Responses |
-| **cowork** | `/v1/messages` | Bedrock **Mantle** (async httpx bearer, Opus 4.8) | 234567890123 / ap-northeast-1 (도쿄, cross-account) | Anthropic Messages |
+| **claude-code** | `/v1/messages` | Bedrock **native** (boto3 `invoke_model`) | 333344445555 / ap-northeast-2 (cross-account, 실패 시 123 폴백) | Anthropic Messages |
+| **codex** | `/v1/responses` | Bedrock **Mantle** (async httpx bearer, GPT-5.5) | 123 in-account / us-east-2 (오하이오) | OpenAI Responses |
+| **cowork** | `/v1/messages` | Bedrock **Mantle** (async httpx bearer, Opus 4.8) | 222233334444 / ap-northeast-1 (도쿄, cross-account) | Anthropic Messages |
 
 ```
                           ┌──────────────────── CONTROL PLANE ────────────────────┐
@@ -36,10 +36,10 @@ LLM Gateway 는 사내 코딩 에이전트 **3-client** — **Claude Code**, **C
   Codex (codex_cli)  ─VK─→│  OTel→ClientId→Auth→ClientAuthZ→Budget→Downgrade→     ││
   Cowork (desktop3p) ─VK─→│  RateLimit→HeaderInjector→StateInjection→router       ││
                           │   _select_backend(client) via routing_profiles        ││
-                          │     ├─ claude-code → Bedrock NATIVE 374 (STS assume,   ││
-                          │     │                실패 시 859 in-account 투명 폴백)  ││
-                          │     ├─ codex       → Mantle OpenAI Responses 859 (u-e-2)││
-                          │     └─ cowork      → Mantle Anthropic Msgs 905 (Tokyo) ││
+                          │     ├─ claude-code → Bedrock NATIVE 333 (STS assume,   ││
+                          │     │                실패 시 123 in-account 투명 폴백)  ││
+                          │     ├─ codex       → Mantle OpenAI Responses 123 (u-e-2)││
+                          │     └─ cowork      → Mantle Anthropic Msgs 222 (Tokyo) ││
                           │   (opt) 웹서치 루프: web_search 주입→인터셉트→AgentCore  ││
                           │   cost finalize ─XADD→ cost:stream (Valkey)            ││
                           └───────────────────────────────────────────────────┬──┘│
@@ -87,7 +87,7 @@ Helm 이 배포하는 워크로드는 **6 long-running Deployment + 1 migration 
 | `chat_agent` | `sessions`, `messages`, `schema_embeddings`(pgvector 1024-dim HNSW), `golden_examples` |
 
 **마이그레이션 체인:** head 는 **`0022`** 이고 `0001→0022` 가 끊김 없이 연결된다. 라우팅 관련 순서:
-`0008`(Mantle enums) → `0009`(cowork routing/cowork-opus) → `0016`(codex enums) → `0017`(codex routing) → `0018`(client CHECK 확장 → `claude-code`/`cowork`/`codex`) → `0021`(web_search + claude-code invoke row 최초 생성, backend=invoke, default_model NULL) → `0022`(그 row 에 374 `account_role_arn`/`external_id`/`region` UPDATE).
+`0008`(Mantle enums) → `0009`(cowork routing/cowork-opus) → `0016`(codex enums) → `0017`(codex routing) → `0018`(client CHECK 확장 → `claude-code`/`cowork`/`codex`) → `0021`(web_search + claude-code invoke row 최초 생성, backend=invoke, default_model NULL) → `0022`(그 row 에 333 `account_role_arn`/`external_id`/`region` UPDATE).
 
 ### 3.2 Valkey/Redis — key namespaces
 
@@ -115,7 +115,7 @@ Helm 이 배포하는 워크로드는 **6 long-running Deployment + 1 migration 
   - `/v1/messages` · `/v1/responses` · `/v1/models` · `/v1/chat/completions` · `/v1/completions` · `/v1/usage/me` → **DUAL**(VK 또는 admin JWT 자동판별)
   - 그 외 `/v1/*` → **JWT**
   - gateway 는 VK 를 Redis(`key:vk:` 키)로 해석·검증만 하고, OIDC→VK 발급 자체는 admin-api 담당.
-- **AWS 인증:** 모든 워크로드가 **IRSA**. cross-account 백엔드(claude-code→374, cowork→905)는 **STS AssumeRole**(DurationSeconds=3600) + `ExternalId` 를 추가로 쓴다. long-lived 원격 계정 키는 저장하지 않는다.
+- **AWS 인증:** 모든 워크로드가 **IRSA**. cross-account 백엔드(claude-code→333, cowork→222)는 **STS AssumeRole**(DurationSeconds=3600) + `ExternalId` 를 추가로 쓴다. long-lived 원격 계정 키는 저장하지 않는다.
 - **Client 식별(`client`) 은 분석/라우팅용이며 인가 신호가 아니다.** UA/originator 헤더는 스푸핑 가능하므로 신뢰하지 않는다. 인가 축은 VK + `allowed_clients` allow-list 이며 `ClientAuthorizationMiddleware` 가 위반 시 403.
 
 **인증 방어 세부:**
@@ -144,10 +144,10 @@ POST /v1/messages  (Bearer VK)
   7. check_key_scope (allowed_models)              → 403 if not allowed
   8. enforce_rate_limits (RPM+TPM 예약, 3-scope USER→TEAM→GLOBAL)  → 429 if exceeded
   9. adapter 선택 + (opt) 웹서치 루프 + fallback loop:
-        BEDROCK native (in-account 859) → boto3 invoke(-with-response-stream)
-        BEDROCK native (claude-code→374) → BedrockAccountClientProvider 로 assume한 374 client
-                                            (실패 시 859 in-account 투명 폴백) ─ §6
-        BEDROCK_MANTLE (cowork→905)     → async httpx POST {endpoint}/v1/messages bearer ─ §7
+        BEDROCK native (in-account 123) → boto3 invoke(-with-response-stream)
+        BEDROCK native (claude-code→333) → BedrockAccountClientProvider 로 assume한 333 client
+                                            (실패 시 123 in-account 투명 폴백) ─ §6
+        BEDROCK_MANTLE (cowork→222)     → async httpx POST {endpoint}/v1/messages bearer ─ §7
  10. cost_recorder.finalize(client=…) → inline budget/rate settle → XADD cost:stream ─ §12
 ```
 
@@ -161,35 +161,35 @@ POST /v1/messages  (Bearer VK)
 
 `MantleCredentialBroker` / `mantle_http`(httpx.AsyncClient)는 cowork·codex 가 공유한다.
 
-**Region rewrite(`_rewrite_model_id_for_region`):** cross-region inference profile prefix(`us.`/`eu.`/`apac.`)를 타깃 region 에 맞게 재작성. `_REGION_PREFIX_MAP`: us-east-1/us-west-2→us, eu-*→eu, ap-northeast-1/ap-northeast-2/ap-southeast-*→apac. `global.` prefix 는 pass-through. **Mantle 경로는 rewrite 하지 않는다**(provider_model_id 그대로). region 소스는 cross-account(claude-code→374)일 때만 `profile.region`(ap-northeast-2)을 명시 전달하고, in-account 는 pod `AWS_REGION` env(기본 ap-northeast-2) 사용.
+**Region rewrite(`_rewrite_model_id_for_region`):** cross-region inference profile prefix(`us.`/`eu.`/`apac.`)를 타깃 region 에 맞게 재작성. `_REGION_PREFIX_MAP`: us-east-1/us-west-2→us, eu-*→eu, ap-northeast-1/ap-northeast-2/ap-southeast-*→apac. `global.` prefix 는 pass-through. **Mantle 경로는 rewrite 하지 않는다**(provider_model_id 그대로). region 소스는 cross-account(claude-code→333)일 때만 `profile.region`(ap-northeast-2)을 명시 전달하고, in-account 는 pod `AWS_REGION` env(기본 ap-northeast-2) 사용.
 
 ---
 
-## 6. claude-code → 374 cross-account Bedrock NATIVE
+## 6. claude-code → 333 cross-account Bedrock NATIVE
 
-claude-code inference 는 **345678901234 계정의 bedrock-runtime(boto3 `invoke_model`) native** 로 나간다. Mantle 이 아니다. Bedrock native 는 원래 cross-account 미지원(startup 에 in-account 859 클라이언트 고정)이라, 이 경로는 대상 계정 role 을 STS AssumeRole 하여 그 계정의 bedrock-runtime 클라이언트를 빌드·캐시한다.
+claude-code inference 는 **333344445555 계정의 bedrock-runtime(boto3 `invoke_model`) native** 로 나간다. Mantle 이 아니다. Bedrock native 는 원래 cross-account 미지원(startup 에 in-account 123 클라이언트 고정)이라, 이 경로는 대상 계정 role 을 STS AssumeRole 하여 그 계정의 bedrock-runtime 클라이언트를 빌드·캐시한다.
 
 ```
-client=claude-code → routing_profiles row (backend=invoke, account_role_arn=374…claude-code-bedrock,
+client=claude-code → routing_profiles row (backend=invoke, account_role_arn=333…claude-code-bedrock,
                      region=ap-northeast-2, external_id=claude-code-bedrock, default_model NULL)
   → _select_backend → BackendDecision(BEDROCK), profile carried
   → 라우터: _xacct = (backend=='invoke' AND account_role_arn) 이면 cross-account adapter 구성:
        adapter = BedrockAdapter(
                    bedrock_client=None,
                    client_resolver=lambda: BedrockAccountClientProvider.get_client(role, region, ext),
-                   fallback_client=<in-account 859 bedrock_adapter._client>)   ← 투명 폴백
+                   fallback_client=<in-account 123 bedrock_adapter._client>)   ← 투명 폴백
   → BedrockAccountClientProvider.get_client(role_arn, region, external_id):
        캐시 키 = (role_arn, region, external_id or '')     ← external_id 회전 시 stale 재사용 방지
-       cache miss/만료임박 → sts.assume_role(374 role, DurationSeconds=3600, ExternalId=claude-code-bedrock)
+       cache miss/만료임박 → sts.assume_role(333 role, DurationSeconds=3600, ExternalId=claude-code-bedrock)
                             → temp creds → boto3.client('bedrock-runtime', region, creds) 빌드
        creds 하드만료 −300s(skew) 전에 클라이언트 재빌드(static creds 는 botocore 자동 갱신 안 함)
-  → BedrockAdapter._get_client(): resolver 성공 → 374 client / resolver 예외 → 859 in-account fallback
+  → BedrockAdapter._get_client(): resolver 성공 → 333 client / resolver 예외 → 123 in-account fallback
   → invoke_model / invoke-with-response-stream, model id 는 profile.region(ap-ne-2)으로 rewrite
 ```
 
-**859 투명 폴백:** `BedrockAdapter._get_client` 는 `client_resolver`(374 assume+build)가 예외를 던지면 in-account 859 `fallback_client` 로 폴백한다 → **claude-code 는 절대 안 죽는다**(라이브 실증: 374 AccessDenied → 859 200). STS 클라이언트는 `mantle_assume_region`(기본 ap-northeast-2)에서 생성되며 creds 는 account-global 이라 재사용된다. cross-account 클라이언트 BotoConfig 는 in-account 와 동일(`max_pool_connections=50`, `read_timeout=stream_timeout(300s)`, `retries.total_max_attempts=bedrock_max_attempts`).
+**123 투명 폴백:** `BedrockAdapter._get_client` 는 `client_resolver`(333 assume+build)가 예외를 던지면 in-account 123 `fallback_client` 로 폴백한다 → **claude-code 는 절대 안 죽는다**(라이브 실증: 333 AccessDenied → 123 200). STS 클라이언트는 `mantle_assume_region`(기본 ap-northeast-2)에서 생성되며 creds 는 account-global 이라 재사용된다. cross-account 클라이언트 BotoConfig 는 in-account 와 동일(`max_pool_connections=50`, `read_timeout=stream_timeout(300s)`, `retries.total_max_attempts=bedrock_max_attempts`).
 
-**즉시 롤백은 무배포:** `0022 downgrade` 가 claude-code 의 `account_role_arn`/`external_id` 를 NULL 로 되돌리면(코드가 `account_role_arn` NULL 이면 in-account adapter 사용), 다음 요청부터 859 in-account 로 복귀한다. 적용 후 Redis `routing_profile:claude-code` 캐시 키(TTL 5분)를 플러시하면 즉시 반영된다.
+**즉시 롤백은 무배포:** `0022 downgrade` 가 claude-code 의 `account_role_arn`/`external_id` 를 NULL 로 되돌리면(코드가 `account_role_arn` NULL 이면 in-account adapter 사용), 다음 요청부터 123 in-account 로 복귀한다. 적용 후 Redis `routing_profile:claude-code` 캐시 키(TTL 5분)를 플러시하면 즉시 반영된다.
 
 ---
 
@@ -198,7 +198,7 @@ client=claude-code → routing_profiles row (backend=invoke, account_role_arn=37
 Mantle 백엔드는 boto3 가 아니라 **async httpx + SigV4 bearer** 다.
 
 ```
-cowork  → routing_profiles (backend=mantle, role_arn=905…cowork-bedrock, region=ap-northeast-1,
+cowork  → routing_profiles (backend=mantle, role_arn=222…cowork-bedrock, region=ap-northeast-1,
           default_model=cowork-opus, external_id=cowork-bedrock, provider=BEDROCK_MANTLE,
           api_format=ANTHROPIC_MESSAGES, endpoint=https://bedrock-mantle.ap-northeast-1.api.aws/anthropic)
 codex   → routing_profiles (backend=mantle, account_role_arn NULL, external_id NULL, region us-east-2,
@@ -206,7 +206,7 @@ codex   → routing_profiles (backend=mantle, account_role_arn NULL, external_id
           endpoint=https://bedrock-mantle.us-east-2.api.aws/openai)
 
 MantleCredentialBroker.bearer_token(profile):
-  cross-account(cowork): sts.assume_role(905 role, ExternalId=cowork-bedrock)  [859 gateway IRSA 신뢰]
+  cross-account(cowork): sts.assume_role(222 role, ExternalId=cowork-bedrock)  [123 gateway IRSA 신뢰]
                            → temp creds (캐시 ~1h, refresh −300s skew, keyed by role_arn)
   in-account(codex):    _in_account_creds — assume 없이 pod 자체 IRSA creds 직접 사용
   → BedrockTokenGenerator().get_token(creds, region)
@@ -218,7 +218,7 @@ adapter:
   두 adapter 모두 httpx.AsyncClient + resp.aiter_lines() → 완전 async 스트리밍
 ```
 
-**Zero key storage** — 게이트웨이는 원격 계정 long-lived 키를 보관하지 않는다. 메모리에 short-lived STS temp creds + bearer 만 둔다. 905 IAM role `llm-gateway-cowork-bedrock` 은 `bedrock-mantle:*`(Mantle 서비스 네임스페이스, `bedrock:*` 와 별개)를 grant 하고 859 gateway IRSA 를 `cowork-bedrock` ExternalId 로 신뢰한다.
+**Zero key storage** — 게이트웨이는 원격 계정 long-lived 키를 보관하지 않는다. 메모리에 short-lived STS temp creds + bearer 만 둔다. 222 IAM role `llm-gateway-cowork-bedrock` 은 `bedrock-mantle:*`(Mantle 서비스 네임스페이스, `bedrock:*` 와 별개)를 grant 하고 123 gateway IRSA 를 `cowork-bedrock` ExternalId 로 신뢰한다.
 
 ---
 
@@ -400,9 +400,9 @@ admin-ui(Next.js)는 server-only `adminAPI` 클라이언트(`src/lib/api-client.
 | # | Requirement | Status |
 |---|---|---|
 | 1 | Client identification (Claude Code / Cowork / Codex) | ✅ (4값: claude-code/cowork/codex/other) |
-| 2 | Bedrock account separation — **CC→374(native), Codex→859(in-account), Cowork→905(Mantle)** | ✅ (CC→374 컷오버 0022 완료) |
+| 2 | Bedrock account separation — **CC→333(native), Codex→123(in-account), Cowork→222(Mantle)** | ✅ (CC→333 컷오버 0022 완료) |
 | 3 | Call method — Cowork=Mantle Opus 4.8(Tokyo), Codex=Mantle GPT-5.5(Ohio, in-account) | ✅ (live) |
 | 4 | User-pool separation | ⏳ 진행 |
 | 5 | **Dashboard distinguishes client(client-share donut + filter)** | ✅ (admin-ui 구현 완료) |
 
-계정 매핑 요약: **123456789012** = 메인 배포(게이트웨이/Aurora/AgentCore/ECR), **345678901234** = claude-code 전용 cross-account Bedrock native(같은 계정에 도는 `ds-*` 는 별도 프로젝트), **234567890123** = cowork 전용 cross-account Mantle(도쿄). 세 계정은 중복 없이 분리된다.
+계정 매핑 요약: **123456789012** = 메인 배포(게이트웨이/Aurora/AgentCore/ECR), **333344445555** = claude-code 전용 cross-account Bedrock native, **222233334444** = cowork 전용 cross-account Mantle(도쿄). 세 계정은 중복 없이 분리된다.

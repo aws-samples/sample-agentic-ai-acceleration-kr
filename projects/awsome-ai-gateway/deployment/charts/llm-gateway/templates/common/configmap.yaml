@@ -72,7 +72,37 @@ data:
   # ----------------------------------------------------------------------------
   AWS_REGION: {{ .Values.aws.region | quote }}
   AWS_DEFAULT_REGION: {{ .Values.aws.region | quote }}
+  # ⚠️ **읽는 코드가 없다(dead config).** gateway-proxy / admin-api 전 소스트리를
+  # 전수 검색해도 BEDROCK_ALLOWED_MODELS / bedrock_allowed_models 소비자가 0건이다
+  # (2026-08-19 확인). 모델 허용은 **DB 주도**다 — services/router_service.py 가
+  # `model.model_aliases` 에서 alias 를 해석하고(Redis 300s 캐시), status='INACTIVE'
+  # 로만 차단한다. 팀/사용자 단위 제한은 model.team_allowed_models /
+  # user_allowed_models 다.
+  #
+  # 그래서 **여기에 모델을 추가해도 아무 일도 일어나지 않는다** — 에러도 없다.
+  # 신모델 개방은 마이그레이션(예: 0027 Claude 5)으로 alias 행을 넣는 것이지 이 목록이
+  # 아니다. 지우지 않고 남겨 두는 이유는 values 3곳이 이 키를 채우고 있어 제거하면
+  # 차트 렌더가 깨지기 때문이고, 오해를 막기 위해 이 주석을 남긴다.
   BEDROCK_ALLOWED_MODELS: {{ join "," .Values.aws.bedrockAllowedModels | quote }}
+
+  # ----------------------------------------------------------------------------
+  # SSE 스트리밍 타임아웃 (gateway-proxy)
+  # ----------------------------------------------------------------------------
+  # STREAM_IDLE_TIMEOUT: 청크 간 무응답 상한. 초과 시 `event: error`(timeout_error)
+  # 프레임을 보내고 정상 종료한다 — 그때까지의 토큰은 usage 로 기록된다(과금 보존).
+  #
+  # ⚠️ **반드시 ALB idle_timeout 보다 작아야 한다.** 크거나 같으면 ALB 가 먼저
+  # 커넥션을 끊어, 클라이언트는 깔끔한 SSE 에러 프레임 대신 truncated stream 을 본다
+  # (원인 파악이 훨씬 어렵다). ALB 값은 values-eks-fargate-{dev,prod}.yaml 의
+  # `load-balancer-attributes: idle_timeout.timeout_seconds` 다.
+  # 반대쪽 하한은 upstream 첫 토큰 지연 — Opus extended thinking 은 60s 를 넘긴다
+  # (기본값 60 이 정상 응답을 끊어버린 적이 있다).
+  #
+  # STREAM_DISCONNECT_DRAIN_TIMEOUT: 클라이언트가 끊은 뒤에도 upstream 을 계속
+  # 소비하는 상한. 이 시간 안에 도착한 토큰까지 usage 에 기록되므로, 0 으로 두면
+  # 조기 취소된 요청의 과금이 유실된다.
+  STREAM_IDLE_TIMEOUT: {{ .Values.gatewayProxy.streaming.idleTimeout | default 240 | quote }}
+  STREAM_DISCONNECT_DRAIN_TIMEOUT: {{ .Values.gatewayProxy.streaming.disconnectDrainTimeout | default 30 | quote }}
 
   # ----------------------------------------------------------------------------
   # 서비스 기본 설정

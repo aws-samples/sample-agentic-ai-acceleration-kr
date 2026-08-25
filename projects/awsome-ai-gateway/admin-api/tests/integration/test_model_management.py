@@ -23,6 +23,7 @@ def _make_model(alias: str = "claude-sonnet") -> ModelAlias:
     m.api_format = ApiFormat.BEDROCK_NATIVE
     m.status = ModelStatus.ACTIVE
     m.description = "Test model"
+    m.display_name = "Claude Sonnet"  # ModelResponse.display_name (str | None)
     m.created_at = datetime.now(timezone.utc)
     m.updated_at = datetime.now(timezone.utc)
     return m
@@ -33,10 +34,20 @@ def _make_pricing() -> ModelPricing:
     p.input_price_per_1k_tokens = Decimal("0.003")
     p.output_price_per_1k_tokens = Decimal("0.015")
     p.cache_creation_5m_price_per_1k_tokens = Decimal("0.00375")
+    p.cache_creation_1h_price_per_1k_tokens = Decimal("0.006")  # ModelPricingResponse field
     p.cache_read_price_per_1k_tokens = Decimal("0.0003")
     p.effective_from = datetime.now(timezone.utc)
     p.effective_until = None
     return p
+
+
+def _populate_model_dates(model):
+    """create_model builds a fresh ModelAlias whose created_at/updated_at come from
+    DB server_default on flush. The repo is mocked (no flush), so populate them here
+    to mirror the post-insert state ModelResponse requires (non-nullable datetimes)."""
+    model.created_at = datetime.now(timezone.utc)
+    model.updated_at = datetime.now(timezone.utc)
+    return model
 
 
 class TestModelCRUD:
@@ -45,7 +56,7 @@ class TestModelCRUD:
              patch("app.services.model_service.audit_logger") as mock_audit:
             repo = MockRepo.return_value
             repo.alias_exists_ci = AsyncMock(return_value=False)
-            repo.create_model = AsyncMock()
+            repo.create_model = AsyncMock(side_effect=_populate_model_dates)
             repo.create_pricing = AsyncMock()
             mock_audit.log = AsyncMock()
 
