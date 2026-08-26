@@ -38,6 +38,15 @@ database:
     notificationWorkerUser: "gateway"
     passwordSecretName: "llm-gateway-db"
     sslMode: "require"
+    # migration Job 의 master 비번을 RDS 관리형 시크릿에서 **직접** 가져온다.
+    # 수동 /llm-gateway/dev/db:master_password 를 복사해 두는 방식은 관리형 시크릿이
+    # 7일마다 자동 로테이션되므로(RotationEnabled=true, AutomaticallyAfterDays=7)
+    # 값 동기화가 끝없이 반복되는 트레드밀 — 실제로 prod 는 이 드리프트로 어긋나 있었다.
+    # 이름은 aws rds describe-db-clusters --query 'DBClusters[].MasterUserSecret.SecretArn'.
+    # ⚠️ external-secrets IRSA 정책에 secret:rds!cluster-* 읽기 권한이 필요
+    #    (terraform modules/irsa/main.tf 에 이미 선언됨 — 라이브 정책 v2 로 반영).
+    masterPasswordRemoteKey: "rds!cluster-<uuid>"
+    masterPasswordRemoteProperty: "password"
     poolSize: 5
     maxOverflow: 10
     # dev 도 enable_rds_proxy=true 기본값이라 Proxy 경유 → pinning 회피 위해 0.
@@ -182,10 +191,10 @@ gatewayProxy:
   replicaCount: 1
   # 이미지 태그 명시 — 비우면 Chart.appVersion(1.0.43-rebrand)로 리셋되어 다운그레이드됨.
   # helm --set 없이 helm upgrade 만 해도 이 태그가 유지되도록 각 서비스에 명시(정합 고정).
-  # 1.0.49-xacct: claude-code→374 cross-account Bedrock native 코드(BedrockAccountClientProvider
-  #   + adapter resolver/859 투명폴백).
+  # 1.0.49-xacct: claude-code→333 cross-account Bedrock native 코드(BedrockAccountClientProvider
+  #   + adapter resolver/123 투명폴백).
   # 1.0.50-xacct-review: 어드버서리 리뷰 픽스 — 캐시키에 external_id 포함(#1, stale 재사용 방지),
-  #   count_tokens 도 cross-account(#4, invoke=374/count=859 스플릿 제거), _region_for_rewrite
+  #   count_tokens 도 cross-account(#4, invoke=333/count=123 스플릿 제거), _region_for_rewrite
   #   명시 초기화(#6, locals() 리플렉션 제거). 무회귀(269 유닛 통과).
   # 1.0.51-resilience: 6축 견고성 갭 4건 — readiness 전용 /health/ready(DB_DEGRADED/풀 hard_cap
   #   소진 시 503), pool_timeout=10·pool_recycle=3600, bedrock retries 배선(기본1), event_detector
@@ -193,7 +202,15 @@ gatewayProxy:
   image:
     # 1.0.52-workers: Dockerfile CMD 를 shell-form ${WORKERS:-4} 로 수정 → chart 의 WORKERS
     #   env 가 살아남(이전엔 --workers 4 하드코딩이라 죽은 설정). 0.5 vCPU 워커 기아 해소.
-    tag: "1.0.52-workers"
+    # 1.0.53-streamfix: stream_idle_timeout / stream_disconnect_drain_timeout 이 config 에만
+    #   있고 streaming.py 에 배선되지 않아 죽은 설정이던 것을 연결 + 타임아웃·예외 경로에서
+    #   usage/billing 이 유실되던 것을 usage_fired 멱등 가드로 수정(A-1). 330 유닛 통과.
+    # 1.0.54-phase2gw: 1.0.53 이후 레포 HEAD 에 쌓여 있던 gateway-proxy 미배포분 6파일을
+    #   반영 — thinking_normalizer / tool_filter 신규 2, mantle_adapter ·
+    #   mantle_openai_adapter · web_search_loop 수정 3, agentcore_mcp_client 의 MCP
+    #   clientInfo de-brand 1. 이미지 내부 소스가 HEAD 와 md5 완전일치함을 검증,
+    #   unit 359 통과(tests/unit).
+    tag: "1.0.54-phase2gw"
   serviceAccount:
     annotations:
       # CHANGE_ME (terraform output): IRSA role ARN. terraform output -raw gateway_proxy_role_arn
@@ -208,10 +225,16 @@ gatewayProxy:
     # set here, agentcore_mcp_client is None → the router branch is skipped (zero-regression).
     # AGENTCORE_REGION differs from aws.region (ap-northeast-2) on purpose — WebSearch is
     # us-east-1-only; SigV4 signs to us-east-1 while the pod stays in Seoul.
-    AGENTCORE_GATEWAY_URL: "https://<AGENTCORE_GATEWAY_ID>.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp"
+    AGENTCORE_GATEWAY_URL: ""   # CHANGE_ME: https://<gateway-name>-<id>.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp (see deployment/scripts/provision_agentcore_websearch.py). Empty = web search disabled.
     AGENTCORE_REGION: "us-east-1"
     AGENTCORE_TARGET_ID: "web-search-tool"
     WEB_SEARCH_ENABLED: "true"   # global kill-switch; per-client gating via routing_profiles.web_search_enabled
+  # SSE 스트리밍 타임아웃. dev ALB idle_timeout=300s(:118) 보다 60s 아래로 둔다 —
+  # 같거나 크면 ALB 가 먼저 끊어 클라이언트가 truncated stream 을 본다.
+  # ALB 값을 바꾸면 이 값도 함께 조정할 것.
+  streaming:
+    idleTimeout: 240
+    disconnectDrainTimeout: 30
   resources:
     requests:
       cpu: "250m"  # Fargate 하한
@@ -229,7 +252,29 @@ gatewayProxy:
 adminApi:
   replicaCount: 1
   image:
-    tag: "1.0.48-websearch"   # codex + 웹서치 + 웹서치토글 라우트(routing.py) 정합본
+    # 1.0.65-kstfix: KST 기간 필터 non-sargable 제거(함수를 컬럼에서 떼고 경계값을 UTC 로
+    #   미리 계산 → idx_usage_logs_requested_at 사용, 86.7ms→7.9ms) + 생산성/Git 지표가
+    #   UTC 로 비닝되어 비용(KST)과 하루씩 어긋나던 것 통일(A-2/E-1). 회귀 대조: 신규 0.
+    # 1.0.66-kstdefault: 위 E-1 의 **잔존 4곳** 수정 — my/budget·my/usage·
+    #   analytics/models·budgets/team allocation 이 여전히 date.today()(=pod TZ UTC)로
+    #   기본 period 를 정해, 매월 1일 KST 00~09시 9시간 동안만 지난달 지표가 보였다.
+    #   기본 period 를 current_kst_period() 한 곳으로 모음(dashboard 포함 5개 라우터).
+    #   + period 형식 오류를 조용한 0건/500 이 아니라 **400** 으로(ValidationError).
+    #   회귀 대조: 신규 0 (24 실패는 baseline 과 동일한 기존 fixture 이슈).
+    # 1.0.67-roifix: ⚠️ 1.0.66 의 **스케줄러 회귀 수정** — 반드시 올릴 것.
+    #   1.0.66 은 roi_aggregator 의 kst_period_range_filter import 를 aggregate_usage()
+    #   **안**에 뒀는데 호출은 _aggregate_productivity() 에도 있어, 함수 로컬 바인딩이
+    #   형제 함수까지 미치지 않아 `NameError` 로 ROI 집계가 15분마다 전부 실패했다
+    #   (dev 31회/prod 도 동일 실측). API 는 정상이라 화면 증상이 없고 ROI 만 갱신 정지 —
+    #   기존 가드 테스트가 소스를 **문자열 grep** 해서 통과해 버린 것이 유출 원인이다.
+    #   → import 를 모듈 최상단으로, 가드를 "호출 지점에서 이름이 해석되나"(AST 스코프)로 교체.
+    #   함께: (a) period='26-08'/'2026-8' 이 자리수 미검증으로 통과해 **200 + 전부 0** 이던 것,
+    #   (b) '9999-12' 가 맨 ValueError 로 **500** 이던 것을 정규식+연범위로 400 통일(prod 실측).
+    #   (c) E-1 잔존 2곳 — scheduler/main.py(ROI 행을 실제로 **쓰는** cron)와 internal.py 가
+    #       UTC 월(`datetime.now(timezone.utc).strftime`)이라, 읽는 쪽만 KST 로 고친 상태에서는
+    #       매월 1일 KST 00~09시에 새 달 행이 생성되지 않아 지표가 0 으로 보였다.
+    #   전 항목 음성대조군으로 검증(수정 되돌리면 정확히 그 테스트만 실패). 회귀 대조: 신규 0.
+    tag: "1.0.67-roifix"
   serviceAccount:
     annotations:
       # CHANGE_ME (terraform output): IRSA role ARN. terraform output -raw admin_api_role_arn
@@ -246,7 +291,7 @@ adminApi:
   env:
     DEV_LOGIN_ENABLED: "true"  # dev 환경에서만 허용
     # CHANGE_ME (terraform output): Cognito User Pool ID. terraform output -raw cognito_user_pool_id
-    COGNITO_USER_POOL_ID: "ap-northeast-2_XXXXXXXXX"
+    COGNITO_USER_POOL_ID: ""   # e.g. ap-northeast-2_XXXXXXXXX
     COGNITO_REGION: "ap-northeast-2"
     COGNITO_SYNC_DEACTIVATE_MISSING: "true"
     # BI Insight / 퀵챗 = AgentCore Runtime(admin-chat-agent) 연결. 이 ARN 없으면
@@ -265,7 +310,7 @@ adminApi:
   oidc:
     enabled: true
     # CHANGE_ME (terraform output): cognito_issuer_url. 형식 https://cognito-idp.{region}.amazonaws.com/{pool_id}
-    issuerUrl: "https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_XXXXXXXXX"
+    issuerUrl: ""   # e.g. https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_XXXXXXXXX
     audience: ""               # Cognito access_token 은 aud 없음 → 비워둠
     providerName: "oidc:cognito"
     groupsClaim: "cognito:groups"
@@ -284,7 +329,10 @@ adminApi:
 adminUi:
   replicaCount: 1
   image:
-    tag: "1.0.97-brand"   # 브랜드명 'AWSome AI Gateway' 반영본(1.0.96-websearch UI 정합 유지)
+    # 1.0.99-modelform: ModelCreateSchema 에서 max_tokens/context_window 를 제거 — 폼에
+    #   입력란이 없고 백엔드·DB 에도 대응 필드가 없어 required 로 남으면 safeParse 가 항상
+    #   실패, 모델 등록/편집이 100% 막히던 것 수정(브랜드 1.0.97·modelfix 1.0.98 포함).
+    tag: "1.0.99-modelform"
   resources:
     requests:
       cpu: "250m"
@@ -301,7 +349,11 @@ adminUi:
 
 scheduler:
   image:
-    tag: "1.0.48-websearch"   # admin-api 이미지 공유 — 웹서치토글 포함 정합본으로 통일
+    # admin-api 이미지 공유 — adminApi.image.tag 와 **항상 같은 값**으로 유지한다.
+    # roi_aggregator 가 KST 비닝 수정(A-2/E-1)의 대상이라 어긋나면 스케줄러만 옛 로직으로 집계.
+    # ⚠️ 이 값이 특히 중요하다: 1.0.67-roifix 가 고친 NameError 는 **스케줄러에서만** 터진다
+    # (API 경로는 그 함수를 안 탄다). adminApi 만 올리고 여기를 두면 ROI 집계는 계속 실패한다.
+    tag: "1.0.67-roifix"
   resources:
     requests:
       cpu: "250m"  # Fargate 하한
@@ -309,6 +361,11 @@ scheduler:
 
 notificationWorker:
   replicaCount: 1
+  # 태그 명시. 이 컴포넌트는 이번 픽스 대상이 아니라 라이브와 같은 1.0.43-rebrand 를 고정한다.
+  # (비워두면 Chart.appVersion 폴백인데, appVersion 이 바뀌는 순간 의도 없이 같이 움직인다 —
+  #  "값이 우연히 같아서 지금은 맞다"와 "명시해서 맞다"는 다르다.)
+  image:
+    tag: "1.0.43-rebrand"
   serviceAccount:
     annotations: {}
   resources:
@@ -327,12 +384,22 @@ notificationWorker:
 # DB migration hook — 태그 명시(비우면 Chart.appVersion=1.0.43-rebrand 로 리셋되는데,
 # 그 이미지는 revision 0021 을 모름 → `alembic upgrade head` 가 DB 현재 리비전(0021)을
 # 못 찾아 pre-upgrade 훅 실패).
-# 1.0.49-xacct: head=0022(claude-code→374 cross-account). upgrade head 가 0021→0022 적용
-#   = routing_profiles.claude-code account_role_arn 을 374 role 로 SET → 374 컷오버.
+# 1.0.49-xacct: head=0022(claude-code→333 cross-account). upgrade head 가 0021→0022 적용
+#   = routing_profiles.claude-code account_role_arn 을 333 role 로 SET → 333 컷오버.
 #   즉시 롤백: 0022 downgrade(account_role_arn NULL) 또는 SQL UPDATE + Redis 플러시.
+# 1.0.50-models: head=0028. 0022→0028 을 적용한다 —
+#   0023(예산 partial unique index) / 0024(활성 config 중복 제거 + 부분 유니크 인덱스) /
+#   0025(GPT-5.6 sol·luna·terra alias) / 0026(usage_logs.requested_at 인덱스) /
+#   0027(Claude 5 opus/sonnet alias) / 0028(codex default_model → codex-gpt-5.6-terra).
+#   ⚠️ 0024 의 중복 제거는 **비가역**(downgrade 는 인덱스만 drop). 적용 전 dev/prod 양쪽에서
+#   활성 중복을 셌고 둘 다 0 건이라 실제로 비활성화되는 행은 없음(2026-08-20 실측).
+#   ⚠️ 0028 적용 후 codex 라우팅 캐시를 비워야 반영: `DEL routing_profile:codex` (또는 TTL 300s 대기).
+#   ⚠️ 0027 의 alias 만으로는 호출이 안 된다 — IAM 의 foundation-model 패턴도 함께 필요
+#   (Claude 5 는 prod/dev 정책 v2 에 anthropic.claude-{opus,sonnet}-5* 추가 완료).
+#   또한 run_migration.sh 의 SCHEMAS 에 chat_agent 가 이 이미지부터 포함(A-3).
 migration:
   image:
-    tag: "1.0.49-xacct"
+    tag: "1.0.50-models"
 
 costRecorderWorker:
   replicaCount: 1

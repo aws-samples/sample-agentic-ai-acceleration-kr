@@ -42,7 +42,7 @@ def _rewrite_model_id_for_region(model_id: str, region: str | None = None) -> st
        → apac.anthropic.claude-sonnet-4-20250514-v1:0 (if region=ap-northeast-2)
 
     `global.` prefix models are passed through unchanged — they resolve from any region.
-    `region` explicit override(예: cross-account claude-code→374 의 profile.region) 우선;
+    `region` explicit override(예: cross-account claude-code→333 의 profile.region) 우선;
     없으면 pod 의 AWS_REGION env(in-account 기본).
     """
     import os

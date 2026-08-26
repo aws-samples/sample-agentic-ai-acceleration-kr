@@ -222,7 +222,7 @@ function UserPanel({ node }: { node: OrgTreeNode }) {
       if (!clientsLoaded) {
         toast({
           type: 'error',
-          message: '앱 접근 권한이 로드되지 않아 저장할 수 없습니다. 새로고침 후 다시 시도하세요.',
+          message: t('loadErrors.appAccess'),
           auto_dismiss_ms: 4000,
         });
         return;
@@ -244,25 +244,25 @@ function UserPanel({ node }: { node: OrgTreeNode }) {
       }));
 
       // 3) >= 0 검증.
-      for (const t of targets) {
-        const trimmed = t.value.trim();
+      for (const tgt of targets) {
+        const trimmed = tgt.value.trim();
         if (trimmed === '') continue;
         const n = Number(trimmed);
         if (!Number.isFinite(n) || n < 0) {
-          toast({ type: 'error', message: `유효하지 않은 예산 값입니다 (${t.client}). 0 이상 숫자를 입력하세요.`, auto_dismiss_ms: 4000 });
+          toast({ type: 'error', message: t('budgetInput.invalid', { client: tgt.client }), auto_dismiss_ms: 4000 });
           return;
         }
       }
 
       // 4) 각 앱: 값이 있으면 set, 비었고 기존 예산이 있었으면 clear.
       let firstError: string | null = null;
-      for (const t of targets) {
-        const trimmed = t.value.trim();
+      for (const tgt of targets) {
+        const trimmed = tgt.value.trim();
         if (trimmed !== '') {
-          const res = await setUserClientBudgetAction(node.id, t.client, { max_budget_usd: trimmed });
+          const res = await setUserClientBudgetAction(node.id, tgt.client, { max_budget_usd: trimmed });
           if (!res.success && firstError === null) firstError = res.error;
-        } else if (t.loaded.trim() !== '') {
-          const res = await clearUserClientBudgetAction(node.id, t.client);
+        } else if (tgt.loaded.trim() !== '') {
+          const res = await clearUserClientBudgetAction(node.id, tgt.client);
           if (!res.success && firstError === null) firstError = res.error;
         }
       }

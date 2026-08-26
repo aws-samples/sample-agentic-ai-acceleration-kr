@@ -52,7 +52,7 @@ async def test_load_db_path_maps_row_and_caches():
     row.backend = "mantle"
     row.region = "ap-northeast-1"
     row.default_model = "cowork-opus"
-    row.account_role_arn = "arn:aws:iam::234567890123:role/llm-gateway-cowork-bedrock"
+    row.account_role_arn = "arn:aws:iam::123456789012:role/llm-gateway-cowork-bedrock"
     row.external_id = "cowork-bedrock"
     row.enabled = True
     result = MagicMock()
@@ -68,7 +68,7 @@ async def test_load_db_path_maps_row_and_caches():
     assert profile.backend == "mantle"
     assert profile.region == "ap-northeast-1"
     assert profile.default_model == "cowork-opus"
-    assert profile.account_role_arn == "arn:aws:iam::234567890123:role/llm-gateway-cowork-bedrock"
+    assert profile.account_role_arn == "arn:aws:iam::123456789012:role/llm-gateway-cowork-bedrock"
     assert profile.external_id == "cowork-bedrock"
     assert profile.enabled is True
     # cache write-back happened with the routing_profile:<client> key

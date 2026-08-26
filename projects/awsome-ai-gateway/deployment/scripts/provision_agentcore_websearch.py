@@ -39,7 +39,7 @@ from botocore.awsrequest import AWSRequest
 from botocore.exceptions import ClientError, ParamValidationError
 
 REGION = os.environ.get("REGION", "us-east-1")  # WebSearch connector is us-east-1 only
-GW_NAME = os.environ.get("GW_NAME", "llm-gateway-websearch")
+GW_NAME = os.environ.get("GW_NAME", "awsome-ai-gw-websearch")
 ROLE_NAME = os.environ.get("ROLE_NAME", "llm-gateway-dev-agentcore-websearch-gw")
 TARGET_NAME = os.environ.get("TARGET_NAME", "web-search-tool")
 CONNECTOR_ID = "web-search"
@@ -113,7 +113,7 @@ def ensure_gateway(role_arn: str, dry: bool):
         return "<dry-gateway-id>", "<dry-gateway-url>"
     r = _control().create_gateway(
         name=GW_NAME, roleArn=role_arn, protocolType="MCP", authorizerType="AWS_IAM",
-        description="Managed WebSearch for llm-gateway (Architecture C, SigV4 inbound)",
+        description="Managed WebSearch for awsome-ai-gateway (Architecture C, SigV4 inbound)",
     )
     log(f"Gateway created: {r['gatewayId']}")
     return r["gatewayId"], r["gatewayUrl"]

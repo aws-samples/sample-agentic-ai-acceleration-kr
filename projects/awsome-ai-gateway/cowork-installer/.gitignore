@@ -1,0 +1,5 @@
+# Reference/verification test drivers — not build inputs, not shipped in the
+# installer, and they carry environment-specific example endpoints. Kept in the
+# working tree for on-box QA but deliberately untracked.
+cowork-test.ps1
+cowork-test.sh

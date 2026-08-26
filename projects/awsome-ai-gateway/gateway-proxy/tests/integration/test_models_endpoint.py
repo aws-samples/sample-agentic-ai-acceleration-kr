@@ -39,9 +39,10 @@ def test_list_models_returns_seeded_aliases(virtual_key):
     body = resp.json()
     assert body["object"] == "list"
     aliases = {m["id"] for m in body["data"]}
+    # 실제 시드(db/init/03_seed_data.sql)의 정식 alias 이름.
     assert "claude-sonnet-4-6" in aliases
-    assert "claude-opus-4-6" in aliases
-    assert "claude-haiku-4-5" in aliases
+    assert "global.anthropic.claude-opus-4-6-v1" in aliases
+    assert "claude-haiku-4-5-20251001" in aliases
 
 
 @pytest.mark.integration

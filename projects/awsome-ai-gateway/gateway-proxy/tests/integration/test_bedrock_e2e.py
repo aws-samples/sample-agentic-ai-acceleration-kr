@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -35,7 +36,16 @@ from app.middleware.rate_limit import RateLimitMiddleware
 from app.providers.bedrock_adapter import BedrockAdapter
 from app.providers.registry import ProviderRegistry
 from app.routers import bedrock
-from app.schemas.domain import ProviderType
+from app.schemas.domain import (
+    ApiFormat,
+    AuthContext,
+    AuthType,
+    ModelConfigSchema,
+    ModelPricingSchema,
+    ModelStatus,
+    ProviderType,
+    Role,
+)
 from app.security.event_detector import SecurityEventDetector
 from app.services.cost_recorder import CostRecorder
 from app.services.lua_loader import LuaScriptLoader
@@ -50,6 +60,14 @@ TEAM_ID = "team-e2e-001"
 DEPT_ID = "dept-e2e-001"
 MODEL_ID = "us.anthropic.claude-sonnet-4-20250514-v1:0"
 
+# TestAliasRoutingRegression(@integration)이 사용하는 real Postgres DSN.
+# sibling test_router_service_db.py 와 동일한 env 규약(TEST_DB_URL) — CI/로컬에서
+# 시드된 DB(예: proofdb)를 가리키게 하고, 기본값은 표준 dev compose 를 보존.
+TEST_DB_URL = os.environ.get(
+    "TEST_DB_URL",
+    "postgresql+asyncpg://gateway:gateway_dev_password@localhost:5432/gateway",
+)
+
 # ---------------------------------------------------------------------------
 # Lua 스크립트 로드 (모듈 수준 — 전 테스트 공유)
 # ---------------------------------------------------------------------------
@@ -62,111 +80,77 @@ LuaScriptLoader.load_all(_SCRIPT_DIR)
 # ---------------------------------------------------------------------------
 
 
-def _rate_limit_ok(remaining=59, limit=60):
-    return json.dumps(
-        {
-            "allowed": True,
-            "remaining": remaining,
-            "limit": limit,
-            "retry_after": None,
-            "window_reset": 0,
-        }
-    ).encode()
+def _auth_context_json(allowed_models=None):
+    """Serialized AuthContext for the Redis-first VK cache-hit path (key:cache:vk:*)."""
+    return AuthContext(
+        user_id=USER_ID,
+        team_id=TEAM_ID,
+        dept_id=DEPT_ID,
+        roles=[Role.USER],
+        auth_type=AuthType.VIRTUAL_KEY,
+        key_id=None,
+        allowed_models=allowed_models,
+        allowed_clients=None,
+        sso_subject=None,
+    ).model_dump_json()
 
 
-def _budget_ok(used=100, limit=1000, policy="hard_block"):
-    return json.dumps(
-        {
-            "allowed": True,
-            "reason": None,
-            "used_usd": used,
-            "remaining_usd": limit - used,
-            "limit_usd": limit,
-            "policy": policy,
-            "throttle_active": False,
-            "throttle_rpm_pct": 50,
-            "threshold_pct": int(used / limit * 100),
-            "soft_warning": False,
-        }
-    ).encode()
+def _model_config_json(alias="claude-sonnet-4"):
+    """Serialized ModelConfigSchema for RouterService's model:{ref} cache hit."""
+    return ModelConfigSchema(
+        provider_model_id=MODEL_ID,
+        alias=alias,
+        provider=ProviderType.BEDROCK,
+        api_format=ApiFormat.BEDROCK_NATIVE,
+        endpoint="us-east-1",
+        pricing=ModelPricingSchema(input_per_1k=Decimal("0.003"), output_per_1k=Decimal("0.015")),
+        status=ModelStatus.ACTIVE,
+    ).model_dump_json()
 
 
-def _budget_no_config():
-    return json.dumps(
-        {
-            "allowed": False,
-            "reason": "no_budget_assigned",
-            "used_usd": 0,
-            "remaining_usd": 0,
-            "policy": "hard_block",
-            "throttle_active": False,
-            "throttle_rpm_pct": 50,
-            "threshold_pct": 0,
-            "soft_warning": False,
-        }
-    ).encode()
+def _budget_user_passthrough():
+    # USER config 미설정 → pass-through (Q 정책). config_present=false.
+    return {
+        "allowed": True, "reason": None, "used_usd": 0, "remaining_usd": 0,
+        "limit_usd": 0, "policy": "hard_block", "throttle_active": False,
+        "throttle_rpm_pct": 50, "threshold_pct": 0, "soft_warning": False,
+        "scope": "user", "config_present": False, "app_clients": [],
+    }
 
 
-def _budget_hard_block(used=1000, limit=1000):
-    return json.dumps(
-        {
-            "allowed": False,
-            "reason": "hard_block",
-            "used_usd": used,
-            "remaining_usd": 0,
-            "limit_usd": limit,
-            "policy": "hard_block",
-            "throttle_active": False,
-            "throttle_rpm_pct": 50,
-            "threshold_pct": 100,
-            "soft_warning": False,
-        }
-    ).encode()
+def _budget_team_ok(used=100, limit=1000):
+    return {
+        "allowed": True, "reason": None, "used_usd": used,
+        "remaining_usd": limit - used, "limit_usd": limit, "policy": "hard_block",
+        "throttle_active": False, "throttle_rpm_pct": 50,
+        "threshold_pct": int(used / limit * 100), "soft_warning": False,
+        "scope": "team", "config_present": True, "app_clients": [],
+    }
+
+
+def _budget_team_unset():
+    # TEAM config 미설정 → deny (C-1). config_present=false → team_budget_unset.
+    return {
+        "allowed": True, "reason": None, "used_usd": 0, "remaining_usd": 0,
+        "limit_usd": 0, "policy": "hard_block", "throttle_active": False,
+        "throttle_rpm_pct": 50, "threshold_pct": 0, "soft_warning": False,
+        "scope": "team", "config_present": False, "app_clients": [],
+    }
+
+
+def _budget_team_hard_block(limit=1000):
+    return {
+        "allowed": False, "reason": "hard_block", "used_usd": limit,
+        "remaining_usd": 0, "limit_usd": limit, "policy": "hard_block",
+        "throttle_active": False, "throttle_rpm_pct": 50,
+        "threshold_pct": 100, "soft_warning": False,
+        "scope": "team", "config_present": True, "app_clients": [],
+    }
 
 
 # ---------------------------------------------------------------------------
-# DB Mock 헬퍼
+# Bedrock 응답 Mock 헬퍼
 # ---------------------------------------------------------------------------
-
-
-def _make_vk_row(allowed_models=None):
-    vk = MagicMock()
-    vk.key_hash = VK_HASH
-    vk.user_id = USER_ID
-    vk.status = "active"
-    vk.expires_at = None
-    vk.allowed_models = allowed_models
-    vk.id = "vk-id-001"
-    return vk
-
-
-def _make_user_row():
-    user = MagicMock()
-    user.id = USER_ID
-    user.team_id = TEAM_ID
-    user.dept_id = DEPT_ID
-    user.roles = ["USER"]
-    user.is_active = True
-    return user
-
-
-def _make_model_config_row():
-    mc = MagicMock()
-    mc.provider_model_id = MODEL_ID
-    mc.alias = None
-    mc.provider = "BEDROCK"
-    mc.api_format = "BEDROCK_NATIVE"
-    mc.endpoint = "us-east-1"
-    mc.status = "ACTIVE"
-    return mc
-
-
-def _make_pricing_row():
-    mp = MagicMock()
-    mp.model_alias = MODEL_ID  # NEEDS_CONTEXT: alias value TBD in Task 3 RouterService rewrite
-    mp.input_per_1k = Decimal("0.003")
-    mp.output_per_1k = Decimal("0.015")
-    return mp
 
 
 def _fake_bedrock_invoke(input_tokens=10, output_tokens=20):
@@ -187,23 +171,19 @@ def _fake_bedrock_invoke(input_tokens=10, output_tokens=20):
 
 
 # ---------------------------------------------------------------------------
-# DB session mock — VK → User → ModelConfig → Pricing 순서
+# DB session mock — Redis-first 설계에서 DB는 (1) VK 캐시 히트 시 User.is_active
+# 재확인, (2) rate-limit config 조회(비어 있음=무제한) 두 경로에서만 접근된다.
+# 단일 generic result 로 둘 다 충족: scalar_one_or_none()->True(활성),
+# scalars().all()->[](한도 없음).
 # ---------------------------------------------------------------------------
 
 
-def _build_db_session(allowed_models=None):
+def _build_db_session():
     session = AsyncMock()
-
-    vk_res = MagicMock()
-    vk_res.scalar_one_or_none.return_value = _make_vk_row(allowed_models)
-    user_res = MagicMock()
-    user_res.scalar_one_or_none.return_value = _make_user_row()
-    model_res = MagicMock()
-    model_res.scalar_one_or_none.return_value = _make_model_config_row()
-    pricing_res = MagicMock()
-    pricing_res.scalar_one_or_none.return_value = _make_pricing_row()
-
-    session.execute = AsyncMock(side_effect=[vk_res, user_res, model_res, pricing_res])
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = True
+    result.scalars.return_value.all.return_value = []
+    session.execute = AsyncMock(return_value=result)
     return session
 
 
@@ -216,20 +196,48 @@ def _build_db_session_vk_not_found():
 
 
 # ---------------------------------------------------------------------------
-# Redis mock — eval 호출 순서: rate_limit_check → budget_check
+# Redis mock — key-aware / scope-aware (Redis-first 설계).
+#   • redis.get(key:cache:vk:*)  → AuthContext JSON (VK 캐시 히트)
+#   • redis.get(model:*)         → ModelConfig JSON (Router 캐시 히트)
+#   • redis.get(rl:config:*)     → None → DB 조회 → 빈 결과 → 무제한(eval 없음)
+#   • budget_check.lua eval      → scope 라벨(ARGV[0]=argv[numkeys])로 user/team 응답 분기
+# NOTE: _get/_eval 은 SYNC 함수 — AsyncMock 이 await 결과로 반환값을 그대로 돌려준다.
+#       (async def 로 만들면 코루틴이 이중 await 돼 깨진다.)
 # ---------------------------------------------------------------------------
 
 
-def _build_redis(rate_limit_resp=None, budget_resp=None):
+def _build_redis(allowed_models=None, budget_user=None, budget_team=None):
     redis = AsyncMock()
-    redis.get = AsyncMock(return_value=None)
+    auth_json = _auth_context_json(allowed_models)
+    model_json = _model_config_json()
+    cache_key = f"key:cache:vk:{VK_HASH}"
+    model_key = f"model:{MODEL_ID}"
+
+    def _get(key, *args, **kwargs):
+        if key == cache_key:
+            return auth_json  # VKAuthStrategy 캐시 히트
+        if key == model_key:
+            return model_json  # RouterService 모델 캐시 히트
+        return None  # rl:config:* miss → DB → 빈 결과 → 무제한
+
+    redis.get = AsyncMock(side_effect=_get)
+    redis.exists = AsyncMock(return_value=1)  # budget cold-cache hydrate/restore 분기 스킵
     redis.set = AsyncMock()
     redis.setex = AsyncMock()
+    redis.delete = AsyncMock()
     redis.ping = AsyncMock(return_value=True)
 
-    rl = rate_limit_resp or _rate_limit_ok()
-    bg = budget_resp or _budget_ok()
-    redis.eval = AsyncMock(side_effect=[rl, bg])
+    user_resp = budget_user if budget_user is not None else _budget_user_passthrough()
+    team_resp = budget_team if budget_team is not None else _budget_team_ok()
+
+    def _eval(script, numkeys, *argv):
+        # budget_check.lua: numkeys=2, ARGV[0] (=argv[numkeys]) 가 scope 라벨.
+        label = argv[numkeys] if len(argv) > numkeys else ""
+        if label == "team":
+            return json.dumps(team_resp).encode()
+        return json.dumps(user_resp).encode()
+
+    redis.eval = AsyncMock(side_effect=_eval)
     return redis
 
 
@@ -287,9 +295,6 @@ def _auth_header(token=VK_TOKEN):
 # ===========================================================================
 
 
-@pytest.mark.skip(
-    reason="KI-07: test mocks assume DB-first VK lookup but VKAuthStrategy is Redis-first; pre-existing, not FR-1.2 regression"
-)
 class TestBedrockInvokeSuccess:
     @pytest.mark.asyncio
     async def test_invoke_returns_200_with_bedrock_body(self):
@@ -320,9 +325,6 @@ class TestBedrockInvokeSuccess:
 # ===========================================================================
 
 
-@pytest.mark.skip(
-    reason="KI-07: test mocks assume DB-first VK lookup but VKAuthStrategy is Redis-first; pre-existing, not FR-1.2 regression"
-)
 class TestBedrockConverseSuccess:
     @pytest.mark.asyncio
     async def test_converse_returns_200(self):
@@ -395,18 +397,16 @@ class TestAuthBlocking:
 # ===========================================================================
 
 
-@pytest.mark.skip(
-    reason="KI-07: test mocks assume DB-first VK lookup but VKAuthStrategy is Redis-first; pre-existing, not FR-1.2 regression"
-)
 class TestBudgetBlocking:
     @pytest.mark.asyncio
     async def test_no_budget_config_returns_429(self):
-        """예산 미설정 → budget_check.lua → no_budget_assigned → 429."""
+        """예산 미설정 → TEAM config 부재 → team_budget_unset → 429.
+
+        현재 시맨틱: USER 예산 미설정은 pass-through(Q 정책), TEAM 예산 미설정은
+        차단(C-1 정책, budget_service.py:141-142).
+        """
         bedrock_client = MagicMock()
-        redis = _build_redis(
-            rate_limit_resp=_rate_limit_ok(),
-            budget_resp=_budget_no_config(),
-        )
+        redis = _build_redis(budget_team=_budget_team_unset())
         app = _build_app(redis, _build_db_session(), bedrock_client)
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
@@ -417,17 +417,14 @@ class TestBudgetBlocking:
             )
 
         assert resp.status_code == 429
-        assert resp.json()["error"]["code"] == "no_budget_assigned"
+        assert resp.json()["error"]["code"] == "team_budget_unset"
         bedrock_client.invoke_model.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_budget_exhausted_returns_429(self):
-        """예산 소진 (hard_block) → 429."""
+        """예산 소진 (TEAM hard_block) → 429."""
         bedrock_client = MagicMock()
-        redis = _build_redis(
-            rate_limit_resp=_rate_limit_ok(),
-            budget_resp=_budget_hard_block(),
-        )
+        redis = _build_redis(budget_team=_budget_team_hard_block())
         app = _build_app(redis, _build_db_session(), bedrock_client)
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
@@ -447,16 +444,13 @@ class TestBudgetBlocking:
 # ===========================================================================
 
 
-@pytest.mark.skip(
-    reason="KI-07: test mocks assume DB-first VK lookup but VKAuthStrategy is Redis-first; pre-existing, not FR-1.2 regression"
-)
 class TestKeyScopeBlocking:
     @pytest.mark.asyncio
     async def test_model_not_in_allowed_models_returns_403(self):
         """VK의 allowed_models에 요청 모델 없음 → Router에서 403."""
         bedrock_client = MagicMock()
-        db = _build_db_session(allowed_models=["other-model-only"])
-        app = _build_app(_build_redis(), db, bedrock_client)
+        db = _build_db_session()
+        app = _build_app(_build_redis(allowed_models=["other-model-only"]), db, bedrock_client)
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             resp = await c.post(
@@ -465,8 +459,11 @@ class TestKeyScopeBlocking:
                 content=b"{}",
             )
 
-        assert resp.status_code == 403
-        assert resp.json()["error"]["code"] == "model_not_allowed"
+        # 스코프 거부 = 400/invalid_request_error (commit 7907167 / DEVLOG §68.3②:
+        # Claude Code CLI /login 오탐 방지를 위해 403 아닌 400 으로 확정). scope-denial
+        # HTTP 코드가 제품 결정으로 다시 바뀌면 이 어서션도 함께 갱신할 것.
+        assert resp.status_code == 400
+        assert resp.json()["error"]["type"] == "invalid_request_error"
         bedrock_client.invoke_model.assert_not_called()
 
 
@@ -475,9 +472,6 @@ class TestKeyScopeBlocking:
 # ===========================================================================
 
 
-@pytest.mark.skip(
-    reason="KI-07: test mocks assume DB-first VK lookup but VKAuthStrategy is Redis-first; pre-existing, not FR-1.2 regression"
-)
 class TestBedrockProviderError:
     @pytest.mark.asyncio
     async def test_throttling_exception_returns_429(self):
@@ -539,9 +533,7 @@ class TestAliasRoutingRegression:
         from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
         from app.services.router_service import RouterService
 
-        engine = create_async_engine(
-            "postgresql+asyncpg://gateway:gateway_dev_password@localhost:5432/gateway"
-        )
+        engine = create_async_engine(TEST_DB_URL)
         SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
         rs = RouterService()
         async with SessionLocal() as session:
@@ -558,9 +550,7 @@ class TestAliasRoutingRegression:
         from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
         from app.services.router_service import RouterService
 
-        engine = create_async_engine(
-            "postgresql+asyncpg://gateway:gateway_dev_password@localhost:5432/gateway"
-        )
+        engine = create_async_engine(TEST_DB_URL)
         SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
         rs = RouterService()
         async with SessionLocal() as session:
@@ -579,9 +569,7 @@ class TestAliasRoutingRegression:
         from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
         from app.services.router_service import RouterService
 
-        engine = create_async_engine(
-            "postgresql+asyncpg://gateway:gateway_dev_password@localhost:5432/gateway"
-        )
+        engine = create_async_engine(TEST_DB_URL)
         SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
         rs = RouterService()
         async with SessionLocal() as session:

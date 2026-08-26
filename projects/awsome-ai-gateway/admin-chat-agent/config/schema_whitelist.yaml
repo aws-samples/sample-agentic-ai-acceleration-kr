@@ -25,7 +25,7 @@ allowed_tables:
       - name: email
         type: text
         description: "사용자 이메일. Cognito 의 email attribute 와 일치"
-        sample_values: ["admin@example.com", "developer@example.com"]
+        sample_values: ["kyutae-ai@amazon.com", "kyutae@amazon.com"]
       - name: display_name
         type: text
         description: "사용자 표시 이름 (리포트/UI 용)"

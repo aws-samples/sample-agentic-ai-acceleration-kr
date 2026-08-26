@@ -13,12 +13,12 @@ data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
 locals {
-  # gateway-proxy IRSA 가 in-account Bedrock Mantle(bedrock-mantle:*) 를 호출할 수 있는 리전.
-  # 배포별로 다르므로 var.mantle_regions 로 주입 (기본값 = Tokyo + Ohio, variables.tf 참조):
-  #   - ap-northeast-1 (Tokyo): Claude Code / Cowork in-account Mantle.
-  #   - us-east-2 (Ohio): Codex in-account Mantle GPT-5.5 (Responses API).
-  #   - 다른 리전 배포는 tfvars 에서 mantle_regions = ["us-east-1"] 처럼 지정.
-  mantle_regions = var.mantle_regions
+  # Bedrock Mantle 서비스 엔드포인트 리전들 (일반 Bedrock 서울과 구별되는 별도 네임스페이스).
+  #   - ap-northeast-1 (Tokyo): Claude Code in-account Mantle(claude-opus-4-8-mantle).
+  #   - us-east-2 (Ohio): Codex in-account Mantle GPT-5.5 (openai.gpt-5.5, Responses API).
+  #     Codex 호출 계정 == gateway-proxy IRSA 계정(123)이라 cross-account assume 불필요 —
+  #     이 in-account 권한만으로 충분(라이브 probe 로 us-east-2 GPT-5.5 200 OK 확인).
+  mantle_regions = ["ap-northeast-1", "us-east-2"]
 }
 
 # ------------------------------------------------------------------------------
@@ -52,7 +52,7 @@ data "aws_iam_policy_document" "bedrock" {
   # In-Account Mantle — Claude Code(Tokyo Opus 4.8) + Codex(Ohio GPT-5.5).
   # Mantle 은 일반 bedrock:InvokeModel 이 아닌 bedrock-mantle 네임스페이스를 사용한다.
   # 엔드포인트: bedrock-mantle.{region}.api.aws (local.mantle_regions — Tokyo + Ohio).
-  # 라이브 검증(probe)으로 확인된 실제 필요 action 집합. Codex 는 같은 계정(859)이라
+  # 라이브 검증(probe)으로 확인된 실제 필요 action 집합. Codex 는 같은 계정(123)이라
   # cross-account assume 없이 in-account 권한만으로 호출된다.
   # --------------------------------------------------------------------------
   statement {
@@ -94,10 +94,10 @@ data "aws_iam_policy_document" "bedrock" {
 
   # --------------------------------------------------------------------------
   # Cowork cross-account Mantle — cowork routes to Bedrock Mantle Opus 4.8 in a
-  # SEPARATE account (905, Tokyo), so gateway-proxy must AssumeRole into that
-  # account's cowork role. Unlike codex/claude-code (in-account 859, no assume),
-  # cowork is the ONLY cross-account client. The 905 role's trust policy allows
-  # this 859 IRSA principal + sts:ExternalId=cowork-bedrock (see cowork_role_arn).
+  # SEPARATE account (222, Tokyo), so gateway-proxy must AssumeRole into that
+  # account's cowork role. Unlike codex/claude-code (in-account 123, no assume),
+  # cowork is the ONLY cross-account client. The 222 role's trust policy allows
+  # this 123 IRSA principal + sts:ExternalId=cowork-bedrock (see cowork_role_arn).
   # routing_profiles.account_role_arn(=cowork) must match cowork_role_arn.
   # --------------------------------------------------------------------------
   dynamic "statement" {
@@ -112,19 +112,19 @@ data "aws_iam_policy_document" "bedrock" {
 
   # --------------------------------------------------------------------------
   # Claude Code cross-account Bedrock NATIVE — claude-code routes to Bedrock
-  # native (bedrock-runtime, boto3 invoke_model) in a SEPARATE account (374).
-  # Unlike cowork(Mantle), this is native; gateway-proxy assumes the 374 role and
+  # native (bedrock-runtime, boto3 invoke_model) in a SEPARATE account (333).
+  # Unlike cowork(Mantle), this is native; gateway-proxy assumes the 333 role and
   # builds a bedrock-runtime client from temp creds (BedrockAccountClientProvider).
-  # The 374 role trust allows this 859 IRSA principal + sts:ExternalId=claude-code-bedrock.
-  # routing_profiles.account_role_arn(=claude-code) must match claude_code_374_role_arn.
+  # The 333 role trust allows this 123 IRSA principal + sts:ExternalId=claude-code-bedrock.
+  # routing_profiles.account_role_arn(=claude-code) must match claude_code_333_role_arn.
   # --------------------------------------------------------------------------
   dynamic "statement" {
-    for_each = var.claude_code_374_role_arn != "" ? [1] : []
+    for_each = var.claude_code_333_role_arn != "" ? [1] : []
     content {
       sid       = "AssumeClaudeCode374Bedrock"
       effect    = "Allow"
       actions   = ["sts:AssumeRole"]
-      resources = [var.claude_code_374_role_arn]
+      resources = [var.claude_code_333_role_arn]
     }
   }
 }

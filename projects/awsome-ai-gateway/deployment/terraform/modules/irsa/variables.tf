@@ -29,15 +29,6 @@ variable "bedrock_allowed_model_arns" {
   # ]
 }
 
-variable "mantle_regions" {
-  description = "gateway-proxy IRSA 가 in-account Bedrock Mantle(bedrock-mantle:CreateInference/GetInference) 를 호출할 수 있는 리전 목록. 배포 리전에 맞춰 tfvars 에서 지정 (예: US 단일계정 = [\"us-east-1\"])."
-  type        = list(string)
-  # default 는 변수를 생략했을 때만 쓰인다. nullable 이 없으면 명시적 null 이 그대로
-  # 전파돼 main.tf 의 for 표현식이 "Iteration over null value" 로 죽는다.
-  nullable = false
-  default  = ["ap-northeast-1", "us-east-2"]
-}
-
 variable "secrets_manager_kms_key_arns" {
   description = "Secrets Manager가 쓰는 KMS 키 ARN (기본 AWS 관리 키 + 사용자 키)"
   type        = list(string)
@@ -52,7 +43,7 @@ variable "cognito_user_pool_arn" {
 
 variable "cowork_role_arn" {
   description = <<-EOT
-    Cowork cross-account Mantle role ARN (e.g. arn:aws:iam::234567890123:role/llm-gateway-cowork-bedrock).
+    Cowork cross-account Mantle role ARN (e.g. arn:aws:iam::222233334444:role/llm-gateway-cowork-bedrock).
     gateway-proxy AssumeRole into this to mint Mantle bearer for cowork -> Opus 4.8 (Tokyo).
     Must match model.routing_profiles.account_role_arn for client=cowork. The target role's trust
     policy must allow this account's gateway-proxy IRSA principal + sts:ExternalId=cowork-bedrock.
@@ -62,13 +53,13 @@ variable "cowork_role_arn" {
   default     = ""
 }
 
-variable "claude_code_374_role_arn" {
+variable "claude_code_333_role_arn" {
   description = <<-EOT
-    Claude Code cross-account Bedrock NATIVE role ARN (e.g. arn:aws:iam::345678901234:role/...).
-    gateway-proxy AssumeRole into this to build a 374 bedrock-runtime client (boto3 invoke_model).
+    Claude Code cross-account Bedrock NATIVE role ARN (e.g. arn:aws:iam::333344445555:role/...).
+    gateway-proxy AssumeRole into this to build a 333 bedrock-runtime client (boto3 invoke_model).
     Must match model.routing_profiles.account_role_arn for client=claude-code. The target role's
     trust must allow this account's gateway-proxy IRSA principal + sts:ExternalId=claude-code-bedrock.
-    Empty = claude-code stays in-account (859); no AssumeRole statement rendered.
+    Empty = claude-code stays in-account (123); no AssumeRole statement rendered.
   EOT
   type        = string
   default     = ""

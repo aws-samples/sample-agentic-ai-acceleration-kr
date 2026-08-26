@@ -13,7 +13,7 @@
 | 변수 | 예시 | 용도 |
 |---|---|---|
 | `OIDC_ISSUER_URL` | `https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_xxx` | IdP 주소 |
-| `OIDC_CLIENT_ID` | `<COGNITO_APP_CLIENT_ID>` | OIDC 클라이언트 |
+| `OIDC_CLIENT_ID` | `<OIDC_CLIENT_ID>` | OIDC 클라이언트 |
 | `ADMIN_API_URL` | `https://admin-api.llm-gateway.example.com` | VK 발급 |
 | `ANTHROPIC_BASE_URL` | `https://gateway.llm-gateway.example.com` | 추론 진입점(=게이트웨이) |
 
@@ -91,9 +91,16 @@ export GATEWAY_VK="<VK>"   # gateway-cli 로 발급 (아래 부록) → codex �
 >
 > ⚠️ **`model` 도 명시한다.** 생략하면 Codex 가 자체 기본값(0.147.0 은 `gpt-5.6-sol`)을 보내고, 이 문자열은
 > 게이트웨이 alias 와 일치하지 않는다. 현재 게이트웨이는 클라이언트가 보낸 `model` 을 무시하고 routing
-> profile 의 `default_model`(=`codex-gpt`, GPT-5.5) 로 라우팅하므로 **호출은 성공하지만**, Codex 내장
-> 메타데이터(context window 등)가 실제 모델과 어긋나 성능이 저하될 수 있다. `gpt-5.5` 를 주면 경고 없이
-> 정확한 메타데이터를 쓴다 (`gateway-clients/codex-box/entrypoint.sh:10-15` 의 실측 주석과 동일).
+> profile 의 `default_model` 로 라우팅하므로 **호출은 성공하지만**, Codex 내장 메타데이터(context window
+> 등)가 실제 모델과 어긋나 성능이 저하될 수 있다. 서버 기본값에 맞는 문자열을 주면 경고 없이 정확한
+> 메타데이터를 쓴다 (`gateway-clients/codex-box/entrypoint.sh:9-20` 의 실측 주석과 동일).
+>
+> | 환경 | 서버 `default_model` | `config.toml` 의 `model` |
+> |------|----------------------|--------------------------|
+> | migration `0028` 적용 | `codex-gpt-5.6-terra` (GPT-5.6) | `gpt-5.6-terra` |
+> | `0028` 미적용 | `codex-gpt` (GPT-5.5) | `gpt-5.5` |
+>
+> 어느 쪽이든 호출 자체는 성공하므로, 어긋나도 에러가 아니라 **조용한 성능 저하**로만 드러난다.
 
 - 게이트웨이는 Codex 가 보내는 `originator` 헤더로 `client=codex` 자동 식별.
   값은 실행 모드에 따라 다르다 — 대화형 `codex` 는 `codex_cli_rs`, `codex exec` 는 `codex_exec`.

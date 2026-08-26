@@ -34,8 +34,8 @@ class BudgetPolicy(str, enum.Enum):
 class ProviderEnum(str, enum.Enum):
     BEDROCK = "BEDROCK"
     OPENMODEL = "OPENMODEL"
-    BEDROCK_MANTLE = "BEDROCK_MANTLE"  # Cowork → 905 Bedrock Mantle (Tokyo Opus 4.8)
-    BEDROCK_MANTLE_OPENAI = "BEDROCK_MANTLE_OPENAI"  # Codex → 859 Bedrock Mantle GPT-5.5 (Ohio)
+    BEDROCK_MANTLE = "BEDROCK_MANTLE"  # Cowork → 222 Bedrock Mantle (Tokyo Opus 4.8)
+    BEDROCK_MANTLE_OPENAI = "BEDROCK_MANTLE_OPENAI"  # Codex → 123 Bedrock Mantle GPT-5.5 (Ohio)
 
 
 class ApiFormatEnum(str, enum.Enum):

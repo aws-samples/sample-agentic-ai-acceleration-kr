@@ -80,7 +80,21 @@ class Settings(BaseSettings):
     # Timeouts
     lua_timeout_ms: int = 1000
     stream_timeout: int = 300
-    stream_idle_timeout: int = 60
+    # SSE 청크 간 무응답 상한. 초과 시 `event: error`(timeout_error) 프레임을 보내고 종료.
+    #
+    # ⚠️ 두 개의 상한 사이에 끼워야 한다:
+    #   ① upstream(Bedrock/Mantle) 첫 토큰 지연 — extended thinking 은 60s 를 넘길 수 있다.
+    #      기본값 60 은 Opus extended thinking 요청을 정상 응답 중에 끊어버렸다.
+    #   ② ALB idle_timeout — dev 300s / prod 600s
+    #      (values-eks-fargate-{dev,prod}.yaml: load-balancer-attributes).
+    #      이 값이 ALB 보다 **크거나 같으면** ALB 가 먼저 커넥션을 끊어 클라이언트는
+    #      깔끔한 SSE 에러 대신 truncated stream 을 본다. 반드시 ALB 보다 작아야 한다.
+    #
+    # 기본 240 = dev ALB(300) 보다 60s 아래. 차트가 환경별로 override 한다
+    # (STREAM_IDLE_TIMEOUT). ALB 값을 바꿀 때 이 값도 함께 조정할 것.
+    stream_idle_timeout: int = 240
+    # 클라이언트 끊김 후 백그라운드로 upstream 을 계속 소비하는 상한.
+    # 이 시간 안에 받은 토큰까지 usage 로 기록된다(과금 정확성).
     stream_disconnect_drain_timeout: int = 30
 
     # Reliability
@@ -115,7 +129,7 @@ class Settings(BaseSettings):
     aws_profile: str | None = None
 
     # Mantle (Cowork cross-account) — region for the STS client used to assume the
-    # 905 Mantle role; and the httpx timeout for Mantle streaming calls.
+    # 222 Mantle role; and the httpx timeout for Mantle streaming calls.
     mantle_assume_region: str = "ap-northeast-2"
     mantle_http_timeout: float = 120.0
 

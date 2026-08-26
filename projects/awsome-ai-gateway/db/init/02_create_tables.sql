@@ -135,12 +135,24 @@ CREATE TABLE IF NOT EXISTS budget.budget_configs (
     CONSTRAINT ck_budget_configs_client CHECK (client IS NULL OR client IN ('claude-code','cowork','codex'))
 );
 
+-- ⚠️ 이 backfill 은 아래 COALESCE(client, ...) 인덱스보다 **반드시 먼저** 와야 한다.
+-- CREATE TABLE IF NOT EXISTS 는 테이블이 이미 있으면 통째로 no-op 이라 위의 인라인
+-- `client` 컬럼이 안 생긴다(라이브 DB 업그레이드). 그 상태에서 COALESCE 인덱스를 만들면
+-- "column client does not exist" 로 init SQL 이 죽고 → 마이그레이션 Job 실패 →
+-- helm pre-upgrade hook 실패로 배포 전체가 중단된다.
+-- 실제로 prod(revision 0004, client 컬럼 도입 전) 배포에서 이 순서 때문에 실패했다.
+-- fresh DB 에서는 컬럼이 이미 인라인으로 있어 no-op 이므로 양쪽 모두 안전(멱등).
+-- 기존 테이블의 인덱스 교체 + CHECK 제약 추가는 alembic 0011 이 담당한다(init SQL 이후 실행).
+ALTER TABLE budget.budget_configs ADD COLUMN IF NOT EXISTS client VARCHAR(32);
+
 CREATE INDEX IF NOT EXISTS idx_budget_configs_scope ON budget.budget_configs (scope, scope_id) WHERE is_active = true;
 
--- uq_budget_configs_active is created by migration 0024, NOT here. run_migration.sh applies
--- init/*.sql BEFORE `alembic upgrade head`, so creating the index here fails on any existing
--- deployment that already carries duplicate active rows — the exact corruption 0024 exists to
--- repair — and `set -e` then aborts the job before 0024's dedupe can run.
+-- 같은 키에 is_active=true 행이 2개 생기면 이후 모든 조회가 scalar_one_or_none() 에서
+-- MultipleResultsFound → 500 이 된다 (migration 0024 참조). COALESCE 는 필수 —
+-- client IS NULL 인 조직 전체 예산 행은 그냥 (scope, scope_id, client) 로는 보호되지 않는다.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_budget_configs_active
+    ON budget.budget_configs (scope, scope_id, COALESCE(client, ''))
+    WHERE is_active = true;
 
 CREATE TABLE IF NOT EXISTS budget.budget_usages (
     id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -155,15 +167,8 @@ CREATE TABLE IF NOT EXISTS budget.budget_usages (
     CONSTRAINT ck_budget_usages_client CHECK (client IS NULL OR client IN ('claude-code','cowork','codex'))
 );
 
--- Backfill `client` on pre-existing tables: CREATE TABLE IF NOT EXISTS is a no-op
--- when the table already exists (live DB upgrade), so the inline `client` column
--- above never lands and the COALESCE index below would fail with
--- "column client does not exist". ADD COLUMN IF NOT EXISTS makes this idempotent —
--- no-op on fresh DBs (column already inline), adds the column on existing DBs.
--- The index swap to the COALESCE form + check constraints on existing tables are
--- owned by alembic migration 0011 (runs after init SQL).
-ALTER TABLE budget.budget_configs ADD COLUMN IF NOT EXISTS client VARCHAR(32);
-ALTER TABLE budget.budget_usages  ADD COLUMN IF NOT EXISTS client VARCHAR(32);
+-- budget_usages 쪽 backfill 도 아래 COALESCE 인덱스보다 먼저 와야 한다(위 budget_configs 와 동일 이유).
+ALTER TABLE budget.budget_usages ADD COLUMN IF NOT EXISTS client VARCHAR(32);
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_budget_usages_unique ON budget.budget_usages (scope, scope_id, period, COALESCE(client,''));
 
@@ -233,8 +238,13 @@ CREATE TABLE IF NOT EXISTS model.rate_limit_configs (
 
 CREATE INDEX IF NOT EXISTS idx_rate_limit_configs_scope ON model.rate_limit_configs (scope, scope_id) WHERE is_active = true;
 
--- uq_rate_limit_configs_active is likewise created by migration 0024, not here. See the note
--- above budget.budget_usages for why the init SQL must not create it.
+-- migration 0024 와 동일. model_alias 는 키에 넣지 않는다 — upsert 가 alias 무관하게
+-- 해당 scope 의 활성 행 전부를 비활성화하므로, alias 를 넣으면 실제 중복 창이 열린다.
+-- COALESCE(scope_id, ...) 는 필수 — GLOBAL scope 는 scope_id IS NULL 이고,
+-- unique index 에서 NULL 은 서로 구별되므로 그냥 (scope, scope_id) 로는 보호되지 않는다.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_rate_limit_configs_active
+    ON model.rate_limit_configs (scope, COALESCE(scope_id, '00000000-0000-0000-0000-000000000000'::uuid))
+    WHERE is_active = true;
 
 -- ------------------------------------------------------------
 -- 팀별 모델 접근 제어

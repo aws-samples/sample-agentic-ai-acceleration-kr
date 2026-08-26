@@ -1,0 +1,144 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="780" viewBox="0 0 1600 780" font-family="'Segoe UI','Apple SD Gothic Neo',Helvetica,Arial,sans-serif">
+  <defs>
+    <linearGradient id="pbg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0a0c10"/><stop offset="1" stop-color="#0c0f14"/></linearGradient>
+    <linearGradient id="pcard" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1a212b"/><stop offset="1" stop-color="#151b23"/></linearGradient>
+    <filter id="psh" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#000" flood-opacity="0.5"/></filter>
+    <marker id="pa" markerWidth="10" markerHeight="10" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#dce4ec"/></marker>
+    <marker id="pg" markerWidth="9" markerHeight="9" refX="6.5" refY="4" orient="auto"><path d="M0,0 L7.5,4 L0,8 z" fill="#7e8c9a"/></marker>
+    <marker id="po" markerWidth="9" markerHeight="9" refX="6.5" refY="4" orient="auto"><path d="M0,0 L7.5,4 L0,8 z" fill="#ED7100"/></marker>
+    <marker id="pgr" markerWidth="9" markerHeight="9" refX="6.5" refY="4" orient="auto"><path d="M0,0 L7.5,4 L0,8 z" fill="#7AA116"/></marker>
+  </defs>
+  <rect width="1600" height="780" fill="url(#pbg)"/>
+
+  <text x="44" y="52" font-size="24" font-weight="700" fill="#eef3f8">데이터 플레인 · 단일 요청의 처리 파이프라인</text>
+  <text x="44" y="77" font-size="13" fill="#76828f">gateway-proxy(FastAPI). 미들웨어는 LIFO로 통과하고, 각 단계는 앞 단계가 request.state에 주입한 컨텍스트를 읽는다.</text>
+
+  <!-- request origin -->
+  <g filter="url(#psh)"><rect x="44" y="120" width="150" height="124" rx="13" fill="#11161c" stroke="#2c333d"/>
+    <circle cx="70" cy="150" r="9" fill="#1e2730"/><circle cx="70" cy="147" r="3.2" fill="#9fb0bf"/><path d="M63,159 a7,5.5 0 0 1 14,0" fill="#9fb0bf"/>
+    <text x="90" y="148" font-size="12.5" font-weight="700" fill="#e9eff5">Claude Code</text>
+    <text x="90" y="166" font-size="11" fill="#8493a1">/ Codex</text>
+    <rect x="60" y="186" width="120" height="42" rx="9" fill="#1a1014" stroke="#5a2730"/>
+    <text x="72" y="203" font-size="10.5" fill="#f2566b" font-weight="600">Authorization:</text>
+    <text x="72" y="219" font-size="10.5" fill="#f2566b">Bearer &lt;VK&gt;</text>
+  </g>
+
+  <!-- pipeline stages (numbered, color-dot, gradient card) -->
+  <g font-size="11.5">
+    <!-- 1 -->
+    <g filter="url(#psh)"><rect x="232" y="120" width="162" height="124" rx="13" fill="url(#pcard)" stroke="#3a2730"/>
+      <circle cx="252" cy="146" r="5" fill="#DD344C"/><text x="266" y="150" font-size="13" font-weight="700" fill="#ff8a9b">① 인증</text>
+      <text x="250" y="174" fill="#cdd6df" font-size="10.5">VK → SHA256</text>
+      <text x="250" y="192" fill="#cdd6df" font-size="10.5">Redis 캐시(300s) 우선</text>
+      <text x="250" y="210" fill="#cdd6df" font-size="10.5">→ Aurora 폴백</text>
+      <text x="250" y="231" fill="#8493a1" font-size="10">계정 비활성 재확인</text></g>
+    <!-- 2 -->
+    <g filter="url(#psh)"><rect x="408" y="120" width="162" height="124" rx="13" fill="url(#pcard)" stroke="#4a3520"/>
+      <circle cx="428" cy="146" r="5" fill="#ED7100"/><text x="442" y="150" font-size="13" font-weight="700" fill="#ffb866">② 예산</text>
+      <text x="426" y="174" fill="#cdd6df" font-size="10.5">HARD_BLOCK</text>
+      <text x="426" y="192" fill="#cdd6df" font-size="10.5">SOFT_WARNING (110%)</text>
+      <text x="426" y="210" fill="#cdd6df" font-size="10.5">THROTTLE (80/90/100%)</text>
+      <text x="426" y="231" fill="#8493a1" font-size="10">TEAM 우선 · 미설정=차단</text></g>
+    <!-- 3 -->
+    <g filter="url(#psh)"><rect x="584" y="120" width="162" height="124" rx="13" fill="url(#pcard)" stroke="#3a3550"/>
+      <circle cx="604" cy="146" r="5" fill="#8C4FFF"/><text x="618" y="150" font-size="13" font-weight="700" fill="#c4a5ff">③ 다운그레이드</text>
+      <text x="602" y="174" fill="#cdd6df" font-size="10.5">임계% 초과 시</text>
+      <text x="602" y="192" fill="#cdd6df" font-size="10.5">body.model 재작성</text>
+      <text x="602" y="210" fill="#cdd6df" font-size="10.5">opus→sonnet→haiku</text>
+      <text x="602" y="231" fill="#8493a1" font-size="10">TEAM scope · 순환감지</text></g>
+    <!-- 4 -->
+    <g filter="url(#psh)"><rect x="760" y="120" width="162" height="124" rx="13" fill="url(#pcard)" stroke="#1d6675"/>
+      <circle cx="780" cy="146" r="5" fill="#01A88D"/><text x="794" y="150" font-size="13" font-weight="700" fill="#3eead0">④ Rate Limit</text>
+      <text x="778" y="174" fill="#cdd6df" font-size="10.5">RPM·TPM·CPM·CPH</text>
+      <text x="778" y="192" fill="#cdd6df" font-size="10.5">USER·TEAM·GLOBAL</text>
+      <text x="778" y="210" fill="#cdd6df" font-size="10.5">선예약 → 정산</text>
+      <text x="778" y="231" fill="#8493a1" font-size="10">Redis Lua · 슬라이딩윈도</text></g>
+    <!-- 5 -->
+    <g filter="url(#psh)"><rect x="936" y="120" width="162" height="124" rx="13" fill="url(#pcard)" stroke="#1d6675"/>
+      <circle cx="956" cy="146" r="5" fill="#01A88D"/><text x="970" y="150" font-size="13" font-weight="700" fill="#3eead0">⑤ Bedrock 호출</text>
+      <text x="954" y="174" fill="#cdd6df" font-size="10.5">InvokeModelWith</text>
+      <text x="954" y="192" fill="#cdd6df" font-size="10.5">ResponseStream</text>
+      <text x="954" y="210" fill="#cdd6df" font-size="10.5">본문 패스스루(SSE)</text>
+      <text x="954" y="231" fill="#8493a1" font-size="10">cache_control 보존</text></g>
+    <!-- 6 -->
+    <g filter="url(#psh)"><rect x="1112" y="120" width="162" height="124" rx="13" fill="url(#pcard)" stroke="#3c5618"/>
+      <circle cx="1132" cy="146" r="5" fill="#7AA116"/><text x="1146" y="150" font-size="13" font-weight="700" fill="#bce08a">⑥ 비용 기록</text>
+      <text x="1130" y="174" fill="#cdd6df" font-size="10.5">정식 토큰 카운터</text>
+      <text x="1130" y="192" fill="#cdd6df" font-size="10.5">budget_deduct(Lua)</text>
+      <text x="1130" y="210" fill="#cdd6df" font-size="10.5">TPM/CPM/CPH 정산</text>
+      <text x="1130" y="231" fill="#8493a1" font-size="10">XADD cost:stream</text></g>
+  </g>
+
+  <!-- stage arrows -->
+  <g>
+    <path d="M194,182 L230,182" fill="none" stroke="#dce4ec" stroke-width="2.2" marker-end="url(#pa)"/>
+    <path d="M394,182 L406,182" fill="none" stroke="#dce4ec" stroke-width="2.2" marker-end="url(#pa)"/>
+    <path d="M570,182 L582,182" fill="none" stroke="#dce4ec" stroke-width="2.2" marker-end="url(#pa)"/>
+    <path d="M746,182 L758,182" fill="none" stroke="#dce4ec" stroke-width="2.2" marker-end="url(#pa)"/>
+    <path d="M922,182 L934,182" fill="none" stroke="#dce4ec" stroke-width="2.2" marker-end="url(#pa)"/>
+    <path d="M1098,182 L1110,182" fill="none" stroke="#dce4ec" stroke-width="2.2" marker-end="url(#pa)"/>
+  </g>
+
+  <!-- Bedrock external -->
+  <g filter="url(#psh)"><rect x="1324" y="120" width="232" height="124" rx="13" fill="#0f201c" stroke="#16a085"/>
+    <circle cx="1346" cy="148" r="6" fill="#01A88D"/><text x="1362" y="152" font-size="14" font-weight="700" fill="#43ead4">Amazon Bedrock</text>
+    <text x="1344" y="176" font-size="10.5" fill="#9fc6bd">Claude · GPT-5.5/Codex</text>
+    <text x="1344" y="196" font-size="10.5" fill="#9fc6bd">정식 토큰 카운터</text>
+    <text x="1344" y="212" font-size="10.5" fill="#9fc6bd">= AWS 청구 단위</text>
+    <text x="1344" y="232" font-size="10" fill="#6f8a83">CRIS: global.* / apac.*</text></g>
+  <path d="M1098,152 L1322,152" fill="none" stroke="#0c0f14" stroke-width="6"/>
+  <path d="M1098,152 L1322,152" fill="none" stroke="#01A88D" stroke-width="2.2" marker-end="url(#pa)"/>
+  <rect x="1150" y="132" width="120" height="20" rx="10" fill="#0c0f14"/><text x="1162" y="146" font-size="10" fill="#3eead0">⑤ 스트리밍 호출</text>
+
+  <!-- ===== stores row ===== -->
+  <g filter="url(#psh)"><rect x="500" y="372" width="290" height="92" rx="13" fill="url(#pcard)" stroke="#2c4496"/>
+    <circle cx="520" cy="398" r="5.5" fill="#527FFF"/><text x="534" y="402" font-size="13" font-weight="700" fill="#8fa9ff">ElastiCache (Valkey)</text>
+    <text x="520" y="426" font-size="10.5" fill="#9aa6c2">VK 캐시 · RPM/TPM/CPM 카운터 · 예산 상태</text>
+    <text x="520" y="446" font-size="10.5" fill="#9aa6c2">cost:stream (Redis Stream)</text></g>
+  <g filter="url(#psh)"><rect x="812" y="372" width="280" height="92" rx="13" fill="url(#pcard)" stroke="#2c4496"/>
+    <circle cx="832" cy="398" r="5.5" fill="#527FFF"/><text x="846" y="402" font-size="13" font-weight="700" fill="#8fa9ff">Aurora PostgreSQL</text>
+    <text x="832" y="426" font-size="10.5" fill="#9aa6c2">users · model_pricing · budget_configs</text>
+    <text x="832" y="446" font-size="10.5" fill="#9aa6c2">캐시 미스 시 폴백 + usage_logs</text></g>
+
+  <!-- lookup edges (dashed grey/teal) with label pills -->
+  <path d="M313,244 L313,320 L600,320 L600,370" fill="none" stroke="#0c0f14" stroke-width="6"/>
+  <path d="M313,244 L313,320 L600,320 L600,370" fill="none" stroke="#7e8c9a" stroke-width="1.5" marker-end="url(#pg)" stroke-dasharray="5 3"/>
+  <rect x="320" y="310" width="92" height="20" rx="10" fill="#0c0f14"/><text x="330" y="324" font-size="10" fill="#9aa6b2">VK 조회/캐시</text>
+  <path d="M489,244 L489,300 L900,300 L900,370" fill="none" stroke="#0c0f14" stroke-width="6"/>
+  <path d="M489,244 L489,300 L900,300 L900,370" fill="none" stroke="#7e8c9a" stroke-width="1.5" marker-end="url(#pg)" stroke-dasharray="5 3"/>
+  <rect x="700" y="290" width="104" height="20" rx="10" fill="#0c0f14"/><text x="710" y="304" font-size="10" fill="#9aa6b2">예산·단가 조회</text>
+  <path d="M841,244 L841,336 L660,336 L660,370" fill="none" stroke="#0c0f14" stroke-width="6"/>
+  <path d="M841,244 L841,336 L660,336 L660,370" fill="none" stroke="#01A88D" stroke-width="1.5" marker-end="url(#pg)"/>
+  <rect x="672" y="326" width="82" height="20" rx="10" fill="#0c0f14"/><text x="682" y="340" font-size="10" fill="#3eead0">RL 카운터</text>
+  <path d="M1193,244 L1193,346 L740,346 L740,424 L808,424" fill="none" stroke="#0c0f14" stroke-width="6"/>
+  <path d="M1193,244 L1193,346 L740,346 L740,424 L808,424" fill="none" stroke="#7AA116" stroke-width="1.8" marker-end="url(#pgr)"/>
+  <rect x="980" y="336" width="150" height="20" rx="10" fill="#0c0f14"/><text x="990" y="350" font-size="10" fill="#bce08a">⑥ XADD cost:stream</text>
+
+  <!-- ===== worker ===== -->
+  <g filter="url(#psh)"><rect x="500" y="512" width="592" height="100" rx="13" fill="url(#pcard)" stroke="#4a3520"/>
+    <circle cx="520" cy="538" r="5.5" fill="#ED7100"/><text x="534" y="542" font-size="13" font-weight="700" fill="#ffb866">cost-recorder-worker · 분산 소비자 그룹 (단일 리더 없음)</text>
+    <text x="520" y="566" font-size="10.5" fill="#cdd6df">XREADGROUP cost:stream → 배치(100건/5초) → usage_logs INSERT(ON CONFLICT 멱등) + budget_usages UPSERT</text>
+    <text x="520" y="586" font-size="10.5" fill="#9aa6b2">liveness가 Redis/DB를 검사하지 않음 → 외부 의존성이 흔들려도 재시작 폭주 없음 (cascade-down 방지)</text>
+    <text x="520" y="604" font-size="10" fill="#6f8a83">+ 일별 카운터 + 예산 임계 알림 PUBLISH → XACK</text></g>
+  <path d="M640,464 L640,510" fill="none" stroke="#0c0f14" stroke-width="6"/>
+  <path d="M640,464 L640,510" fill="none" stroke="#ED7100" stroke-width="1.8" marker-end="url(#po)"/>
+  <rect x="648" y="478" width="48" height="20" rx="10" fill="#0c0f14"/><text x="658" y="492" font-size="10" fill="#ffb866">소비</text>
+  <path d="M952,512 L952,466" fill="none" stroke="#0c0f14" stroke-width="6"/>
+  <path d="M952,512 L952,466" fill="none" stroke="#ED7100" stroke-width="1.8" marker-end="url(#po)"/>
+  <rect x="960" y="480" width="48" height="20" rx="10" fill="#0c0f14"/><text x="970" y="494" font-size="10" fill="#ffb866">적재</text>
+
+  <!-- KI-08 callout -->
+  <g filter="url(#psh)"><rect x="44" y="512" width="430" height="100" rx="13" fill="#0e131a" stroke="#39424f"/>
+    <circle cx="64" cy="538" r="5" fill="#dce4ec"/><text x="78" y="542" font-size="12.5" font-weight="700" fill="#dce4ec">스트리밍 중단 복구 (KI-08)</text>
+    <text x="62" y="566" font-size="10.5" fill="#9aa6b2">클라이언트가 도중에 끊겨 output_tokens=0 이면,</text>
+    <text x="62" y="584" font-size="10.5" fill="#9aa6b2">받은 텍스트를 모아 Bedrock CountTokens API로 역산 →</text>
+    <text x="62" y="602" font-size="10.5" fill="#9aa6b2">부분 비용을 estimated=true 로 보존 (레코드 유실 0).</text></g>
+
+  <!-- footer legend -->
+  <g font-size="11">
+    <rect x="44" y="650" width="13" height="13" rx="3" fill="#dce4ec"/><text x="64" y="661" fill="#9aa6b2">요청 흐름</text>
+    <rect x="164" y="650" width="13" height="13" rx="3" fill="#7e8c9a"/><text x="184" y="661" fill="#9aa6b2">조회(점선) / 내부</text>
+    <rect x="334" y="650" width="13" height="13" rx="3" fill="#7AA116"/><text x="354" y="661" fill="#9aa6b2">비용 이벤트</text>
+    <rect x="474" y="650" width="13" height="13" rx="3" fill="#ED7100"/><text x="494" y="661" fill="#9aa6b2">비동기 워커</text>
+  </g>
+</svg>

@@ -243,10 +243,13 @@ database:
 values.yaml                               ← 공통 기본값 (모든 환경)
 ├── values-eks-fargate-dev.yaml           ← EKS Dev 오버라이드
 ├── values-eks-fargate-prod.yaml          ← EKS Prod 오버라이드 (HA, HPA, IRSA)
-├── values-eks-fargate-prod-loadtest.yaml ← EKS Prod 부하테스트용 오버라이드
-├── values-onprem-dev.yaml                ← On-Prem Dev 오버라이드
-└── values-onprem-prod.yaml               ← On-Prem Prod 오버라이드
+└── values-eks-fargate-prod-loadtest.yaml ← EKS Prod 부하테스트용 오버라이드
+                                             (prod 위에 얹는 adminApi 전용 오버레이 —
+                                              ingress/gatewayProxy 키가 없어 prod 값을 상속)
 ```
+
+> On-prem values(`values-onprem-{dev,prod}.yaml`)와 `install-onprem.sh` 는 `83b4ffe`
+> 에서 제거되었습니다. 현재 차트는 **EKS Fargate 전용**입니다.
 
 > ⚠️ **prod 배포 시 서비스별 `image.tag`를 반드시 명시 핀할 것.**
 > `values-eks-fargate-prod.yaml`에는 현재 어떤 서비스도 `image.tag`가 핀되어 있지
@@ -486,9 +489,14 @@ deployment/
 
 ---
 
-## 참고: On-Premises 배포
+## 참고: On-Premises 배포 (미지원)
 
-이 문서는 AWS EKS Fargate 환경을 기준으로 작성되었습니다. On-Prem Kubernetes 환경을 위한 Helm values(`values-onprem-*.yaml`)와 설치 스크립트(`install-onprem.sh`)가 별도로 제공되지만, 이는 배포 참조용 가이드이며 실제 고객 인프라에서의 동작은 환경에 따라 다를 수 있습니다. On-Prem 배포 시에는 해당 스크립트를 기반으로 자체 환경에 맞는 검증을 직접 수행해야 합니다.
+이 문서는 AWS EKS Fargate 환경을 기준으로 작성되었습니다. 과거 제공되던 On-Prem
+Kubernetes 용 Helm values(`values-onprem-*.yaml`)와 설치 스크립트(`install-onprem.sh`)는
+**`83b4ffe`(chore(deploy): remove on-prem deployment artifacts) 에서 제거**되었고, base
+values 의 기본 `deploymentMode` 도 `onprem` → `eks-fargate` 로 변경되었습니다. 현재 차트로
+On-Prem 배포는 지원되지 않습니다 — 필요하다면 해당 커밋에서 파일을 복원한 뒤 자체 환경에
+맞는 검증을 직접 수행해야 합니다.
 
 ---
 
@@ -517,15 +525,15 @@ deployment/
 | EKS cluster | `llm-gateway-prod` (1.30) |
 | Aurora | `llm-gateway-prod`, db.r7g.large, multi-AZ, RDS Proxy on |
 | ElastiCache | `llm-gateway-prod`, cache.r7g.large, **cluster mode on** |
-| Cognito User Pool | `ap-northeast-2_XXXXXXXXX` |
-| OIDC Issuer | `https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_XXXXXXXXX` |
-| OIDC public client | `<COGNITO_APP_CLIENT_ID>` (PKCE, no secret) |
+| Cognito User Pool | `<COGNITO_USER_POOL_ID_PROD>` |
+| OIDC Issuer | `https://cognito-idp.ap-northeast-2.amazonaws.com/<COGNITO_USER_POOL_ID_PROD>` |
+| OIDC public client | `<OIDC_CLIENT_ID_PROD>` (PKCE, no secret) |
 | Hosted UI | `llm-gateway-prod-vanilla-auth-123456789012.auth.ap-northeast-2.amazoncognito.com` |
-| Gateway Proxy ALB | `http://<ALB_DNS>` |
-| Admin API ALB | `http://<ALB_DNS>` |
-| Admin UI ALB | `http://<ALB_DNS>` |
+| Gateway Proxy ALB | `http://<GATEWAY_HOST>` |
+| Admin API ALB | `http://<ADMIN_API_HOST>` |
+| Admin UI ALB | `http://<ADMIN_UI_HOST>` |
 | Replicas (HPA) | gateway-proxy 3-30 / admin-api 3-10 / admin-ui 2-6 / cost-recorder 3-6 / notification 2-6 |
-| Bootstrap admin | `admin@example.com` |
+| Bootstrap admin | `kyutae-ai@amazon.com` |
 
 ### E.3 dev (검증/개발)
 
@@ -535,11 +543,11 @@ deployment/
 | EKS cluster | `llm-gateway-dev` (1.30) |
 | Aurora | `llm-gateway-dev`, t-class, single-AZ, RDS Proxy on |
 | ElastiCache | `llm-gateway-dev`, single node (cluster mode off) |
-| Cognito User Pool | `ap-northeast-2_XXXXXXXXX` (2026-05-18 us-east-1 → ap-northeast-2 마이그레이션 완료) |
-| OIDC Issuer | `https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_XXXXXXXXX` |
-| OIDC public client | `<COGNITO_APP_CLIENT_ID>` (PKCE, no secret) |
-| Gateway Proxy ALB | `http://<ALB_DNS>` |
-| Admin API ALB | `http://<ALB_DNS>` |
+| Cognito User Pool | `<COGNITO_USER_POOL_ID_DEV>` (2026-05-18 us-east-1 → ap-northeast-2 마이그레이션 완료) |
+| OIDC Issuer | `https://cognito-idp.ap-northeast-2.amazonaws.com/<COGNITO_USER_POOL_ID_DEV>` |
+| OIDC public client | `<OIDC_CLIENT_ID_DEV>` (PKCE, no secret) |
+| Gateway Proxy ALB | `http://<GATEWAY_HOST>` |
+| Admin API ALB | `http://<ADMIN_API_HOST>` |
 | Replicas | gateway-proxy 1-3 / admin-api 1 / admin-ui 1 / cost-recorder 1 / notification 1 |
 
 ### E.4 현재 알려진 임시 설정 (고객 인프라 적용 시 반드시 교체)

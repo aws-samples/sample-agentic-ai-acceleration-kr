@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="640" viewBox="0 0 1180 640" font-family="'Segoe UI','Apple SD Gothic Neo',Helvetica,Arial,sans-serif">
+  <rect width="1180" height="640" fill="#0c0d0f"/>
+  <text x="40" y="44" font-size="18" font-weight="700" fill="#e6edf3">예산 관리 — 사용자/팀 예산 + 자동 다운그레이드 체인</text>
+  <text x="40" y="66" font-size="12" fill="#8b98a5">사용자 예산 미설정 시 팀 예산이 자동 적용 (USER &lt; TEAM 우선). 정책: HARD_BLOCK / SOFT_WARNING / THROTTLE</text>
+
+  <!-- budget table -->
+  <rect x="40" y="92" width="1100" height="226" rx="12" fill="#111418" stroke="#232830"/>
+  <g font-size="11" fill="#8b98a5">
+    <text x="64" y="124">대상명</text><text x="430" y="124">타입</text><text x="540" y="124">최대 예산</text>
+    <text x="700" y="124">사용량</text><text x="840" y="124">사용률</text><text x="1010" y="124">정책</text>
+  </g>
+  <line x1="64" y1="136" x2="1116" y2="136" stroke="#232830"/>
+  <!-- team row -->
+  <g font-size="12.5" fill="#e6edf3">
+    <text x="64" y="166" font-weight="600">aws-team</text>
+    <rect x="426" y="152" width="46" height="20" rx="5" fill="#16242c"/><text x="449" y="166" font-size="10" fill="#7fd3c4" text-anchor="middle">팀</text>
+    <text x="540" y="166">$10.00</text><text x="700" y="166">$6.45</text>
+    <rect x="840" y="156" width="120" height="10" rx="5" fill="#232830"/>
+    <rect x="840" y="156" width="78" height="10" rx="5" fill="#2dd4bf"/>
+    <text x="970" y="166" font-size="11" fill="#9fb3c8">64.5%</text>
+    <rect x="1000" y="152" width="96" height="20" rx="5" fill="#3a2e16"/><text x="1048" y="166" font-size="10" fill="#e8c87f" text-anchor="middle">THROTTLE</text>
+  </g>
+  <!-- user rows -->
+  <g font-size="12" fill="#c9d4de">
+    <text x="84" y="200">↳ kyutae@amazon.com</text>
+    <rect x="426" y="188" width="62" height="18" rx="5" fill="#1a2230"/><text x="457" y="201" font-size="9.5" fill="#9fb3c8" text-anchor="middle">사용자</text>
+    <text x="540" y="200" fill="#5b6673" font-style="italic">팀 예산 적용</text><text x="700" y="200">$0.00</text>
+    <text x="84" y="232">↳ aminjae@amazon.com</text>
+    <rect x="426" y="220" width="62" height="18" rx="5" fill="#1a2230"/><text x="457" y="233" font-size="9.5" fill="#9fb3c8" text-anchor="middle">사용자</text>
+    <text x="540" y="232" fill="#5b6673" font-style="italic">팀 예산 적용</text><text x="700" y="232">$0.00</text>
+  </g>
+  <line x1="64" y1="250" x2="1116" y2="250" stroke="#1c2128"/>
+  <g font-size="12.5" fill="#e6edf3">
+    <text x="64" y="282" font-weight="600">Default Team</text>
+    <rect x="426" y="268" width="46" height="20" rx="5" fill="#16242c"/><text x="449" y="282" font-size="10" fill="#7fd3c4" text-anchor="middle">팀</text>
+    <text x="540" y="282">$5000.00</text><text x="700" y="282">$0.00</text>
+    <rect x="840" y="272" width="120" height="10" rx="5" fill="#232830"/>
+    <text x="970" y="282" font-size="11" fill="#9fb3c8">0.0%</text>
+    <rect x="1004" y="268" width="92" height="20" rx="5" fill="#16321f"/><text x="1050" y="282" font-size="10" fill="#7fe0a0" text-anchor="middle">HARD_BLOCK</text>
+  </g>
+
+  <!-- downgrade chain -->
+  <text x="40" y="364" font-size="15" font-weight="700" fill="#e6edf3">자동 다운그레이드 설정 — aws-team</text>
+  <text x="40" y="386" font-size="12" fill="#8b98a5">예산 임계치 초과 시 요청 본문의 model을 하위 모델로 자동 재작성 (체인 max_depth=5, 순환 감지)</text>
+
+  <rect x="40" y="406" width="1100" height="120" rx="12" fill="#10161c" stroke="#1f6f63"/>
+  <text x="62" y="436" font-size="12.5" fill="#c9d4de">다운그레이드 체인</text>
+
+  <!-- chain nodes -->
+  <g>
+    <rect x="62" y="452" width="250" height="46" rx="9" fill="#15181d" stroke="#3a3550"/>
+    <text x="187" y="474" font-size="12" fill="#c4a5e8" text-anchor="middle">global.anthropic.claude-opus-4-8</text>
+    <text x="187" y="490" font-size="10" fill="#8b98a5" text-anchor="middle">입력 $0.005/1K · 출력 $0.025/1K</text>
+  </g>
+  <text x="332" y="479" font-size="12" fill="#2dd4bf">— 90% →</text>
+  <g>
+    <rect x="404" y="452" width="230" height="46" rx="9" fill="#15181d" stroke="#2a5a8a"/>
+    <text x="519" y="474" font-size="12" fill="#7fb8e8" text-anchor="middle">claude-sonnet-4-6</text>
+    <text x="519" y="490" font-size="10" fill="#8b98a5" text-anchor="middle">입력 $0.003/1K · 출력 $0.015/1K</text>
+  </g>
+  <text x="654" y="479" font-size="12" fill="#2dd4bf">— 100% →</text>
+  <g>
+    <rect x="726" y="452" width="250" height="46" rx="9" fill="#15181d" stroke="#7a6a2a"/>
+    <text x="851" y="474" font-size="12" fill="#e8c87f" text-anchor="middle">claude-haiku-4-5-20251001</text>
+    <text x="851" y="490" font-size="10" fill="#8b98a5" text-anchor="middle">입력 $0.001/1K · 출력 $0.005/1K</text>
+  </g>
+
+  <text x="40" y="566" font-size="11.5" fill="#5b6673">THROTTLE 정책: 임계치 [80, 90, 100]%에서 RPM을 throttle_rpm_pct(기본 50%)로 점진 축소.</text>
+  <text x="40" y="586" font-size="11.5" fill="#5b6673">SOFT_WARNING: limit ≤ used &lt; limit × soft_limit_pct(기본 110%) 구간은 통과 + 경고 플래그, 그 이상은 차단.</text>
+  <text x="40" y="606" font-size="11.5" fill="#5b6673">규칙은 threshold_pct 오름차순으로 평가되고, Redis(TTL 60s) → Aurora downgrade_policies 폴백으로 로드된다.</text>
+</svg>

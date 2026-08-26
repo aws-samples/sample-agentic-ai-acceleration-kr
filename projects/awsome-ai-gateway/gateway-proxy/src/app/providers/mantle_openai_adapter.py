@@ -56,7 +56,7 @@ class MantleOpenAIAdapter(ProviderAdapter):
     header, Responses-shaped usage, and Responses SSE events (response.output_text.delta
     for text, response.completed carrying final usage). Used for Codex -> Ohio GPT-5.5.
 
-    Codex's account == the gateway IRSA account (859), so the broker takes the
+    Codex's account == the gateway IRSA account (123), so the broker takes the
     in-account credential path (routing_profiles.account_role_arn IS NULL).
     """
 
@@ -89,7 +89,12 @@ class MantleOpenAIAdapter(ProviderAdapter):
 
         body = resp.content
         if resp.status_code != 200:
-            logger.warning("mantle_openai_http_error", status=resp.status_code, model_id=model_id)
+            logger.warning(
+                "mantle_openai_http_error",
+                status=resp.status_code,
+                model_id=model_id,
+                error_body=body[:500].decode("utf-8", "replace"),
+            )
             return resp.status_code, body, {}, TokenUsage()
 
         try:
@@ -131,10 +136,17 @@ class MantleOpenAIAdapter(ProviderAdapter):
 
         if resp.status_code != 200:
             status = resp.status_code
+            err_body = b""
             try:
-                await resp.aread()
+                err_body = await resp.aread()
             except Exception:
                 pass
+            logger.warning(
+                "mantle_openai_stream_http_error",
+                status=status,
+                model_id=model_id,
+                error_body=err_body[:500].decode("utf-8", "replace"),
+            )
             await cm.__aexit__(None, None, None)
 
             async def _http_err() -> AsyncIterator[bytes]:

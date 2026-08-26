@@ -1,0 +1,205 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1720" height="1060" viewBox="0 0 1720 1060" font-family="'Segoe UI','Apple SD Gothic Neo',Helvetica,Arial,sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0a0c10"/><stop offset="1" stop-color="#0c0f14"/></linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1a212b"/><stop offset="1" stop-color="#151b23"/></linearGradient>
+    <filter id="sh" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#000" flood-opacity="0.5"/></filter>
+    <marker id="mRed" markerWidth="9" markerHeight="9" refX="6.5" refY="4" orient="auto"><path d="M0,0 L7.5,4 L0,8 z" fill="#F2566B"/></marker>
+    <marker id="mGrn" markerWidth="9" markerHeight="9" refX="6.5" refY="4" orient="auto"><path d="M0,0 L7.5,4 L0,8 z" fill="#43D58A"/></marker>
+    <marker id="mPrp" markerWidth="9" markerHeight="9" refX="6.5" refY="4" orient="auto"><path d="M0,0 L7.5,4 L0,8 z" fill="#B58BFF"/></marker>
+    <marker id="mGry" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L7,4 L0,8 z" fill="#7e8c9a"/></marker>
+  </defs>
+  <rect width="1720" height="1060" fill="url(#bg)"/>
+
+  <!-- title + legend pills -->
+  <text x="44" y="52" font-size="25" font-weight="700" fill="#eef3f8">LLM Gateway 아키텍처</text>
+  <text x="44" y="78" font-size="13.5" fill="#76828f">AWS EKS Fargate · ap-northeast-2 · 멀티 프로바이더 (Claude · GPT-5.5 / Codex)</text>
+  <g font-size="12">
+    <rect x="1146" y="36" width="120" height="26" rx="13" fill="#1c1115" stroke="#5a2730"/><circle cx="1162" cy="49" r="4.5" fill="#F2566B"/><text x="1174" y="53" fill="#e7b3bb">LLM 호출</text>
+    <rect x="1276" y="36" width="120" height="26" rx="13" fill="#0f1c14" stroke="#26512f"/><circle cx="1292" cy="49" r="4.5" fill="#43D58A"/><text x="1304" y="53" fill="#a7e3c0">인증/VK</text>
+    <rect x="1406" y="36" width="130" height="26" rx="13" fill="#16111f" stroke="#3c2d63"/><circle cx="1422" cy="49" r="4.5" fill="#B58BFF"/><text x="1434" y="53" fill="#cdb6ff">BI 어시스턴트</text>
+    <rect x="1546" y="36" width="92" height="26" rx="13" fill="#141820" stroke="#2c333d"/><circle cx="1562" cy="49" r="4.5" fill="#7e8c9a"/><text x="1574" y="53" fill="#aab6c2">내부</text>
+  </g>
+
+  <!-- ===== Office zone ===== -->
+  <rect x="36" y="112" width="252" height="438" rx="16" fill="#0f1318" stroke="#333c47" stroke-dasharray="2 5" stroke-linecap="round"/>
+  <text x="58" y="140" font-size="13" font-weight="700" fill="#8493a1">사내망 (Office)</text>
+
+  <g filter="url(#sh)"><rect x="60" y="158" width="204" height="66" rx="12" fill="url(#card)" stroke="#2c333d"/>
+    <circle cx="84" cy="180" r="8" fill="#1e2730"/><circle cx="84" cy="177" r="3" fill="#9fb0bf"/><path d="M78,188 a6,5 0 0 1 12,0" fill="#9fb0bf"/>
+    <text x="104" y="184" font-size="13" font-weight="600" fill="#e9eff5">개발자</text>
+    <text x="104" y="204" font-size="11" fill="#8493a1">Claude Code · Codex</text>
+  </g>
+  <g filter="url(#sh)"><rect x="60" y="236" width="204" height="60" rx="12" fill="url(#card)" stroke="#2c333d"/>
+    <circle cx="84" cy="263" r="8" fill="#1e2730"/><circle cx="84" cy="260" r="3" fill="#9fb0bf"/><path d="M78,271 a6,5 0 0 1 12,0" fill="#9fb0bf"/>
+    <text x="104" y="261" font-size="13" font-weight="600" fill="#e9eff5">운영자</text>
+    <text x="104" y="280" font-size="11" fill="#8493a1">Admin UI 브라우저</text>
+  </g>
+  <g filter="url(#sh)"><rect x="60" y="312" width="204" height="104" rx="12" fill="#11161c" stroke="#2c333d"/>
+    <circle cx="76" cy="335" r="4" fill="#5fbf9f"/><text x="90" y="339" font-size="12" font-weight="700" fill="#a9bccb">gateway-cli</text>
+    <text x="76" y="360" font-size="10.5" fill="#8493a1">login (OIDC PKCE)</text>
+    <text x="76" y="378" font-size="10.5" fill="#8493a1">Virtual Key 자동 발급</text>
+    <text x="76" y="396" font-size="10.5" fill="#8493a1">api-key-helper: Bearer VK</text>
+  </g>
+  <rect x="60" y="430" width="204" height="26" rx="13" fill="#11161c" stroke="#2c333d"/>
+  <text x="80" y="447" font-size="10.5" fill="#6b7682">Direct Connect / VPN 경유</text>
+
+  <!-- ===== AWS Cloud ===== -->
+  <rect x="318" y="98" width="1364" height="836" rx="18" fill="#0c1016" stroke="#FF9900" stroke-opacity="0.45" stroke-width="1.4"/>
+  <rect x="336" y="110" width="92" height="24" rx="6" fill="#1c1608"/><text x="350" y="127" font-size="12.5" font-weight="700" fill="#FF9900">AWS Cloud</text>
+
+  <!-- Region -->
+  <rect x="344" y="146" width="1316" height="668" rx="14" fill="none" stroke="#27B5C4" stroke-opacity="0.5" stroke-dasharray="2 5" stroke-linecap="round"/>
+  <rect x="362" y="156" width="240" height="24" rx="6" fill="#0a1718"/><text x="376" y="173" font-size="12" font-weight="700" fill="#3fc6d4">Seoul Region (ap-northeast-2)</text>
+
+  <!-- Identity tiles -->
+  <g filter="url(#sh)"><rect x="376" y="196" width="196" height="64" rx="12" fill="url(#card)" stroke="#3a2730"/>
+    <circle cx="396" cy="218" r="5" fill="#DD344C"/><text x="410" y="222" font-size="12.5" font-weight="600" fill="#e9eff5">Amazon Cognito</text>
+    <text x="394" y="244" font-size="10.5" fill="#8493a1">OIDC IdP · 그룹 → 역할</text></g>
+  <g filter="url(#sh)"><rect x="588" y="196" width="208" height="64" rx="12" fill="url(#card)" stroke="#3a2730"/>
+    <circle cx="608" cy="218" r="5" fill="#DD344C"/><text x="622" y="222" font-size="12.5" font-weight="600" fill="#e9eff5">IAM Identity Center</text>
+    <text x="606" y="244" font-size="10.5" fill="#8493a1">SSO (선택) · IdP 교체 가능</text></g>
+
+  <!-- VPC -->
+  <rect x="376" y="288" width="752" height="500" rx="13" fill="none" stroke="#8C4FFF" stroke-opacity="0.45" stroke-width="1.3"/>
+  <rect x="394" y="298" width="330" height="24" rx="6" fill="#140c22"/><text x="408" y="315" font-size="12" font-weight="700" fill="#b193ff">VPC · 3-tier subnets (×3 AZ) · Flow Logs</text>
+
+  <!-- Public subnet -->
+  <rect x="396" y="336" width="150" height="438" rx="11" fill="#0c160f" stroke="#2c6b3a" stroke-opacity="0.55"/>
+  <rect x="410" y="346" width="118" height="22" rx="6" fill="#0e1c12"/><text x="422" y="361" font-size="10.5" font-weight="600" fill="#62c279">Public subnet</text>
+  <g filter="url(#sh)"><rect x="412" y="380" width="120" height="62" rx="11" fill="url(#card)" stroke="#3a3550"/>
+    <circle cx="430" cy="402" r="5" fill="#8C4FFF"/><text x="444" y="406" font-size="12" font-weight="600" fill="#e9eff5">ALB</text>
+    <text x="426" y="426" font-size="10" fill="#8493a1">SSE · idle 600s</text></g>
+  <text x="412" y="468" font-size="10" fill="#6b7682">Gateway · API · UI</text>
+  <text x="412" y="484" font-size="10" fill="#6b7682">3개 리스너</text>
+
+  <!-- Private subnet: EKS -->
+  <rect x="562" y="336" width="328" height="296" rx="11" fill="#0b1519" stroke="#1d6675" stroke-opacity="0.55"/>
+  <rect x="576" y="346" width="300" height="22" rx="6" fill="#0c1a1f"/><text x="588" y="361" font-size="10.5" font-weight="600" fill="#3aa9bc">Private subnet · Amazon EKS (Fargate · HPA 3→30)</text>
+  <g font-size="10.5">
+    <g filter="url(#sh)"><rect x="576" y="378" width="146" height="54" rx="10" fill="url(#card)" stroke="#4a3520"/><circle cx="592" cy="398" r="4.5" fill="#ED7100"/><text x="604" y="402" font-size="11.5" font-weight="600" fill="#e9eff5">gateway-proxy</text><text x="590" y="420" fill="#8493a1">VK·예산·RL·Bedrock</text></g>
+    <g filter="url(#sh)"><rect x="730" y="378" width="146" height="54" rx="10" fill="url(#card)" stroke="#4a3520"/><circle cx="746" cy="398" r="4.5" fill="#ED7100"/><text x="758" y="402" font-size="11.5" font-weight="600" fill="#e9eff5">admin-api</text><text x="744" y="420" fill="#8493a1">VK발급·CRUD·BI</text></g>
+    <g filter="url(#sh)"><rect x="576" y="440" width="146" height="54" rx="10" fill="url(#card)" stroke="#4a3520"/><circle cx="592" cy="460" r="4.5" fill="#ED7100"/><text x="604" y="464" font-size="11.5" font-weight="600" fill="#e9eff5">admin-ui</text><text x="590" y="482" fill="#8493a1">Next.js · /chat</text></g>
+    <g filter="url(#sh)"><rect x="730" y="440" width="146" height="54" rx="10" fill="url(#card)" stroke="#4a3520"/><circle cx="746" cy="460" r="4.5" fill="#ED7100"/><text x="758" y="464" font-size="11.5" font-weight="600" fill="#e9eff5">scheduler</text><text x="744" y="482" fill="#8493a1">VK 만료 정리</text></g>
+    <g filter="url(#sh)"><rect x="576" y="502" width="146" height="54" rx="10" fill="url(#card)" stroke="#4a3520"/><circle cx="592" cy="522" r="4.5" fill="#ED7100"/><text x="604" y="526" font-size="11.5" font-weight="600" fill="#e9eff5">cost-recorder</text><text x="590" y="544" fill="#8493a1">cost:stream → DB</text></g>
+    <g filter="url(#sh)"><rect x="730" y="502" width="146" height="54" rx="10" fill="url(#card)" stroke="#4a3520"/><circle cx="746" cy="522" r="4.5" fill="#ED7100"/><text x="758" y="526" font-size="11.5" font-weight="600" fill="#e9eff5">notification</text><text x="744" y="544" fill="#8493a1">예산 알림</text></g>
+  </g>
+  <text x="576" y="582" font-size="10" fill="#6b7682">+ migration (Alembic)</text>
+
+  <!-- Private subnet: Lambdas -->
+  <rect x="562" y="648" width="328" height="118" rx="11" fill="#0b1519" stroke="#1d6675" stroke-opacity="0.55"/>
+  <rect x="576" y="658" width="290" height="22" rx="6" fill="#0c1a1f"/><text x="588" y="673" font-size="10.5" font-weight="600" fill="#3aa9bc">Private subnet · BI tool Lambdas (ENI)</text>
+  <g font-size="10.5">
+    <g filter="url(#sh)"><rect x="576" y="690" width="146" height="62" rx="10" fill="url(#card)" stroke="#4a3520"/><circle cx="592" cy="710" r="4.5" fill="#ED7100"/><text x="604" y="714" font-size="11.5" font-weight="600" fill="#e9eff5">query_db λ</text><text x="590" y="731" fill="#8493a1">sqlglot·whitelist</text><text x="590" y="746" fill="#8493a1">LIMIT·10s·read-only</text></g>
+    <g filter="url(#sh)"><rect x="730" y="690" width="146" height="62" rx="10" fill="url(#card)" stroke="#4a3520"/><circle cx="746" cy="710" r="4.5" fill="#ED7100"/><text x="758" y="714" font-size="11.5" font-weight="600" fill="#e9eff5">get_schema λ</text><text x="744" y="731" fill="#8493a1">whitelist 내성</text><text x="744" y="746" fill="#8493a1">(no DB)</text></g>
+  </g>
+
+  <!-- Data subnet -->
+  <rect x="906" y="336" width="206" height="430" rx="11" fill="#0a0f1a" stroke="#2c4496" stroke-opacity="0.55"/>
+  <rect x="920" y="346" width="180" height="22" rx="6" fill="#0b1020"/><text x="932" y="361" font-size="10.5" font-weight="600" fill="#7390e0">Data / Cache subnet (격리)</text>
+  <g filter="url(#sh)"><rect x="922" y="380" width="174" height="64" rx="11" fill="url(#card)" stroke="#2c4496"/>
+    <circle cx="940" cy="402" r="5" fill="#527FFF"/><text x="954" y="406" font-size="12" font-weight="600" fill="#e9eff5">Aurora</text>
+    <text x="940" y="425" font-size="10" fill="#8493a1">PostgreSQL · RDS Proxy</text><text x="940" y="439" font-size="10" fill="#8493a1">Multi-AZ</text></g>
+  <g filter="url(#sh)"><rect x="922" y="456" width="174" height="62" rx="11" fill="url(#card)" stroke="#2c4496"/>
+    <circle cx="940" cy="478" r="5" fill="#527FFF"/><text x="954" y="482" font-size="12" font-weight="600" fill="#e9eff5">ElastiCache</text>
+    <text x="940" y="500" font-size="10" fill="#8493a1">Valkey · cluster mode</text><text x="940" y="514" font-size="10" fill="#8493a1">VK·RL·cost:stream</text></g>
+  <g filter="url(#sh)"><rect x="922" y="530" width="174" height="54" rx="11" fill="url(#card)" stroke="#3a2730"/>
+    <circle cx="940" cy="551" r="5" fill="#DD344C"/><text x="954" y="555" font-size="12" font-weight="600" fill="#e9eff5">Secrets Manager</text>
+    <text x="940" y="573" font-size="10" fill="#8493a1">DB·Redis·reader cred</text></g>
+  <g filter="url(#sh)"><rect x="922" y="596" width="174" height="54" rx="11" fill="url(#card)" stroke="#3a3550"/>
+    <circle cx="940" cy="617" r="5" fill="#8C4FFF"/><text x="954" y="621" font-size="12" font-weight="600" fill="#e9eff5">VPC Endpoints</text>
+    <text x="940" y="639" font-size="10" fill="#8493a1">Bedrock·S3·ECR</text></g>
+  <g filter="url(#sh)"><rect x="922" y="662" width="174" height="50" rx="11" fill="url(#card)" stroke="#2c333d"/>
+    <circle cx="940" cy="681" r="5" fill="#879196"/><text x="954" y="685" font-size="12" font-weight="600" fill="#e9eff5">ECR</text>
+    <text x="940" y="702" font-size="10" fill="#8493a1">chat-agent image</text></g>
+
+  <!-- Managed AI band -->
+  <rect x="1148" y="196" width="488" height="592" rx="13" fill="#08130f" stroke="#16a085" stroke-opacity="0.45" stroke-width="1.3"/>
+  <rect x="1166" y="206" width="270" height="24" rx="6" fill="#0a1a16"/><text x="1180" y="223" font-size="12" font-weight="700" fill="#2dd4bf">Managed AI · 리전 내, VPC 밖</text>
+
+  <!-- Bedrock -->
+  <g filter="url(#sh)"><rect x="1166" y="244" width="452" height="96" rx="12" fill="#0f201c" stroke="#16a085"/>
+    <circle cx="1186" cy="270" r="6" fill="#01A88D"/><text x="1202" y="274" font-size="15" font-weight="700" fill="#43ead4">Amazon Bedrock</text>
+    <text x="1186" y="296" font-size="10.5" fill="#9fc6bd">InvokeModelWithResponseStream · 정식 토큰 카운터 = AWS 청구 단위</text>
+    <rect x="1186" y="308" width="196" height="24" rx="6" fill="#0a2620"/><text x="1198" y="324" font-size="10" fill="#7fe0cd">Anthropic Claude (Opus/Sonnet/Haiku)</text>
+    <rect x="1392" y="308" width="214" height="24" rx="6" fill="#0a2620"/><text x="1404" y="324" font-size="10" fill="#7fe0cd">OpenAI GPT-5.5/5.4 · Codex (Responses)</text></g>
+
+  <!-- AgentCore -->
+  <rect x="1166" y="356" width="452" height="316" rx="12" fill="#0a1a17" stroke="#16a085" stroke-opacity="0.6"/>
+  <rect x="1182" y="366" width="430" height="22" rx="6" fill="#0c201b"/><text x="1194" y="381" font-size="11.5" font-weight="700" fill="#3eead0">Bedrock AgentCore Runtime · admin-chat-agent (5-agent · microVM)</text>
+  <g filter="url(#sh)"><rect x="1182" y="398" width="200" height="52" rx="10" fill="#101e1a" stroke="#1f8a74"/>
+    <circle cx="1198" cy="418" r="4.5" fill="#01A88D"/><text x="1210" y="422" font-size="11.5" font-weight="700" fill="#e9eff5">① Orchestrator</text><text x="1196" y="440" font-size="10" fill="#8fb3aa">Opus 4.8 · tool-first</text></g>
+  <g font-size="10">
+    <g filter="url(#sh)"><rect x="1394" y="398" width="100" height="52" rx="10" fill="#101e1a" stroke="#1f8a74"/><text x="1408" y="419" font-size="10.5" font-weight="600" fill="#e9eff5">② SQL</text><text x="1408" y="435" fill="#8fb3aa">Specialist</text></g>
+    <g filter="url(#sh)"><rect x="1504" y="398" width="104" height="52" rx="10" fill="#101e1a" stroke="#1f8a74"/><text x="1518" y="419" font-size="10.5" font-weight="600" fill="#e9eff5">③ Validator</text><text x="1518" y="435" fill="#8fb3aa">PASS/WARN</text></g>
+    <g filter="url(#sh)"><rect x="1394" y="458" width="100" height="52" rx="10" fill="#101e1a" stroke="#1f8a74"/><text x="1408" y="479" font-size="10.5" font-weight="600" fill="#e9eff5">④ Code</text><text x="1408" y="495" fill="#8fb3aa">execute_py</text></g>
+    <g filter="url(#sh)"><rect x="1504" y="458" width="104" height="52" rx="10" fill="#101e1a" stroke="#1f8a74"/><text x="1518" y="479" font-size="10.5" font-weight="600" fill="#e9eff5">⑤ Viz</text><text x="1518" y="495" fill="#8fb3aa">render_chart</text></g>
+  </g>
+  <g filter="url(#sh)"><rect x="1182" y="458" width="200" height="52" rx="10" fill="#101e1a" stroke="#1f8a74"/>
+    <circle cx="1198" cy="478" r="4.5" fill="#01A88D"/><text x="1210" y="482" font-size="11.5" font-weight="600" fill="#e9eff5">Code Interpreter</text><text x="1196" y="499" font-size="10" fill="#8fb3aa">microVM sandbox</text></g>
+  <g filter="url(#sh)"><rect x="1182" y="520" width="426" height="46" rx="10" fill="#191225" stroke="#6d4fb0"/>
+    <circle cx="1198" cy="543" r="4.5" fill="#B58BFF"/><text x="1212" y="540" font-size="11" font-weight="600" fill="#cdb6ff">L4 cross-family critic → GPT-5.5 on Bedrock</text>
+    <text x="1212" y="556" font-size="9.5" fill="#9b86c4">Responses API · us-east-2 · 모델 다양성으로 SQL 교차검증</text></g>
+  <rect x="1182" y="574" width="426" height="40" rx="9" fill="#0c1510" stroke="#3c5618"/>
+  <text x="1196" y="590" font-size="9.5" fill="#9bc06a">정확도 하네스: envelope(JSON) · reconciliation gate · 도구 투명성</text>
+  <text x="1196" y="606" font-size="9.5" fill="#9bc06a">골든 테스트 pass-rate 17 → 33 → 50 → 67%</text>
+  <g filter="url(#sh)"><rect x="1182" y="622" width="426" height="40" rx="9" fill="#0f1509" stroke="#4d6b1a"/>
+    <circle cx="1198" cy="642" r="4.5" fill="#7AA116"/><text x="1212" y="638" font-size="10" font-weight="600" fill="#bce08a">S3 staging (KMS)</text>
+    <text x="1212" y="654" font-size="9.5" fill="#9bc06a">query_db 대용량 결과 · 차트 · 리포트 (staging/ 1d · reports/ 장기)</text></g>
+
+  <!-- ===== Shared band ===== -->
+  <rect x="362" y="824" width="240" height="24" rx="6" fill="#10141a"/><text x="376" y="841" font-size="12" font-weight="700" fill="#8493a1">공통 · 보안 · 거버넌스 · 관측성</text>
+  <g font-size="10.5">
+    <g filter="url(#sh)"><rect x="376" y="858" width="150" height="50" rx="10" fill="url(#card)" stroke="#3a2746"/><circle cx="392" cy="879" r="4.5" fill="#E7157B"/><text x="404" y="879" font-size="11" font-weight="600" fill="#e9eff5">CloudWatch</text><text x="392" y="897" fill="#8493a1">Logs/Metrics/OTel</text></g>
+    <g filter="url(#sh)"><rect x="540" y="858" width="150" height="50" rx="10" fill="url(#card)" stroke="#3a2746"/><circle cx="556" cy="879" r="4.5" fill="#E7157B"/><text x="568" y="879" font-size="11" font-weight="600" fill="#e9eff5">CloudTrail</text><text x="556" y="897" fill="#8493a1">API 감사</text></g>
+    <g filter="url(#sh)"><rect x="704" y="858" width="160" height="50" rx="10" fill="url(#card)" stroke="#3a2730"/><circle cx="720" cy="879" r="4.5" fill="#DD344C"/><text x="732" y="879" font-size="11" font-weight="600" fill="#e9eff5">KMS</text><text x="720" y="897" fill="#8493a1">S3/ECR/Secrets 암호화</text></g>
+    <g filter="url(#sh)"><rect x="878" y="858" width="180" height="50" rx="10" fill="url(#card)" stroke="#3a2730"/><circle cx="894" cy="879" r="4.5" fill="#DD344C"/><text x="906" y="879" font-size="11" font-weight="600" fill="#e9eff5">IAM + IRSA</text><text x="894" y="897" fill="#8493a1">Pod별 최소권한</text></g>
+    <g filter="url(#sh)"><rect x="1072" y="858" width="210" height="50" rx="10" fill="url(#card)" stroke="#3a2730"/><circle cx="1088" cy="879" r="4.5" fill="#DD344C"/><text x="1100" y="879" font-size="11" font-weight="600" fill="#e9eff5">External Secrets Operator</text><text x="1088" y="897" fill="#8493a1">IRSA → Secrets → K8s</text></g>
+    <g filter="url(#sh)"><rect x="1296" y="858" width="322" height="50" rx="10" fill="#11161c" stroke="#2c333d"/><circle cx="1312" cy="879" r="4.5" fill="#879196"/><text x="1324" y="879" font-size="11" font-weight="600" fill="#aab6c2">Terraform 모듈 + Helm (dev/prod)</text><text x="1312" y="897" fill="#8493a1">vpc·eks·aurora·elasticache·cognito·irsa·agentcore</text></g>
+  </g>
+
+  <!-- ============ EDGES (halo + line + label pill) ============ -->
+  <!-- (1) AUTH green: cli → Cognito -->
+  <path d="M288,340 L330,340 L330,228 L374,228" fill="none" stroke="#0c1016" stroke-width="6"/>
+  <path d="M288,340 L330,340 L330,228 L374,228" fill="none" stroke="#43D58A" stroke-width="2" marker-end="url(#mGrn)"/>
+  <rect x="300" y="316" width="98" height="20" rx="10" fill="#0c1016"/><text x="310" y="330" font-size="10" fill="#43D58A">OIDC id_token</text>
+  <!-- Cognito → admin-api -->
+  <path d="M485,260 L485,278 L803,278 L803,376" fill="none" stroke="#0c1016" stroke-width="6"/>
+  <path d="M485,260 L485,278 L803,278 L803,376" fill="none" stroke="#43D58A" stroke-width="2" marker-end="url(#mGrn)"/>
+  <rect x="582" y="270" width="118" height="20" rx="10" fill="#0c1016"/><text x="592" y="284" font-size="10" fill="#43D58A">검증 → VK 발급</text>
+
+  <!-- (2) LLM invoke red: user → ALB → gateway-proxy -->
+  <path d="M288,186 L330,186 L330,406 L410,406" fill="none" stroke="#0c1016" stroke-width="6"/>
+  <path d="M288,186 L330,186 L330,406 L410,406" fill="none" stroke="#F2566B" stroke-width="2.2" marker-end="url(#mRed)"/>
+  <rect x="300" y="392" width="70" height="20" rx="10" fill="#0c1016"/><text x="310" y="406" font-size="10" fill="#F2566B">Bearer VK</text>
+  <path d="M546,406 L572,406" fill="none" stroke="#F2566B" stroke-width="2.2" marker-end="url(#mRed)"/>
+  <!-- gateway-proxy → top channel y272 → right gutter x1132 → Bedrock -->
+  <path d="M649,378 L649,272 L1132,272 L1132,272 L1164,272" fill="none" stroke="#0c1016" stroke-width="6"/>
+  <path d="M649,378 L649,272 L1132,272 L1164,272" fill="none" stroke="#F2566B" stroke-width="2.2" marker-end="url(#mRed)"/>
+  <rect x="724" y="262" width="278" height="20" rx="10" fill="#0c1016"/><text x="734" y="276" font-size="10" fill="#F2566B">InvokeModelWithResponseStream (SSE)</text>
+
+  <!-- (3) gateway-proxy → ElastiCache / Aurora grey, via EKS bottom + mid-gutter x898 -->
+  <path d="M620,432 L620,600 L898,600 L898,487 L920,487" fill="none" stroke="#0b1519" stroke-width="6"/>
+  <path d="M620,432 L620,600 L898,600 L898,487 L920,487" fill="none" stroke="#7e8c9a" stroke-width="1.6" marker-end="url(#mGry)"/>
+  <rect x="628" y="590" width="158" height="20" rx="10" fill="#0b1519"/><text x="638" y="604" font-size="10" fill="#9aa6b2">VK캐시 · RL · cost:stream</text>
+  <path d="M898,560 L898,412 L920,412" fill="none" stroke="#0b1519" stroke-width="6"/>
+  <path d="M898,560 L898,412 L920,412" fill="none" stroke="#7e8c9a" stroke-width="1.5" marker-end="url(#mGry)"/>
+
+  <!-- (4) cost-recorder → Aurora grey dashed up mid-gutter -->
+  <path d="M876,524 L890,524 L890,420 L920,420" fill="none" stroke="#0b1519" stroke-width="6"/>
+  <path d="M876,524 L890,524 L890,420 L920,420" fill="none" stroke="#7e8c9a" stroke-width="1.4" marker-end="url(#mGry)" stroke-dasharray="5 3"/>
+
+  <!-- (5) BI purple: admin-api → channel y254 → right gutter x1140 → AgentCore -->
+  <path d="M803,432 L843,432 L843,254 L1140,254 L1140,398 L1180,398" fill="none" stroke="#0c1016" stroke-width="6"/>
+  <path d="M803,432 L843,432 L843,254 L1140,254 L1140,398 L1180,398" fill="none" stroke="#B58BFF" stroke-width="2.2" marker-end="url(#mPrp)"/>
+  <rect x="884" y="244" width="216" height="20" rx="10" fill="#0c1016"/><text x="894" y="258" font-size="10" fill="#B58BFF">InvokeAgentRuntime (SigV4) + SSE</text>
+
+  <!-- (6) query_db λ → Aurora purple, mid-gutter (read-only) -->
+  <path d="M876,720 L894,720 L894,428 L920,428" fill="none" stroke="#0b1519" stroke-width="6"/>
+  <path d="M876,720 L894,720 L894,428 L920,428" fill="none" stroke="#B58BFF" stroke-width="1.8" marker-end="url(#mPrp)" opacity="0.92"/>
+  <rect x="744" y="724" width="216" height="20" rx="10" fill="#0b1519"/><text x="754" y="738" font-size="10" fill="#B58BFF">read-only SQL (gateway_chat_reader)</text>
+
+  <!-- (7) AgentCore → Bedrock short vertical -->
+  <path d="M1260,356 L1260,342" fill="none" stroke="#0a1a17" stroke-width="6"/>
+  <path d="M1260,356 L1260,342" fill="none" stroke="#B58BFF" stroke-width="1.6" marker-end="url(#mPrp)" opacity="0.8"/>
+  <rect x="1276" y="334" width="244" height="18" rx="9" fill="#0a1a17"/><text x="1286" y="347" font-size="9.5" fill="#B58BFF">sub-agent · GPT-5.5 critic → Bedrock</text>
+</svg>

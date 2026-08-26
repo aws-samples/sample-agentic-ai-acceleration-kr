@@ -14,7 +14,7 @@ Codex client -> Bedrock Mantle GPT-5.5 via the OpenAI Responses API.
   model:     openai.gpt-5.5
   account:   123456789012 (SAME as gateway-proxy IRSA account) -> in-account,
              so routing_profiles.account_role_arn IS NULL (no cross-account assume,
-             unlike cowork which assumes into 905). external_id NULL for the same reason.
+             unlike cowork which assumes into 222). external_id NULL for the same reason.
   region:    us-east-2 (Ohio); verified live: GPT-5.5/5.4 both 200 OK in us-east-2 & us-east-1.
 
 Pricing is a PLACEHOLDER seeded here for cost-recording wiring; refresh with the
@@ -41,7 +41,7 @@ def upgrade() -> None:
             ('codex-gpt', 'BEDROCK_MANTLE_OPENAI', 'openai.gpt-5.5',
              'https://bedrock-mantle.us-east-2.api.aws/openai',
              'OPENAI_RESPONSES', 'ACTIVE',
-             'Codex -> 859 Bedrock Mantle GPT-5.5 (Ohio, Responses API)',
+             'Codex -> 123 Bedrock Mantle GPT-5.5 (Ohio, Responses API)',
              'Codex · GPT-5.5', '{SYSTEM_USER}')
         ON CONFLICT (alias) DO NOTHING
         """
@@ -64,7 +64,7 @@ def upgrade() -> None:
         """
     )
 
-    # 3) codex routing_profiles row (in-account 859, Ohio). account_role_arn NULL =
+    # 3) codex routing_profiles row (in-account 123, Ohio). account_role_arn NULL =
     #    use the pod's own IRSA creds (MantleCredentialBroker in-account path), NO
     #    cross-account assume. external_id NULL. default_model forces codex-gpt.
     op.execute(

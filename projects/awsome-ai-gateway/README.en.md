@@ -55,6 +55,44 @@ Zero client-side configuration.
 
 > Full component / account / data-plane details: [`ARCHITECTURE.md`](ARCHITECTURE.md) and [`devlog_websearch.md`](devlog_websearch.md).
 
+**Supported models and how they are registered**
+
+The model allow-list is **DB-driven**. `services/router_service.py` resolves aliases from
+`model.model_aliases` (cached in Redis for 300s) and blocks only on `status='INACTIVE'`.
+Enabling a new model therefore means **adding an alias row via migration** — the Helm value
+`BEDROCK_ALLOWED_MODELS` is dead config with no code consumers (silently ignored, no error;
+annotated as such in the chart).
+
+| Family | Alias | Backend entrypoint | Registered by |
+|--------|-------|--------------------|---------------|
+| Claude 5 | `claude-opus-5`, `claude-sonnet-5` | `global.anthropic.claude-{opus,sonnet}-5` | migration `0027` |
+| Claude 4.x | `claude-opus-4-*`, `claude-sonnet-4-*`, `claude-haiku-4-5` | `global.anthropic.claude-*` | baseline–`0004` |
+| GPT-5.6 (codex) | `codex-gpt-5.6-{sol,terra,luna}` | `openai.gpt-5.6-*` (Mantle, us-east-2) | migration `0025` |
+| GPT-5.5 (codex) | `codex-gpt` | `openai.gpt-5.5` (Mantle, us-east-2) | migration `0017` |
+
+- Migration `0028` switches the codex default from `codex-gpt` (5.5) to **`codex-gpt-5.6-terra`**.
+  Flush the `routing_profile:codex` Redis key (or wait out the 300s TTL) for it to take effect.
+- **Fable 5 is deliberately not registered** — no inference profile in ap-northeast-2.
+- ⚠️ **A migration alone is not enough.** Invoking a `global.anthropic.*` inference profile requires
+  `bedrock:InvokeModel` on **both the profile and the foundation model it points at**. The profile
+  pattern matches any generation, but the foundation-model patterns pin a generation — so if you
+  don't widen those too, **a new model silently returns AccessDenied**. When adding a model, also
+  update `bedrock_allowed_model_arns` in
+  `deployment/terraform/environments/llm-gateway-{dev,prod}/variables.tf` and apply.
+  (Mantle/GPT resources are model-wildcarded, so adding a model needs no IAM change — only adding a **region** does.)
+
+**SSE streaming timeouts**
+
+| Setting | Default | dev | prod | Meaning |
+|---------|---------|-----|------|---------|
+| `STREAM_IDLE_TIMEOUT` | 240 | 240 | 540 | Max gap between chunks. On timeout the gateway emits an `event: error` (timeout_error) frame and closes cleanly — **tokens streamed so far are still recorded** as usage. |
+| `STREAM_DISCONNECT_DRAIN_TIMEOUT` | 30 | 30 | 30 | How long upstream keeps being consumed after the client disconnects. At 0, billing for early-cancelled requests is lost. |
+
+⚠️ `STREAM_IDLE_TIMEOUT` **must be strictly less than the ALB `idle_timeout`** (dev 300s / prod 600s).
+If it is equal or greater, the ALB cuts the connection first and clients see a truncated stream
+instead of a clean SSE error frame. The lower bound is upstream time-to-first-token — Opus extended
+thinking exceeds 60s. Tune via `gatewayProxy.streaming.{idleTimeout,disconnectDrainTimeout}`.
+
 ---
 
 ## Demo
@@ -160,7 +198,7 @@ Helm deploys 6 Deployments + 1 Job. The admin-chat-agent is hosted separately on
 | **scheduler** | ROI aggregation + VK expiration cleanup (singleton, reuses admin-api image) |
 | **notification-worker** | Budget threshold alerts (default: mock provider) |
 | **cost-recorder-worker** | Redis Stream → Aurora cost recording + daily aggregation |
-| **migration** | Alembic DB migration (helm pre-install/pre-upgrade Job, head=`0022`) |
+| **migration** | Alembic DB migration (helm pre-install/pre-upgrade Job, head=`0028`) |
 | **admin-chat-agent** | BI assistant on Bedrock AgentCore Runtime (not in EKS). Connected via `AGENTCORE_RUNTIME_ARN` env |
 
 ---
@@ -215,11 +253,11 @@ Examples:
 | `admin-chat-agent/` | BI assistant — Strands agents-as-tools + AgentCore Runtime |
 | `cost-recorder-worker/` | Redis Stream → Aurora cost recorder |
 | `notification-worker/` | Budget threshold alert worker |
-| `db/` | Alembic migration source (head=`0022`) |
+| `db/` | Alembic migration source (head=`0028`) |
 | `gateway-cli/` | User CLI (`gateway-cli`, `api-key-helper`, `statusline`) |
 | `gateway-clients/` | Claude-code/Codex container isolation utilities (`claude-box`/`codex-box` + `gw.sh`) |
 | `scripts/` | Onboarding scripts (macOS/Linux/Windows) + IAM scripts |
-| `deployment/charts/` | Helm chart + values (EKS Fargate dev/prod/loadtest + on-prem dev/prod) |
+| `deployment/charts/` | Helm chart + values: `values.yaml` (base) + EKS Fargate `{dev,prod,prod-loadtest}` (4 total). On-prem artifacts were removed in `83b4ffe` — EKS only |
 | `deployment/terraform/` | Terraform modules (VPC, EKS, Aurora, ElastiCache, Cognito, IRSA, ALB, ESO) |
 | `guides/` | Final guides (deployer/admin/user/quickstart) |
 

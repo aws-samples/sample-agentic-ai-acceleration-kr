@@ -36,7 +36,7 @@ def test_count_tokens_auth_required():
     resp = httpx.post(
         f"{GATEWAY_URL}/v1/messages/count_tokens",
         json={
-            "model": "claude-haiku-4-5",
+            "model": "claude-haiku-4-5-20251001",
             "messages": [{"role": "user", "content": "hi"}],
         },
         timeout=10,
@@ -54,7 +54,7 @@ def test_count_tokens_accepts_vk_and_returns_input_tokens(virtual_key):
             "anthropic-version": "2023-06-01",
         },
         json={
-            "model": "claude-haiku-4-5",
+            "model": "claude-haiku-4-5-20251001",
             "messages": [{"role": "user", "content": "hello world"}],
         },
         timeout=15,

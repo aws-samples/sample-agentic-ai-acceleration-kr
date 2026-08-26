@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
 # Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 #
-# provision_cowork_cross_account_role.sh — 905 계정에 cowork cross-account Mantle 역할 생성(멱등).
+# provision_cowork_cross_account_role.sh — 222 계정에 cowork cross-account Mantle 역할 생성(멱등).
 #
-# cowork 클라이언트는 Bedrock Mantle Opus 4.8 을 **별도 계정(905, 도쿄)** 에서 쓴다.
-# gateway-proxy(859 IRSA)가 이 역할을 AssumeRole 하여 Mantle bearer 를 발급받는다.
-# codex/claude-code 는 in-account(859)라 assume 불필요 — cowork 만 유일한 cross-account.
+# cowork 클라이언트는 Bedrock Mantle Opus 4.8 을 **별도 계정(222, 도쿄)** 에서 쓴다.
+# gateway-proxy(123 IRSA)가 이 역할을 AssumeRole 하여 Mantle bearer 를 발급받는다.
+# codex/claude-code 는 in-account(123)라 assume 불필요 — cowork 만 유일한 cross-account.
 #
-# 이 스크립트는 905 계정 자격증명으로 실행한다(gateway-proxy 계정 아님).
-#   AWS_ACCESS_KEY_ID/SECRET = 905 admin, 그 다음:
+# 이 스크립트는 222 계정 자격증명으로 실행한다(gateway-proxy 계정 아님).
+#   AWS_ACCESS_KEY_ID/SECRET = 222 admin, 그 다음:
 #   ./deployment/scripts/provision_cowork_cross_account_role.sh
 #
 # 대응물:
-#   - 859 쪽 AssumeRole 권한 = terraform modules/irsa (var.cowork_role_arn).
+#   - 123 쪽 AssumeRole 권한 = terraform modules/irsa (var.cowork_role_arn).
 #   - routing_profiles.account_role_arn(client=cowork) = migration 0009 (이 ARN 과 일치해야).
 #
-# 검증(생성 후, 859 pod 안에서):
+# 검증(생성 후, 123 pod 안에서):
 #   kubectl exec -n llm-gateway <gateway-proxy-pod> -- python3 -c \
 #     "import boto3;print(boto3.client('sts').assume_role(
 #       RoleArn='${COWORK_ROLE_ARN}',RoleSessionName='t',ExternalId='cowork-bedrock')['Credentials']['AccessKeyId'])"
 set -euo pipefail
 
 ROLE_NAME="${COWORK_ROLE_NAME:-llm-gateway-cowork-bedrock}"
-# 이 역할을 assume 할 gateway-proxy IRSA principal (859 dev). 여러 환경이면 공백구분으로 추가.
+# 이 역할을 assume 할 gateway-proxy IRSA principal (123 dev). 여러 환경이면 공백구분으로 추가.
 GATEWAY_PROXY_ROLE_ARNS="${GATEWAY_PROXY_ROLE_ARNS:-arn:aws:iam::123456789012:role/llm-gateway-dev-gateway-proxy-bedrock}"
 EXTERNAL_ID="${COWORK_EXTERNAL_ID:-cowork-bedrock}"
 

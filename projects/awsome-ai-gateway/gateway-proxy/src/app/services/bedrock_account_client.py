@@ -1,8 +1,8 @@
 # Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
-"""Cross-account Bedrock-runtime client broker (claude-code → 374 native).
+"""Cross-account Bedrock-runtime client broker (claude-code → 333 native).
 
 Bedrock NATIVE(boto3 invoke_model)는 Mantle 과 달리 cross-account 를 미지원했다
-(startup 에 in-account 859 클라이언트 고정). 이 브로커는 대상 계정 role 을 STS AssumeRole
+(startup 에 in-account 123 클라이언트 고정). 이 브로커는 대상 계정 role 을 STS AssumeRole
 하여 그 계정의 bedrock-runtime 클라이언트를 빌드·캐시한다. MantleCredentialBroker 의
 assume+캐시 패턴(mantle_credentials.py)을 미러하되, bearer 대신 boto3 클라이언트를 vend.
 

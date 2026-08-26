@@ -45,11 +45,11 @@ def _resolve_oidc(
             tokens = None
         cached_issuer = (getattr(tokens, "issuer_url", "") or "").rstrip("/")
         cached_client = getattr(tokens, "client_id", "") or ""
-        # The cache is only valid as an (issuer, client_id) pair. Borrowing just one
-        # half builds a combination that never existed, so api-key-helper enters OIDC
-        # mode and then dies in _get_valid_tokens with "cached tokens belong to a
-        # different IDP" (worse than the STS fallback — no VK at all). If an issuer is
-        # already given, borrow client_id only when the cache is for the same IDP.
+        # 캐시는 (issuer, client_id) 한 쌍으로만 유효하다. 한쪽만 빌려와 짝을 맞추면
+        # 존재하지 않는 조합이 만들어져, api-key-helper 가 OIDC 모드로 들어간 뒤
+        # _get_valid_tokens 에서 "cached tokens belong to a different IDP" 로 죽는다
+        # (STS 폴백보다 나쁘다 — VK 를 아예 못 받는다). issuer 가 이미 지정돼 있으면
+        # 캐시와 같은 IDP 일 때만 client_id 를 빌려온다.
         if cached_issuer and cached_client and issuer_url in ("", cached_issuer):
             if not issuer_url:
                 issuer_url, src = cached_issuer, "login cache"
@@ -153,19 +153,16 @@ def setup(
         click.echo(f"  OIDC Issuer:     {oidc_issuer}  (from {oidc_src})")
         click.echo(f"  OIDC Client ID:  {oidc_client}")
     else:
-        # Staying silent here drops api-key-helper into STS(IAM) mode, so the VK is
-        # issued against the AWS ARN instead of the IDP identity (the wrong user), or
-        # with no SSO session no VK is issued at all and Claude Code falls back to the
-        # 1P login screen. Warn visibly.
+        # 조용히 넘어가면 api-key-helper 가 STS(IAM) 모드로 떨어져 IDP 신원이 아닌
+        # AWS ARN 으로 VK 가 발급되거나(잘못된 사용자), SSO 세션이 없으면 VK 를 아예
+        # 못 받아 Claude Code 가 1P 로그인 화면으로 돌아간다. 반드시 눈에 보이게 경고.
         click.secho(
-            _("  OIDC:            (not set) — api-key-helper will run in STS(IAM) mode."),
+            "  OIDC:            (미설정) — api-key-helper 가 STS(IAM) 모드로 동작합니다.",
             fg="yellow",
         )
         click.secho(
-            _(
-                "                   To use IDP login: run 'gateway-cli login' and retry, or\n"
-                "                   pass --issuer-url / --client-id."
-            ),
+            "                   IDP 로그인을 쓰려면: gateway-cli login 후 재실행하거나\n"
+            "                   --issuer-url / --client-id 를 지정하세요.",
             fg="yellow",
         )
     click.echo("")

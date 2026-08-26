@@ -27,7 +27,7 @@ cd <repo>/gateway-clients
 
 ### 0-3. 게이트웨이 주소 확인 (이미 gw.sh 에 dev ALB 가 기본값으로 박혀 있음)
 ```bash
-# 기본값(dev): http://<ALB_DNS>
+# 기본값(dev): http://<GATEWAY_HOST>
 # 바꾸려면: export GW_URL="http://<게이트웨이 ALB>"  /  export ADMIN_URL="http://<admin-api ALB>"
 ```
 
@@ -58,7 +58,7 @@ cd <repo>/gateway-clients
 ### 방법 B — dev 테스트 헬퍼 (브라우저 없이, 가장 빠름 / 테스트 user 로 집계)
 dev 환경 전용. 인증 없이 테스트 VK 를 받아 `~/.gateway-vk` 에 저장한다.
 ```bash
-ADMIN_URL="http://<ALB_DNS>"
+ADMIN_URL="http://<ADMIN_API_HOST>"
 VK=$(curl -s -X POST "$ADMIN_URL/internal/test/issue-key" \
       -H "content-type: application/json" -d '{}' \
       | python3 -c "import sys,json; print(json.load(sys.stdin)['virtual_key'])")
@@ -131,7 +131,7 @@ cd ~/my-project
 > `alias gwcodex='<repo>/gateway-clients/gw.sh codex'` 를 **호스트가 아닌** 임시 셸에만 두고 싶으면
 > 그 터미널에서만 export. (호스트 영구 설정 변경 원치 않으면 ~/.zshrc 에 넣지 말 것)
 
-## 검증 기록 (859 dev)
+## 검증 기록 (123 dev)
 - claude-box → `/v1/messages` → Claude **HTTP 200** ("BOX-OK received")
 - codex-box → `/v1/responses` → GPT-5.5 **HTTP 200** (reasoning_tokens 포함)
 - VK 는 호스트 `~/.gateway-vk` 주입 → 호스트 환경 무변경 확인.

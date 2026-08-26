@@ -155,8 +155,8 @@ async def lifespan(app: FastAPI):
     provider_registry.register(ProviderType.BEDROCK, bedrock_adapter)
     provider_registry.register(ProviderType.OPENMODEL, openmodel_adapter)
 
-    # 12b. Mantle (Cowork cross-account) — broker assumes the 905 role at request time
-    # (no long-lived 905 keys held). Mantle is HTTP+bearer, NOT boto3 invoke_model.
+    # 12b. Mantle (Cowork cross-account) — broker assumes the 222 role at request time
+    # (no long-lived 222 keys held). Mantle is HTTP+bearer, NOT boto3 invoke_model.
     sts_client = boto3.client("sts", region_name=settings.mantle_assume_region)
     mantle_broker = MantleCredentialBroker(sts_client=sts_client)
     mantle_http = httpx.AsyncClient(
@@ -168,14 +168,14 @@ async def lifespan(app: FastAPI):
     provider_registry.register(ProviderType.BEDROCK_MANTLE, mantle_adapter)
 
     # 12c. Mantle OpenAI (Codex in-account) — same broker/http client, OpenAI Responses
-    # wire instead of Anthropic Messages. Codex's account == gateway IRSA account (859),
+    # wire instead of Anthropic Messages. Codex's account == gateway IRSA account (123),
     # so the broker uses the in-account credential path (routing_profiles.account_role_arn
     # IS NULL); no cross-account assume. Region (us-east-2) comes from the routing profile.
     mantle_openai_adapter = MantleOpenAIAdapter(http_client=mantle_http, broker=mantle_broker)
     provider_registry.register(ProviderType.BEDROCK_MANTLE_OPENAI, mantle_openai_adapter)
 
-    # 12c'. Cross-account Bedrock NATIVE (claude-code → 374). Assumes the 374 role at
-    # request time (no long-lived 374 keys), builds/caches a bedrock-runtime client from
+    # 12c'. Cross-account Bedrock NATIVE (claude-code → 333). Assumes the 333 role at
+    # request time (no long-lived 333 keys), builds/caches a bedrock-runtime client from
     # the temp creds. boto3 invoke_model, NOT Mantle bearer. Reuses the same STS assume
     # region + BotoConfig as the in-account client (streaming timeout parity). The router
     # only uses this when a routing profile has backend=invoke AND account_role_arn set;

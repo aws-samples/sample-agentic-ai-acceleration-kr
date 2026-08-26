@@ -76,6 +76,18 @@ def mock_redis() -> AsyncMock:
         yield  # pragma: no cover — make this an async generator
 
     redis.scan_iter = MagicMock(side_effect=lambda *a, **kw: _empty_scan())
+
+    # Pipeline support: services buffer writes via
+    #   pipe = redis.pipeline(transaction=False); pipe.setex(...); await pipe.execute()
+    # redis-py's async pipeline buffers commands *synchronously* (they return the
+    # pipeline for chaining); only execute() is awaited. Mirror that: setex/sadd are
+    # sync MagicMocks (no unawaited-coroutine warnings, and no code path awaits them
+    # directly — every caller goes through the pipe), execute() is awaitable, and
+    # pipeline() returns the same mock so buffered calls record on mock_redis.setex/.sadd.
+    redis.setex = MagicMock()
+    redis.sadd = MagicMock()
+    redis.execute = AsyncMock()
+    redis.pipeline = MagicMock(return_value=redis)
     return redis
 
 
@@ -96,7 +108,7 @@ def db_session_factory():
     The factory returns a context manager yielding a session whose `add_all` calls
     are recorded so tests can assert batch INSERT behavior. We do NOT use a real DB
     here because AuditLog uses Postgres-specific schema=audit and JSONB types.
-    Real-database integration for the batch insert has no coverage yet.
+    Real DB integration is covered separately (Finch e2e in Task A5).
     """
     from contextlib import asynccontextmanager
 

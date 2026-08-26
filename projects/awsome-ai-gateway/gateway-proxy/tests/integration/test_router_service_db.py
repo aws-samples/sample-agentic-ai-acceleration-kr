@@ -67,6 +67,8 @@ async def test_list_active_returns_seeded_3(db_session):
     rs = RouterService()
     models = await rs.list_active_models(redis=None, db=db_session)
     aliases = {m.alias for m in models}
+    # 실제 시드(db/init/03_seed_data.sql)에 존재하는 정식 alias 이름으로 검증.
+    # (과거 짧은 이름 claude-opus-4-6 / claude-haiku-4-5 는 시드에 없었음.)
     assert "claude-sonnet-4-6" in aliases
-    assert "claude-opus-4-6" in aliases
-    assert "claude-haiku-4-5" in aliases
+    assert "global.anthropic.claude-opus-4-6-v1" in aliases
+    assert "claude-haiku-4-5-20251001" in aliases

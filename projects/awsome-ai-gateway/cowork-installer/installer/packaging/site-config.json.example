@@ -1,0 +1,31 @@
+{
+  "__comment": [
+    "gateway-cli 빌드 고정값 (guideline 1-1). 이 파일을 수정한 뒤 빌드하면 build.ps1 이",
+    "값을 읽어 .exe 에 내장합니다. 경로 백슬래시는 \\\\ 로 이스케이프하세요.",
+    "빈 문자열(\"\")은 site_defaults.py 기본값으로 폴백됩니다.",
+    "환경별 식별자(OIDC 등)를 담으므로 커밋 금지 — .gitignore 에 이미 제외되어 있습니다.",
+    "우선순위: build.ps1 -Param > 환경변수 GATEWAY_CLI_DEFAULT_* > 이 파일 > site_defaults.py"
+  ],
+
+  "oidcIssuerUrl": "",
+  "oidcClientId": "",
+
+  "gatewayUrl": "",
+  "adminApiUrl": "",
+
+  "caBundle": "",
+
+  "__cowork_comment": [
+    "Cowork (Claude Desktop) 전용 고정값. cli/cowork_config + cli/cowork_ca 에 내장됩니다.",
+    "coworkGatewayHttpsUrl: 앱 inference base (inferenceGatewayBaseUrl). adminApiUrl 과 다름 —",
+    "  반드시 공개 신뢰(CloudFront) HTTPS origin (앱이 HTTP 를 거부, originPinned).",
+    "orgUuid: deploymentOrganizationUuid 텔레메트리 태그 (uuidgen 로 조직당 한 번 생성).",
+    "expectedCaSha256: cowork_ca 가 설치를 허용하는 사내 CA 의 SHA-256 지문 (대문자 hex, 구분자 없음).",
+    "  빈 값 = 핀 없음(dev). 값이 있으면 지문 불일치 PEM 설치를 거부합니다.",
+    "coworkModels: inferenceModels 로스터 (쉼표 구분, 첫 항목이 기본값). 빈 값이면 FALLBACK_MODELS."
+  ],
+  "coworkGatewayHttpsUrl": "",
+  "orgUuid": "",
+  "expectedCaSha256": "",
+  "coworkModels": ""
+}

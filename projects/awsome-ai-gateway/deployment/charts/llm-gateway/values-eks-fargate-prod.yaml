@@ -40,6 +40,17 @@ database:
     notificationWorkerUser: "gateway"
     passwordSecretName: "llm-gateway-db"
     sslMode: "require"
+    # migration Job 의 master 비번을 RDS 관리형 시크릿에서 **직접** 가져온다.
+    # 왜: 수동 /llm-gateway/prod/db:master_password 에 값을 복사해 두는 방식은 관리형
+    # 시크릿이 7일마다 자동 로테이션되므로(RotationEnabled=true) 반드시 어긋난다 —
+    # 실제로 두 값이 어긋난 드리프트를 겪었고, 그 상태로 helm upgrade 하면
+    # 마이그레이션 Job 이 인증에 실패한다.
+    # dev 에서 수동 값을 고의로 오염시킨 음성 대조군으로 이 경로의 드리프트 내성을
+    # 증명했다(rev83 통과). 이름은 describe-db-clusters 의 MasterUserSecret.SecretArn.
+    # ⚠️ external-secrets IRSA 정책에 secret:rds!cluster-* 읽기 권한이 필요
+    #    (terraform modules/irsa/main.tf 에 이미 선언 — 라이브 정책 v2 로 반영).
+    masterPasswordRemoteKey: "rds!cluster-<uuid>"
+    masterPasswordRemoteProperty: "password"
     # pod 당 pool 50 (base 20 + burst 30). Aurora r7g.large max_connections ≈ 1800.
     # HPA max 30 × 50 = 1,500 → 한도의 83% 안전. RDS Proxy multiplex 로 실제는 더 여유.
     # VK 조회는 Redis cache hit 가 주경로라 실제 사용량은 100 내외.
@@ -144,7 +155,16 @@ gatewayProxy:
     # ⚠️ 태그 필수 명시 — 비우면 Chart.appVersion(1.0.43)로 폴백. chart의 readinessProbe(/health/ready)는
     # 1.0.51-resilience 이상에서만 200 응답(구버전은 401) → 반드시 resilience 이미지와 정합 유지.
     # 1.0.52-workers: CMD ${WORKERS:-4} 로 WORKERS env 활성화(0.5 vCPU 4워커 기아 → 2워커).
-    tag: "1.0.52-workers"
+    # 1.0.53-streamfix: stream_idle_timeout / stream_disconnect_drain_timeout 배선(그전엔
+    #   config 에만 있고 streaming.py 가 읽지 않는 죽은 설정) + 타임아웃·예외 경로에서
+    #   usage/billing 이 유실되던 것을 usage_fired 멱등 가드로 수정(A-1). 330 유닛 통과.
+    # 1.0.54-phase2gw: 레포 HEAD 의 gateway-proxy 미배포분 6파일 반영(dev 와 동일 이미지).
+    #   ⚠️ prod 행동 델타는 **로깅 추가뿐**임을 실측 확인: ① mantle_adapter /
+    #   mantle_openai_adapter 는 비200 warning 에 error_body(500B) 추가 = 응답경로 무변경,
+    #   ② web_search_loop · agentcore_mcp_client 변경은 agentcore_gateway_url 이 빈 값이면
+    #      도달 불가(mcp_client None), ③ thinking_normalizer / tool_filter 신규 2개는
+    #      레포 전체에 호출처 0(미배선).
+    tag: "1.0.54-phase2gw"
   serviceAccount:
     annotations:
       # CHANGE_ME (terraform output): IRSA role ARN. terraform output -raw gateway_proxy_role_arn
@@ -155,6 +175,13 @@ gatewayProxy:
     # 2 = GIL 회피(멀티프로세스)와 CPU 기아 회피의 균형. burst 시 limit 2 vCPU 여유.
     # (과거엔 Dockerfile 하드코딩 4 라 이 값이 죽은 설정이었음 — 부하테스트 p95 숨은 원인.)
     WORKERS: "2"
+  # SSE 스트리밍 타임아웃. prod ALB idle_timeout=600s(:114) 보다 60s 아래로 둔다 —
+  # 같거나 크면 ALB 가 먼저 끊어 클라이언트가 깔끔한 SSE 에러 대신 truncated stream 을
+  # 본다. prod 는 dev(300s) 보다 ALB 상한이 크므로 idleTimeout 도 그만큼 여유를 준다
+  # (extended thinking 이 긴 요청을 끊지 않도록). ALB 값 변경 시 함께 조정할 것.
+  streaming:
+    idleTimeout: 540
+    disconnectDrainTimeout: 30
   resources:
     requests:
       cpu: "500m"
@@ -182,6 +209,32 @@ gatewayProxy:
 
 adminApi:
   replicaCount: 3
+  image:
+    # ⚠️ 태그 필수 명시. 여기가 비어 있던 탓에 prod 는 Chart.appVersion(1.0.43-rebrand) 로
+    # 폴백하도록 렌더되는데, 라이브는 `kubectl set image` 로 1.0.52-phase2fixes 가 올라가
+    # **차트와 클러스터가 어긋난 상태**였다(managedFields: kubectl-set / 2026-07-20).
+    # 그 상태에서 helm upgrade 를 돌리면 prod admin-api 가 한 달 전 이미지로 역행한다.
+    # → 이제 명시해서 차트가 곧 진실이 되게 한다. `kubectl set image` 로 prod 를 바꾸지 말 것.
+    # 1.0.65-kstfix: KST 기간 필터 non-sargable 제거(86.7ms→7.9ms, buffers 15,373→1,811) +
+    #   생산성/Git 지표 UTC 비닝을 비용(KST)과 통일(A-2/E-1). 회귀 대조 신규 0.
+    # 1.0.66-kstdefault: E-1 잔존 4곳(my/budget·my/usage·analytics/models·budgets team
+    #   allocation)이 date.today()(=pod TZ UTC)로 기본 period 를 정해 매월 1일 KST
+    #   00~09시에만 지난달 지표가 보이던 것 수정 → current_kst_period() 단일화(5개 라우터).
+    #   + period 형식 오류를 400(ValidationError)으로. 회귀 대조 신규 0.
+    # 1.0.67-roifix: ⚠️ 1.0.66 의 **스케줄러 회귀 수정** — 1.0.66 에 머무르지 말 것.
+    #   roi_aggregator 의 헬퍼 import 가 aggregate_usage() 안에만 있고 호출은
+    #   _aggregate_productivity() 에도 있어(함수 로컬 바인딩은 형제 함수에 안 미친다)
+    #   ROI 집계가 15분마다 `NameError` 로 전부 실패했다 — prod/dev 라이브 로그로 실측.
+    #   pod 는 Running, API 도 정상이라 겉으론 무증상이고 ROI 지표만 갱신이 멈춘다.
+    #   유출 원인: 가드 테스트가 소스를 문자열 grep 해서 버그 상태에서도 통과했다
+    #   → 이제 AST 로 "호출 지점에서 이름이 해석되나"를 본다(음성대조군으로 확인).
+    #   함께 prod E2E 에서 실측된 2건: period='26-08'/'2026-8' 이 자리수 미검증으로 통과해
+    #   **200 + 전부 0**(서기 26년 조회), '9999-12' 는 맨 ValueError 로 **500** →
+    #   정규식 + 연범위(2000~2100) 검증으로 둘 다 400 통일.
+    #   그리고 E-1 잔존 2곳: scheduler/main.py(ROI 행을 실제로 **쓰는** cron)·internal.py 가
+    #   UTC 월이라, 읽는 쪽만 KST 인 상태면 매월 1일 KST 00~09시에 새 달 행이 아예 생성되지
+    #   않아 지표 전체가 0 으로 보인다(한쪽만 고치면 더 나빠지는 경우).
+    tag: "1.0.67-roifix"
   serviceAccount:
     annotations:
       # CHANGE_ME (terraform output): IRSA role ARN. terraform output -raw admin_api_role_arn
@@ -206,7 +259,7 @@ adminApi:
     # 고객 로그인 설정 필요 반드시 "false" 로 복구.
     DEV_LOGIN_ENABLED: "true"
     # CHANGE_ME (terraform output): Cognito User Pool ID. terraform output -raw cognito_user_pool_id
-    COGNITO_USER_POOL_ID: "ap-northeast-2_XXXXXXXXX"
+    COGNITO_USER_POOL_ID: ""   # e.g. ap-northeast-2_XXXXXXXXX
     COGNITO_REGION: "ap-northeast-2"
     COGNITO_SYNC_DEACTIVATE_MISSING: "true"
 
@@ -214,7 +267,7 @@ adminApi:
   oidc:
     enabled: true
     # CHANGE_ME (terraform output): cognito_issuer_url. 형식 https://cognito-idp.{region}.amazonaws.com/{pool_id}
-    issuerUrl: "https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_XXXXXXXXX"
+    issuerUrl: ""   # e.g. https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_XXXXXXXXX
     audience: ""               # Cognito access_token 은 aud 없음 → 비워둠
     providerName: "oidc:cognito"
     groupsClaim: "cognito:groups"
@@ -225,9 +278,9 @@ adminApi:
 
   adminBootstrap:
     # CHANGE_ME (org-specific): 첫 운영자 이메일. 이 사용자가 ClaudeAdmin 으로 승격됨.
-    # 본 deliverable 의 prod 환경 운영자 이메일 (org-specific 값으로 교체).
+    # 본 deliverable 의 prod 환경 운영자는 kyutae-ai@amazon.com.
     emails:
-      - "admin@example.com"
+      - "kyutae-ai@amazon.com"
     groups:
       - "ClaudeAdmin"
 
@@ -236,7 +289,10 @@ adminUi:
   image:
     # ⚠️ 태그 필수 명시 — 비우면 Chart.appVersion(1.0.43-rebrand)로 폴백되어 다운그레이드됨.
     # install-eks.sh 는 image.tag 를 --set 으로 주입하지 않으므로 전적으로 이 값에 의존.
-    tag: "1.0.97-brand"   # 브랜드명 'AWSome AI Gateway' 반영본 (dev 검증 후 prod 승인 배포)
+    # 1.0.99-modelform: ModelCreateSchema 의 max_tokens/context_window 제거 — 폼에 입력란이
+    #   없고 백엔드·DB 에도 대응 필드가 없어 required 로 남으면 safeParse 가 항상 실패,
+    #   모델 등록/편집이 100% 막히던 것 수정(modelfix 1.0.98·브랜드 1.0.97 포함).
+    tag: "1.0.99-modelform"
   resources:
     requests:
       cpu: "300m"
@@ -254,6 +310,14 @@ adminUi:
     DEV_LOGIN_ENABLED: "true"
 
 scheduler:
+  image:
+    # ⚠️ 태그 필수 명시(그전엔 없어서 appVersion 1.0.43-rebrand 폴백 — prod 라이브도 실제로
+    # 1.0.43-rebrand 로 돌고 있었다). admin-api 이미지를 공유하므로 **adminApi.image.tag 와
+    # 항상 같은 값**으로 유지한다 — roi_aggregator 가 KST 비닝 수정(A-2/E-1) 대상이라
+    # 어긋나면 API 는 새 로직, 스케줄러는 옛 로직으로 집계해 지표가 갈린다.
+    # ⚠️ 1.0.67-roifix 는 특히 이 값이 핵심이다: 고쳐진 NameError 는 **스케줄러 프로세스에서만**
+    # 터지는 경로라(API 는 그 함수를 타지 않는다) adminApi 만 올리면 ROI 집계는 계속 실패한다.
+    tag: "1.0.67-roifix"
   resources:
     requests:
       cpu: "250m"
@@ -264,6 +328,10 @@ scheduler:
 
 notificationWorker:
   replicaCount: 2
+  # 태그 명시. 이번 픽스 대상이 아니므로 라이브와 동일한 1.0.43-rebrand 를 고정한다
+  # (비워두면 appVersion 폴백 — 지금은 값이 같아 우연히 맞지만 appVersion 이 바뀌면 함께 움직인다).
+  image:
+    tag: "1.0.43-rebrand"
   serviceAccount:
     annotations: {}
   resources:
@@ -286,6 +354,21 @@ notificationWorker:
 
 costRecorderWorker:
   replicaCount: 3
+  # 태그 명시(그전엔 없어서 appVersion 폴백 — prod 라이브도 1.0.43-rebrand 로 돌고 있었다).
+  # 1.0.47-websearch: dev 와 통일. 선결조건이던 마이그레이션이 끝나 이제 적용한다
+  #   (prod alembic_version=0028, usage.usage_logs.web_search_count 존재 실측).
+  #   1.0.43 이미지의 INSERT 는 **컬럼 4개를 아예 빼고** 기록해 왔다 — 라이브 컨테이너의
+  #   batch_flusher.py 를 직접 열어 확인: reasoning_tokens / web_search_count /
+  #   availability_fallback_from / client 이 INSERT 목록에 없다. 즉 컬럼이 DB 에 생긴
+  #   뒤에도 이 워커는 계속 기본값(0/NULL)만 남겨 **조용히 0** 인 지표가 된다
+  #   (에러 로그가 없어서 무증상 — prod 로그 에러 0건인데도 데이터가 비어 있는 이유).
+  #   dev 는 같은 이미지로 15,879행에 reasoning_tokens 전건 + web_search 합 115 를
+  #   실제로 기록 중이라 실효성이 증명된다.
+  #   ⚠️ ttft_ms 는 이 이미지에도 **없다**(레포 HEAD 소스에는 있으나 이미지 미빌드) —
+  #   dev 15,879행 중 ttft_ms 채워진 행 0 으로 확인. TTFT 지표는 cost-recorder 재빌드가
+  #   필요하며 이번 범위 밖이다.
+  image:
+    tag: "1.0.47-websearch"
   resources:
     requests:
       cpu: "250m"
@@ -297,3 +380,34 @@ costRecorderWorker:
     enabled: true
     minReplicas: 3
     maxReplicas: 6
+
+# ============================================================================
+# DB migration hook
+# ----------------------------------------------------------------------------
+# ⚠️ 그전에는 이 블록 자체가 없어서 Chart.appVersion(1.0.43-rebrand) 로 폴백했다. 그 이미지의
+# alembic 은 revision 0023 이후를 모르므로 head 까지 올릴 수 없다 → 반드시 명시한다.
+#
+# ⚠️ **prod DB 는 현재 revision 0004 다** (2026-08-20 실측, dev 는 0022). 즉 0005~0028 의
+# 24 단계가 한 번에 적용된다. prod 는 사실상 미사용 상태 —  users 4 / virtual_keys 2 /
+# usage_logs 2 / audit_logs 3 행, 최근 VK 발급 2026-05-18. 그래서 데이터 위험은 작지만
+# 스키마 변화 폭은 dev(0022→0028, 6단계)보다 훨씬 크다. dev 에서 head 까지 검증한 뒤 적용한다.
+#
+# 이 24 단계에 포함되는 파괴적/비가역 항목:
+#   - 0024: 활성 config 중복 제거(비활성화)는 **비가역** — downgrade 는 인덱스만 drop.
+#           적용 전 prod 활성 중복을 세어 0 건임을 확인해야 한다(dev 는 0 건 실측).
+#   - 0009/0017/0022/0028: routing_profiles 데이터 SET (Mantle/codex/333 x-account/GPT-5.6).
+#   - 0026: CREATE INDEX (CONCURRENTLY 아님 — env.py 가 transaction_per_migration=True)
+#           → 빌드 동안 usage_logs 쓰기 잠금. prod usage_logs 는 2 행이라 즉시 완료.
+# ⚠️ 1.0.50-models 로는 배포하지 말 것 — prod(0004) 에서 실제로 실패한 이미지다.
+# 02_create_tables.sql 이 budget_configs 의 COALESCE(client,'') 유니크 인덱스를
+# `ADD COLUMN IF NOT EXISTS client` backfill **보다 먼저** 실행해서
+# `column "client" does not exist` 로 죽었다(init SQL 145 행). CREATE TABLE IF NOT EXISTS
+# 는 테이블이 이미 있으면 통째로 no-op 이라 인라인 client 컬럼이 생기지 않기 때문 —
+# 즉 fresh DB 와 dev(≥0011)에서는 재현되지 않고 **부분 마이그레이션된 DB(=prod 0004)에서만**
+# 터진다. pre-upgrade hook 이라 워크로드/DB 변경 0 으로 안전하게 중단됐다(helm rev 7 실패).
+# 1.0.51-initorder 는 두 backfill 을 각자의 인덱스 앞으로 옮긴 수정본이고,
+# prod 의 실제 0004 스키마를 복제한 일회용 pgvector/pg16 에서 0004→0028 24 단계를 완주 증명했다
+# (음성대조군: 같은 DB 에 1.0.50 을 돌려 동일 지점 실패 재현).
+migration:
+  image:
+    tag: "1.0.51-initorder"

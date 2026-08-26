@@ -108,7 +108,7 @@ async def _select_backend(*, loader, router_service, redis, db, client, requeste
     that model (cowork → cowork-opus), ignoring the requested alias.
     Rule B (Claude Code alias opt-in): if the requested alias's provider is
     BEDROCK_MANTLE, route to Mantle using the requested alias. The profile (if any)
-    supplies region/account_role_arn (NULL = in-account 374).
+    supplies region/account_role_arn (NULL = in-account 333).
     Everyone else → the existing Bedrock path.
     """
     profile = await loader.load(redis, db, client)
@@ -219,7 +219,7 @@ async def messages(request: Request) -> StreamingResponse | JSONResponse:
             content={"error": {"type": "not_found_error", "message": str(e)}},
         )
 
-    # cross-account(claude-code→374) 일 때만 Bedrock 분기에서 profile.region 으로 설정.
+    # cross-account(claude-code→333) 일 때만 Bedrock 분기에서 profile.region 으로 설정.
     # 분기 전 명시 초기화 → 아래 _rewrite 클로저가 locals() 리플렉션 없이 직접 참조(리팩터 안전).
     _region_for_rewrite = None
     if decision.provider == ProviderType.BEDROCK_MANTLE:
@@ -240,7 +240,7 @@ async def messages(request: Request) -> StreamingResponse | JSONResponse:
             mantle_body["stream"] = True
         body = json.dumps(mantle_body).encode()
     else:
-        # Bedrock native. cross-account(claude-code→374): backend=invoke AND account_role_arn
+        # Bedrock native. cross-account(claude-code→333): backend=invoke AND account_role_arn
         # 이면 대상 계정 role 을 assume 한 bedrock-runtime 클라이언트로 호출. account_role_arn
         # NULL(codex/기본 in-account)이면 기존 in-account adapter 그대로(zero-regression).
         _prof = decision.profile
@@ -253,7 +253,7 @@ async def messages(request: Request) -> StreamingResponse | JSONResponse:
                 adapter = BedrockAdapter(
                     bedrock_client=None,
                     client_resolver=lambda: _provider.get_client(_role, _reg, _ext),
-                    fallback_client=getattr(_inacct_adapter, "_client", None),  # assume 실패 시 859 폴백
+                    fallback_client=getattr(_inacct_adapter, "_client", None),  # assume 실패 시 123 폴백
                 )
                 _region_for_rewrite = _prof.region
             else:
@@ -350,7 +350,7 @@ async def messages(request: Request) -> StreamingResponse | JSONResponse:
                 {"path_suffix": "invoke"},
             )
 
-    # cross-account(374) 면 profile.region, 아니면 None (분기 전 초기화됨).
+    # cross-account(333) 면 profile.region, 아니면 None (분기 전 초기화됨).
     def _rewrite(pmid: str) -> str:
         if is_mantle:
             return pmid
@@ -567,9 +567,9 @@ async def messages(request: Request) -> StreamingResponse | JSONResponse:
 async def count_tokens(request: Request) -> JSONResponse:
     """Anthropic count_tokens — proxies to Bedrock CountTokens (no inference, no cost)."""
     # count_tokens 는 Bedrock native 경로 유지(Mantle/Cowork 는 Phase 3에서 VK scope 후 라우팅).
-    # claude-code→374 cross-account: CountTokens 도 invoke 와 동일 계정(374)에서 실행되도록
-    # 라우팅 프로파일을 읽어 _xacct 면 cross-account adapter 사용(assume 실패 시 859 투명 폴백).
-    # → invoke=374 / count_tokens=859 로 갈리는 무음 계정 스플릿 방지(어드버서리 리뷰 #4).
+    # claude-code→333 cross-account: CountTokens 도 invoke 와 동일 계정(333)에서 실행되도록
+    # 라우팅 프로파일을 읽어 _xacct 면 cross-account adapter 사용(assume 실패 시 123 투명 폴백).
+    # → invoke=333 / count_tokens=123 로 갈리는 무음 계정 스플릿 방지(어드버서리 리뷰 #4).
     state = request.scope.get("state", {})
     auth_context = state.get("auth_context")
     client = state.get("client")
@@ -644,8 +644,8 @@ async def count_tokens(request: Request) -> JSONResponse:
     # — use the base foundation-model ID instead.
     count_tokens_model_id = _strip_region_prefix(model_config.provider_model_id)
 
-    # cross-account(claude-code→374): invoke 와 동일 계정에서 CountTokens 실행 → 계정 스플릿 방지.
-    # account_role_arn NULL(codex/기본)이면 in-account adapter 그대로(무회귀). assume 실패 시 859 폴백.
+    # cross-account(claude-code→333): invoke 와 동일 계정에서 CountTokens 실행 → 계정 스플릿 방지.
+    # account_role_arn NULL(codex/기본)이면 in-account adapter 그대로(무회귀). assume 실패 시 123 폴백.
     _ct_xacct = bool(
         _ct_profile and _ct_profile.backend == "invoke" and _ct_profile.account_role_arn
     )

@@ -278,14 +278,15 @@ class TestFallsBackOn502ThenSucceeds:
 
 
 # ===========================================================================
-# TC-2: 403 does NOT fall back
+# TC-2: scope denial does NOT fall back (400 invalid_request_error)
 # ===========================================================================
 
-class TestFourOhThreeDoesNotFallBack:
-    """A 403 from key-scope check must propagate immediately; second model never invoked."""
+class TestScopeDenialDoesNotFallBack:
+    """A scope denial from key-scope check must propagate immediately as 400
+    invalid_request_error (commit 7907167); second model never invoked."""
 
     @pytest.mark.asyncio
-    async def test_403_does_not_fall_back(self):
+    async def test_scope_denial_does_not_fall_back(self):
         original_alias = "claude-sonnet-4-6"
         fallback_alias = "claude-haiku-4-5"
 
@@ -319,7 +320,14 @@ class TestFourOhThreeDoesNotFallBack:
         with patch("app.services.fallback_loop.enforce_rate_limits", side_effect=_fake_enforce):
             result = await run_fallback_loop(**kwargs)
 
-        assert result.status == 403
+        # Scope denial on the ORIGINAL candidate propagates as 400
+        # invalid_request_error (commit 7907167 / DEVLOG A-7): Claude Code CLI
+        # treats a 403 as an auth failure and pops a /login re-auth prompt, so a
+        # model-ACL denial (valid key, wrong model) must NOT be a 403. The 400
+        # body is regression-locked by tests/regression/test_scope_denial_400.py.
+        assert result.status == 400
+        body = json.loads(result.payload[0])
+        assert body["error"]["type"] == "invalid_request_error"
         # Adapter was never called (permission denied before invoke)
         adapter.invoke.assert_not_awaited()
         # Only one scope check (for the original); fallback never attempted

@@ -1,5 +1,4 @@
-# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
-# SPDX-License-Identifier: MIT-0
+# Copyright 2026 © Amazon.com and Affiliates.
 """Tests for strip_unsupported_tools."""
 
 from app.services.tool_filter import strip_unsupported_tools

@@ -260,7 +260,7 @@ class AgentCoreMcpClient:
                 {
                     "protocolVersion": _MCP_PROTOCOL_VERSION,
                     "capabilities": {},
-                    "clientInfo": {"name": "llm-gateway", "version": "1.0"},
+                    "clientInfo": {"name": "awsome-ai-gateway", "version": "1.0"},
                 },
             )
             # Per MCP: notify the server the handshake is complete before listing.

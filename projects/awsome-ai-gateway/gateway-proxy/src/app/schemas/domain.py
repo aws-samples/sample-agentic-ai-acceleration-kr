@@ -23,8 +23,8 @@ class Role(str, Enum):
 class ProviderType(str, Enum):
     BEDROCK = "BEDROCK"
     OPENMODEL = "OPENMODEL"
-    BEDROCK_MANTLE = "BEDROCK_MANTLE"  # Cowork → 905 Bedrock Mantle (Tokyo Opus 4.8)
-    BEDROCK_MANTLE_OPENAI = "BEDROCK_MANTLE_OPENAI"  # Codex → 859 Bedrock Mantle GPT-5.5 (Ohio, Responses API)
+    BEDROCK_MANTLE = "BEDROCK_MANTLE"  # Cowork → 222 Bedrock Mantle (Tokyo Opus 4.8)
+    BEDROCK_MANTLE_OPENAI = "BEDROCK_MANTLE_OPENAI"  # Codex → 123 Bedrock Mantle GPT-5.5 (Ohio, Responses API)
 
 
 class ApiFormat(str, Enum):

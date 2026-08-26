@@ -106,9 +106,54 @@ class MockJWTVerifier(JWTVerifier):
             raise JWTError("Invalid token")
 
 
+def _mock_db_result() -> MagicMock:
+    """A benign SQLAlchemy Result mock: every access path yields 'empty'.
+
+    Router-level integration tests mock the repositories, but some services also
+    issue queries directly on the session (e.g. KeyService.list_keys' email
+    enrichment select, or a real UserRepository.get_user via session.get). Those
+    calls must not reach a real Postgres — return an empty result for all shapes.
+    """
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = None
+    result.scalar_one.return_value = 0  # COUNT/SUM aggregates → 0 (analytics repo)
+    result.scalar.return_value = 0
+    result.one_or_none.return_value = None
+    result.all.return_value = []
+    result.first.return_value = None
+    result.__iter__ = MagicMock(return_value=iter([]))  # `for row in result` → no rows
+    scalars = MagicMock()
+    scalars.all.return_value = []
+    scalars.first.return_value = None
+    result.scalars.return_value = scalars
+    return result
+
+
+async def _mock_get_db_session():
+    """Override for app.core.db.get_db_session — a mock AsyncSession.
+
+    The integration conftest promises "mocked DB" but the routers depend on the
+    real get_db_session (which builds a live asyncpg engine). Override it so no
+    router test ever opens a real connection; repository-level patches still take
+    precedence where a test sets them.
+    """
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=_mock_db_result())
+    session.get = AsyncMock(return_value=None)
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+    yield session
+
+
 @pytest.fixture
 def test_app() -> FastAPI:
+    from app.core.db import get_db_session
+
     app = _build_test_app()
+    # Mocked DB: routers must never touch a real Postgres in router-level tests.
+    app.dependency_overrides[get_db_session] = _mock_get_db_session
 
     # Mock dependencies
     mock_redis = AsyncMock()
@@ -116,6 +161,13 @@ def test_app() -> FastAPI:
     mock_redis.get = AsyncMock(return_value=None)
     mock_redis.delete = AsyncMock()
     mock_redis.ping = AsyncMock()
+    mock_redis.srem = AsyncMock()
+    # Pipeline support (KeyService.issue_key buffers setex/sadd through a pipe):
+    # redis-py's async pipeline buffers commands synchronously, only execute() awaits.
+    mock_redis.setex = MagicMock()
+    mock_redis.sadd = MagicMock()
+    mock_redis.execute = AsyncMock()
+    mock_redis.pipeline = MagicMock(return_value=mock_redis)
 
     encryption = AESEncryptionService(TEST_ENCRYPTION_KEY)
     cache_mgr = CacheInvalidationManager(mock_redis)
