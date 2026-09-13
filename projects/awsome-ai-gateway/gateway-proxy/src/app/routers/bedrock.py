@@ -16,6 +16,7 @@ from app.observability.provider_metrics import (
     record_provider_request,
 )
 from app.schemas.domain import ProviderType
+from app.services.fallback_loop import release_reservations
 from app.services.router_service import RouterService
 
 logger = structlog.get_logger(__name__)
@@ -219,6 +220,9 @@ async def _handle_bedrock(request: Request, model_id: str, path_suffix: str, str
             record_provider_error(
                 _pm, _pm_labels, status=STATUS_STREAM_ERROR, error_code=type(e).__name__
             )
+            # 예약을 되돌린 뒤 재던진다 — 스트림이 시작되지 못했으므로 정산할 usage 가
+            # 영원히 오지 않는다.
+            await release_reservations(redis=redis, state=state, auth_context=auth_context)
             raise
 
         async def stream_with_cost():
@@ -271,6 +275,7 @@ async def _handle_bedrock(request: Request, model_id: str, path_suffix: str, str
             )
         except Exception as e:
             record_provider_error(_pm, _pm_labels, status="exception", error_code=type(e).__name__)
+            await release_reservations(redis=redis, state=state, auth_context=auth_context)
             raise
         if status >= 400:
             # 예외가 아니라 상태코드로 실패가 오는 경우(어댑터가 응답을 그대로 넘긴다).
@@ -292,6 +297,11 @@ async def _handle_bedrock(request: Request, model_id: str, path_suffix: str, str
                 # returns it in the headers dict; not forwarded to the client).
                 bedrock_request_id=(headers or {}).get("x-amzn-requestid"),
             )
+        else:
+            # ⚠️ finalize 를 타지 않는 경로다(상류 4xx/5xx, 또는 usage 가 비어 온 응답).
+            #    이 라우트에는 폴백 루프가 없어 그쪽 unwind 도 돌지 않으므로, 여기서
+            #    되돌리지 않으면 예약이 창(window) 끝까지 사용자 한도를 물고 있다.
+            await release_reservations(redis=redis, state=state, auth_context=auth_context)
         return JSONResponse(
             status_code=status,
             content=__import__("json").loads(response_body) if response_body else {},

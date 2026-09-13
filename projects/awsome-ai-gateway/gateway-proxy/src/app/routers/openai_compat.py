@@ -19,6 +19,7 @@ from app.services.body_log_records import (
     provider_name,
     resolve_body_logger,
 )
+from app.services.fallback_loop import release_reservations
 from app.services.router_service import ModelInactiveError, RouterService
 from app.services.streaming import openai_sse_stream
 
@@ -332,6 +333,12 @@ async def _handle_openai(request: Request, path: str):
                 client=client,
             )
 
+        # ⚠️ 상류가 비-2xx 면 SSE 제너레이터는 오류 프레임만 내보내고 on_usage 는 발화하지
+        #    않는다 → finalize 가 돌지 않아 예약이 창(window) 끝까지 남는다. 스트림을
+        #    클라이언트에게 넘기기 **전에** 되돌린다(release_reservations 는 멱등).
+        if not (200 <= status < 300):
+            await release_reservations(redis=redis, state=state, auth_context=auth_context)
+
         async def _log_body_stream(sse_text: str, log_status: str) -> None:
             """스트림 종료 시 본문을 큐에 넣는다. 절대 블로킹하지 않는다(enqueue 만)."""
             bl = getattr(request.app.state, "body_logger", None)
@@ -396,6 +403,12 @@ async def _handle_openai(request: Request, path: str):
                 bedrock_request_id=(resp_headers or {}).get("x-amzn-requestid"),
                 client=client,
             )
+        else:
+            # ⚠️ finalize 를 타지 않는 경로다(상류 4xx/5xx, 또는 usage 가 비어 온 응답).
+            #    그러면 enforce_rate_limits 가 잡아 둔 TPM/CPM/CPH 예약을 되돌리는 곳이
+            #    아무 데도 없다 — 이 라우트에는 폴백 루프가 없어 그쪽 unwind 도 안 돈다.
+            #    400 을 연속으로 받은 사용자가 실제 지출 0 으로 자기 한도를 소진했다.
+            await release_reservations(redis=redis, state=state, auth_context=auth_context)
 
         # 본문 로깅(성공 **및** 오류). 위 cost_recorder 블록과 달리 토큰 수를 조건으로
         # 걸지 않는다 — 조사에 필요한 것은 오히려 실패한 요청의 본문이고, 실패한 호출은
@@ -792,6 +805,11 @@ async def _handle_responses(request: Request):
             body, model_config.provider_model_id, **invoke_kwargs
         )
 
+        # 비-2xx 면 on_usage 가 발화하지 않아 예약을 되돌리는 곳이 없다 — 근거는
+        # _handle_openai 의 같은 주석 참조.
+        if not (200 <= status < 300):
+            await release_reservations(redis=redis, state=state, auth_context=auth_context)
+
         async def _record(usage: TokenUsage, first_token_time: float | None) -> None:
             if not auth_context:
                 return
@@ -863,6 +881,9 @@ async def _handle_responses(request: Request):
                 bedrock_request_id=(resp_headers or {}).get("x-amzn-requestid"),
                 client=client,
             )
+        else:
+            # 예약 되돌리기 — 근거는 _handle_openai 의 같은 블록 주석 참조.
+            await release_reservations(redis=redis, state=state, auth_context=auth_context)
 
         # 본문 로깅(성공 **및** 오류). usage 조건을 걸지 않는 이유는 _handle_openai 의
         # 같은 블록 주석 참조.

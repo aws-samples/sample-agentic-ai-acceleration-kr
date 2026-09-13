@@ -92,13 +92,20 @@ class CostRecorder:
         ``usage.total_tokens == 0`` (KI-08 tokenizer 역산까지 실패) →
         TPM 예약만 해제하고 return.
         """
-        # KI-08: usage 없는 disconnect 경로 — TPM 예약만 해제
+        # KI-08: usage 없는 disconnect 경로 — 예약을 **전부** 되돌린다.
+        #
+        # ⚠️ 오랫동안 여기서 TPM 만 해제했다. 비용(CPM/CPH) 예약은 그대로 남아, 응답을
+        #    한 토큰도 받지 못한 요청이 사용자의 분/시간 비용 한도를 계속 물고 있었다.
+        #    예약은 `max_tokens` 기준의 **과대** 추정이라, 큰 max_tokens 로 몇 번 끊기면
+        #    실제 지출 $0 로도 자기 CPH 를 소진해 그 시간이 끝날 때까지 429 를 맞는다.
+        #    TPM 만 돌려주면 두 한도 중 하나만 정상으로 보여 원인 추적이 더 어렵다.
         if usage.total_tokens == 0 and usage.input_tokens == 0 and usage.output_tokens == 0:
             if rate_limit_state and redis is not None:
-                try:
-                    from app.services.rate_limit_service import RateLimitService
+                from app.services.rate_limit_service import RateLimitService
 
-                    await RateLimitService().settle_tpm(
+                svc = RateLimitService()
+                try:
+                    await svc.settle_tpm(
                         redis,
                         rate_limit_state.get("tpm_descriptors", []),
                         rate_limit_state.get("tpm_reserved", 0),
@@ -109,6 +116,23 @@ class CostRecorder:
                         "tpm_release_on_disconnect_failed",
                         user_id=auth_context.user_id,
                     )
+                # ⚠️ 비용 해제를 TPM 과 **분리된** try 로 둔다. 한 블록에 묶으면 TPM 쪽이
+                #    터졌을 때 비용 해제가 실행되지 않아, 정확히 원래의 결함으로 되돌아간다.
+                reserved_cost = rate_limit_state.get("cost_reserved")
+                if reserved_cost is not None and reserved_cost != Decimal("0"):
+                    try:
+                        await svc.settle_cost(
+                            redis,
+                            user_id=str(auth_context.user_id),
+                            actual_cost=Decimal("0"),
+                            reserved_cost=reserved_cost,
+                            team_id=str(auth_context.team_id) if auth_context.team_id else None,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "cost_release_on_disconnect_failed",
+                            user_id=auth_context.user_id,
+                        )
             return Decimal("0")
 
         cost_usd = calculate_cost(usage, model_config)

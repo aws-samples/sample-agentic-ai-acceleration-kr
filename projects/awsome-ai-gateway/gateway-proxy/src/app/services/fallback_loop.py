@@ -175,14 +175,29 @@ class FallbackResult:
     all_open: bool = False
 
 
-async def _unwind_reservation(
+async def release_reservations(
     *,
     redis,
     state: dict,
     auth_context,
 ) -> None:
-    """Release TPM + cost reservations made by enforce_rate_limits for the
-    current candidate (stored in state['rate_limit_state'])."""
+    """``enforce_rate_limits`` 가 잡아 둔 TPM + 비용 예약을 되돌린다.
+
+    예약은 요청을 **받아들일 때** 보수적으로(최대 출력 토큰 기준) 미리 깎아 두고, 응답
+    뒤에 실제 사용량으로 정산한다. 그래서 정산되지 않은 요청은 사용자의 분/시간 한도를
+    **실제로 쓴 적 없는 양만큼** 계속 물고 있게 된다.
+
+    ⚠️ 오랫동안 이 함수는 502/503/504 에서만 불렸다. 그래서 상류가 400·404·422·429·500
+       으로 응답하면(잘못된 tool 스키마, 컨텍스트 초과, ValidationException 등) 예약이
+       그대로 남았다. 라우터의 ``finalize`` 도 usage 가 0 이라 호출되지 않아, 어느 쪽도
+       되돌리지 않았다. 400 을 연속으로 받은 사용자는 **한 푼도 쓰지 않고** 자기 CPM/CPH
+       한도를 소진해 그 분/시간이 끝날 때까지 스스로 429 를 맞는다.
+
+    ⚠️ 마지막에 ``state["rate_limit_state"]`` 를 지운다 — 이것이 멱등성의 근거다.
+       정산이 이미 됐으면 상태가 비어 있어 이 함수는 no-op 이고, 반대로 이 함수가 먼저
+       돌면 ``finalize`` 가 이중 정산하지 않는다. 그래서 "혹시 몰라 한 번 더" 부르는 것이
+       안전하다.
+    """
     rls = state.get("rate_limit_state")
     if not rls:
         return
@@ -376,6 +391,13 @@ async def run_fallback_loop(
             usage = TokenUsage()
 
         # --- 7. Handle result ---
+        # ⚠️ 비-2xx 는 폴백 대상이 아니어도 예약을 되돌려야 한다. 상류가 400/404/422/429/
+        #    500 을 주면 usage 가 없으므로 라우터의 finalize 가 호출되지 않고, 옛 조건
+        #    (502/503/504 만)에서는 어느 쪽도 되돌리지 않아 예약이 창(window) 끝까지
+        #    남았다. release_reservations 는 멱등이라 여기서 먼저 불러도 안전하다.
+        if not (200 <= status < 300):
+            await release_reservations(redis=redis, state=state, auth_context=auth_context)
+
         if status in _FALLBACK_STATUSES or caught_connection_error:
             # ⚠️ 연결 오류는 위 except 에서 이미 셌다 — 여기서 또 세면 2배가 된다.
             if not caught_connection_error:
@@ -383,9 +405,6 @@ async def run_fallback_loop(
             # CB: record failure only for {502,503} and connection errors, NOT 504
             if status in _CB_FAILURE_STATUSES or caught_connection_error:
                 await cb.record_failure(redis, pmid)
-
-            # Unwind this candidate's rate-limit reservation
-            await _unwind_reservation(redis=redis, state=state, auth_context=auth_context)
 
             error_bytes = response_body if not is_stream else json.dumps(
                 {"error": {"type": "provider_error", "message": f"Backend returned {status}"}}

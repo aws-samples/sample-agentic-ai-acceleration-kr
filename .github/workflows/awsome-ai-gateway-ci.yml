@@ -307,15 +307,18 @@ jobs:
         run: |
           set -uo pipefail
           uv run pytest -q -p no:cacheprovider \
-            tests/regression/test_critical_model_client_scope_real_db.py > /tmp/proof3.txt 2>&1
+            tests/regression/test_critical_model_client_scope_real_db.py \
+            tests/regression/test_high_reservation_release_on_error.py > /tmp/proof3.txt 2>&1
           status=$?
           tail -30 /tmp/proof3.txt
           if [ "$status" -ne 0 ]; then exit "$status"; fi
           passed=$(grep -oE "[0-9]+ passed" /tmp/proof3.txt | tail -1 | grep -oE "[0-9]+" || echo 0)
-          # 로컬 실측 기준선: 3 passed. PROOF_DSN 이 안 걸리면 3건 전부 skip 된다 —
-          # 통과 0건은 "문제 없음" 이 아니라 "검증 안 됨" 이므로 실패로 처리한다.
-          if [ "${passed:-0}" -lt 3 ]; then
-            echo "::error::통과 ${passed} 건(기대 3) — PROOF_DSN 이 안 걸려 skip 됐다."
+          # 로컬 실측 기준선: 13 passed (실 DB 3 + 예약 해제 10).
+          # ⚠️ 예약 해제 파일은 REDIS_PROOF_URL 을 요구한다 — 환불은 incrbyfloat 로
+          #    카운터를 움직이는 것이라, 가짜 Redis 로는 부호가 반대인 환불도 통과한다.
+          #    두 env 중 하나라도 안 걸리면 통과 수가 떨어져 여기서 실패한다.
+          if [ "${passed:-0}" -lt 13 ]; then
+            echo "::error::통과 ${passed} 건(기대 13) — PROOF_DSN/REDIS_PROOF_URL 이 안 걸려 skip 됐다."
             exit 1
           fi
 
@@ -378,8 +381,9 @@ jobs:
             #       schemas/body_log / 회귀 테스트)
             #   +1  OpenAI 방언·웹서치 본문 로깅 회귀 테스트
             #   +1  모델 × 앱 allow-list 실 DB 회귀 테스트
+            #   +1  예약 해제 회귀 테스트
             # 헤더 외 신규 위반은 0 이다(UP045 2건은 `X | None` 로 맞춰 유입시키지 않았다).
-            baseline: 477
+            baseline: 478
           - service: cost-recorder-worker
                         # +1: 신규 회귀 테스트 파일 1개의 저작권 헤더 E501(레포 전 파일 공통).
             baseline: 22
