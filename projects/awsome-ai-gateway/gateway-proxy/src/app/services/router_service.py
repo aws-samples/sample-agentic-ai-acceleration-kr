@@ -57,6 +57,18 @@ class ModelInactiveError(LookupError):
     """
 
 
+class ClientModelScopeError(PermissionError):
+    """모델 × 앱 축의 거부(:func:`check_client_model_scope`).
+
+    ``PermissionError`` 의 하위 클래스이므로 기존 ``except PermissionError`` 는 그대로
+    잡는다 — 이 타입을 도입해도 어느 호출 지점도 동작이 바뀌지 않는다.
+
+    왜 구별하나: 계정 축 거부와 앱 축 거부는 사용자가 해야 할 일이 다르다. 한 문구로
+    합치면 Codex 에서만 막힌 사용자가 계정 권한을 요청하러 가고, 운영자는 이미 권한이
+    있다고 답한다 — 양쪽 다 맞는 말인데 아무도 원인을 못 찾는다.
+    """
+
+
 def check_client_scope(allowed_clients: list[str] | None, client: str | None) -> None:
     """Raise PermissionError if the identified client is not allowed for this user.
 
@@ -95,7 +107,7 @@ def check_client_model_scope(model_config, client: str | None) -> None:
     if allowed is None:
         return
     if client not in allowed:
-        raise PermissionError(
+        raise ClientModelScopeError(
             f"Model '{getattr(model_config, 'alias', '?')}' not allowed for client '{client}'"
         )
 

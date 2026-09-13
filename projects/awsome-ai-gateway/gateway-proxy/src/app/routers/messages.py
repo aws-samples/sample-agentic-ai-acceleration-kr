@@ -13,7 +13,7 @@ import time
 from dataclasses import dataclass
 
 import structlog
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.config import get_settings
@@ -32,7 +32,11 @@ from app.services.body_log_records import (
     provider_name,
     resolve_body_logger,
 )
-from app.services.fallback_loop import FallbackResult, run_fallback_loop
+from app.services.fallback_loop import (
+    FallbackResult,
+    enforce_candidate_admission,
+    run_fallback_loop,
+)
 from app.services.fallback_resolver import make_same_provider
 from app.services.router_service import RouterService
 from app.services.streaming import bedrock_anthropic_sse_stream
@@ -375,6 +379,35 @@ async def messages(request: Request) -> StreamingResponse | JSONResponse:
         and getattr(_profile, "web_search_enabled", False)
     ):
         from app.services.web_search_loop import run_web_search_loop
+
+        # ⚠️ **입장 심사를 여기서 해야 한다.** 이 분기는 아래 `run_fallback_loop` 보다
+        #    먼저 리턴하고, 그 폴백 루프가 `/v1/messages` 에서 스코프 2축과 레이트리밋을
+        #    거는 **유일한** 지점이다. 그래서 이 분기는 오랫동안 다음을 전부 건너뛰었다:
+        #      - check_key_scope            (사용자 × 모델 허용목록)
+        #      - check_client_model_scope   (앱 × 모델 허용목록, migration 0035)
+        #      - enforce_rate_limits        (RPM / TPM / 비용 한도)
+        #    웹서치를 켠 프로파일에서만 그랬으므로 증상이 없었다 — 접근권 없는 모델도
+        #    호출되고, 한도를 넘겨도 429 가 나지 않았다.
+        #
+        #    같은 함수를 폴백 루프도 쓴다(단일 구현). 여기서 거절되면 상류를 호출하지
+        #    않으므로 예약도 남지 않는다.
+        _admission = await enforce_candidate_admission(
+            router_service=_router_service,
+            auth_context=auth_context,
+            candidate_config=model_config,
+            redis=redis,
+            req_data=req_data,
+            state=state,
+            request_id=request_id,
+            budget_status=state.get("budget_status"),
+        )
+        if _admission is not None:
+            return Response(
+                content=_admission.body,
+                status_code=_admission.status,
+                headers=_admission.headers or None,
+                media_type="application/json",
+            )
 
         _settings_ws = get_settings()
 
