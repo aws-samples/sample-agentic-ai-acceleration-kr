@@ -401,6 +401,56 @@ async def messages(request: Request) -> StreamingResponse | JSONResponse:
                 client=client,
             )
 
+        # 본문 로깅 — 웹서치 경로 전용 훅. 이 return 은 아래 본문 로깅 배선보다 **먼저**
+        # 일어나므로, 여기 걸지 않으면 웹서치를 켠 프로파일의 요청은 로깅 코드를 아예
+        # 지나지 않고 조용히 미기록된다.
+        #
+        # ⚠️ bedrock_request_id 는 None 이다. 루프가 턴마다 별개의 Bedrock 호출을 하므로
+        #    단일 요청 id 가 조인 키가 되지 못한다(`_ws_record` 의 같은 판단).
+        async def _ws_log_stream(sse_text: str, log_status: str) -> None:
+            bl = getattr(request.app.state, "body_logger", None)
+            if bl is None:
+                return
+            await bl.enqueue(
+                build_body_record_for_stream(
+                    request_id=request_id,
+                    provider=provider_name(model_config),
+                    client=client,
+                    model_alias=model_config.alias or model_config.provider_model_id,
+                    status=log_status,
+                    request_body=body,
+                    sse_text=sse_text,
+                    user_id=auth_context.user_id if auth_context else None,
+                    team_id=auth_context.team_id if auth_context else None,
+                    sso_subject=auth_context.sso_subject if auth_context else None,
+                    bedrock_request_id=None,
+                )
+            )
+
+        async def _ws_log_nonstream(resp_status: int, resp_body: bytes) -> None:
+            bl = getattr(request.app.state, "body_logger", None)
+            if bl is None:
+                return
+            await bl.enqueue(
+                build_body_record_for_nonstream(
+                    request_id=request_id,
+                    provider=provider_name(model_config),
+                    client=client,
+                    model_alias=model_config.alias or model_config.provider_model_id,
+                    status_code=resp_status,
+                    request_body=body,
+                    response_body=resp_body,
+                    is_streaming=False,
+                    user_id=auth_context.user_id if auth_context else None,
+                    team_id=auth_context.team_id if auth_context else None,
+                    sso_subject=auth_context.sso_subject if auth_context else None,
+                    bedrock_request_id=None,
+                )
+            )
+
+        # 사전 게이팅 — 훅을 넘기면 루프가 SSE 전문을 누적한다.
+        _ws_logging = await resolve_body_logger(request.app.state, redis, session_factory)
+
         return await run_web_search_loop(
             dialect="anthropic",
             invoke=_ws_invoke,
@@ -413,6 +463,8 @@ async def messages(request: Request) -> StreamingResponse | JSONResponse:
             max_iterations=_settings_ws.web_search_max_iterations,
             total_deadline_sec=_settings_ws.web_search_total_deadline_sec,
             default_max_results=_settings_ws.web_search_max_results_default,
+            on_stream_complete=_ws_log_stream if _ws_logging else None,
+            on_nonstream_complete=_ws_log_nonstream if _ws_logging else None,
         )
 
     # Use a no-op CB when the service is not wired (e.g. tests that don't configure it)

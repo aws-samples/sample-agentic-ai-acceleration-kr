@@ -288,9 +288,34 @@ def test_effective_model_config_is_logged_not_the_requested_one():
     """폴백이 일어났으면 **실제로 응답한** 모델이 남아야 한다.
 
     요청된 alias 를 남기면 폴백 조사가 불가능해진다 — 로그는 일어나지 않은 일을 말한다.
+
+    ⚠️ 판정을 위치로 한다(허용목록이 아니다). ``effective_model_config`` 는
+       ``run_fallback_loop`` 의 결과에서 나오므로 그 줄 **이전**에는 스코프에 없다.
+       그 이전의 유일한 로깅 지점은 웹서치 경로인데, 그 경로는 폴백 루프를 타지 않고
+       ``model_config`` 로 직접 호출하므로 거기서는 ``model_config`` 가 곧 effective 다.
+       허용목록으로 처리하면 나중에 폴백 **뒤**에 추가된 호출이 ``model_config`` 를 써도
+       통과해 버린다 — 그래서 "그 줄 뒤의 모든 호출" 로 못 박는다.
     """
     src = (_SRC / "routers" / "messages.py").read_text(encoding="utf-8")
     tree = ast.parse(src)
+
+    assign_line = next(
+        (
+            n.lineno
+            for n in ast.walk(tree)
+            if isinstance(n, ast.Assign)
+            and any(
+                isinstance(t, ast.Name) and t.id == "effective_model_config"
+                for t in n.targets
+            )
+        ),
+        None,
+    )
+    assert assign_line is not None, (
+        "effective_model_config 할당을 찾지 못했다 — 이 검사의 전제가 깨졌다"
+    )
+
+    after = 0
     for node in ast.walk(tree):
         if not (
             isinstance(node, ast.Call)
@@ -300,6 +325,17 @@ def test_effective_model_config_is_logged_not_the_requested_one():
         ):
             continue
         names = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+        if node.lineno < assign_line:
+            # 웹서치 경로 — effective_model_config 가 아직 없다. model_config 여야 한다.
+            assert "model_config" in names, (
+                f"L{node.lineno}: 폴백 루프 전(웹서치) 경로인데 model_config 를 쓰지 않는다"
+            )
+            continue
+        after += 1
         assert "effective_model_config" in names, (
             f"L{node.lineno}: 요청된 model_config 를 로깅한다 — 폴백 시 틀린 모델이 남는다"
         )
+    assert after >= 2, (
+        f"폴백 루프 뒤의 로깅 지점이 {after}곳뿐이다 — 스트리밍/비스트리밍 둘 다여야 하고, "
+        "이 하한이 없으면 검사가 공허해진다"
+    )

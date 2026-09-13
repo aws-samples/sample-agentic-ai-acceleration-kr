@@ -948,14 +948,47 @@ async def run_web_search_loop(
     total_deadline_sec: float = 90.0,
     default_max_results: int = 10,
     response_headers: Optional[dict] = None,
+    on_stream_complete: Callable[[str, str], Awaitable[None]] | None = None,
+    on_nonstream_complete: Callable[[int, bytes], Awaitable[None]] | None = None,
 ) -> StreamingResponse | JSONResponse:
     """Run the server-side web-search loop and return the client response.
 
     ``dialect`` is "anthropic" (/v1/messages) or "responses" (/v1/responses). The loop
     ensures the MCP client is initialized (discovers the WebSearch tool) before starting;
     if that fails, it degrades to a plain pass-through of the original request (no tool).
+
+    ``on_stream_complete`` / ``on_nonstream_complete`` are the request/response **body**
+    log hooks. Both are ``None`` when body logging is off, and the routers decide that
+    before calling — passing a hook makes the streaming paths accumulate the full SSE
+    text in memory, so the decision has to be made up front.
+
+    ⚠️ 이 두 훅이 이 함수의 인자로 있는 이유: 라우터들은 ``if is_stream:`` 블록에서
+       본문 로깅을 배선하는데, 이 함수는 **그 블록보다 먼저** 리턴한다. 훅 없이 두면
+       웹서치를 켠 프로파일의 요청은 라우터의 로깅 코드를 아예 지나지 않아 조용히
+       미기록된다. 그리고 그 조합이 하필 최악이다 — 웹서치를 쓰는 것은 Codex(Mantle)이고
+       Mantle 은 AWS 쪽 invocation log 에도 남지 않으므로, 본문의 정본이 **어디에도**
+       없게 된다. 여섯 개 리턴 경로 전부에 배선돼 있고, 테스트가 그 개수를 센다.
     """
     deadline = time.monotonic() + total_deadline_sec
+
+    def _log_stream(gen):
+        """스트리밍 응답을 본문 로깅 래퍼로 감싼다(훅이 없으면 그대로 통과)."""
+        if on_stream_complete is None:
+            return gen
+        from app.services.body_log_records import wrap_stream_for_body_log
+
+        return wrap_stream_for_body_log(
+            gen, dialect=dialect, on_complete=on_stream_complete
+        )
+
+    async def _log_nonstream(status: int, raw: bytes) -> None:
+        """비스트리밍 응답 본문을 기록한다. 실패해도 요청을 깨뜨리지 않는다."""
+        if on_nonstream_complete is None:
+            return
+        try:
+            await on_nonstream_complete(status, raw)
+        except Exception:
+            logger.warning("web_search.body_log_failed")
 
     # Strip Anthropic/OpenAI NATIVE web_search tool(s) up front: Bedrock/Mantle reject
     # them, and we fulfill the intent via our own loop. Doing it here (before F-7) means
@@ -984,12 +1017,13 @@ async def run_web_search_loop(
             )
             gen = (bedrock_anthropic_sse_stream if dialect == "anthropic" else responses_sse_stream)(
                 request, chunk_iter, on_usage=_stream_on_usage)
-            return StreamingResponse(gen, status_code=status,
+            return StreamingResponse(_log_stream(gen), status_code=status,
                                      media_type="text/event-stream", headers=response_headers)
         base.pop("stream", None)
         status, body, _h, usage = await invoke(base)
         if usage and (usage.input_tokens + usage.output_tokens) > 0:
             await on_usage(usage)
+        await _log_nonstream(status, body)
         try:
             content = json.loads(body)
         except (ValueError, TypeError):
@@ -1019,11 +1053,12 @@ async def run_web_search_loop(
                 gen = bedrock_anthropic_sse_stream(request, chunk_iter, on_usage=_stream_on_usage)
             else:
                 gen = responses_sse_stream(request, chunk_iter, on_usage=_stream_on_usage)
-            return StreamingResponse(gen, status_code=status,
+            return StreamingResponse(_log_stream(gen), status_code=status,
                                      media_type="text/event-stream", headers=response_headers)
         status, body, _h, usage = await invoke(base)
         if usage and (usage.input_tokens + usage.output_tokens) > 0:
             await on_usage(usage)
+        await _log_nonstream(status, body)
         try:
             content = json.loads(body)
         except (ValueError, TypeError):
@@ -1043,11 +1078,12 @@ async def run_web_search_loop(
             default_max_results=default_max_results,
         )
         return StreamingResponse(
-            gen, status_code=200, media_type="text/event-stream", headers=response_headers
+            _log_stream(gen), status_code=200,
+            media_type="text/event-stream", headers=response_headers,
         )
 
     loop = _anthropic_nonstream if dialect == "anthropic" else _responses_nonstream
-    return await loop(
+    resp = await loop(
         invoke=invoke,
         base_body=initial_req_data,
         mcp_client=mcp_client,
@@ -1056,3 +1092,8 @@ async def run_web_search_loop(
         deadline=deadline,
         default_max_results=default_max_results,
     )
+    # 루프가 조립해 반환한 최종 본문을 기록한다. 여기서는 `resp.body` 를 읽는다 —
+    # 루프 내부가 여러 턴의 결과를 합쳐 만든 것이므로 어떤 단일 턴의 provider 응답도
+    # 클라이언트가 실제로 받는 것과 같지 않다. 클라이언트가 받은 바이트가 정본이다.
+    await _log_nonstream(resp.status_code, bytes(resp.body or b""))
+    return resp

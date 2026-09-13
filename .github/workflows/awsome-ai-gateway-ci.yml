@@ -337,15 +337,17 @@ jobs:
           - service: admin-api
             baseline: 75
           - service: gateway-proxy
-            # 466(기존) + 2. 신규 파일 2개(observability/provider_metrics.py,
-            # tests/regression/test_high_declared_metrics_are_emitted.py)의 **저작권 헤더**
-            # E501 이다. 그 헤더는 레포의 161개 파일 전부가 동일하게 갖는 100자 초과 한
-            # 줄이라 파일을 추가하면 필연적으로 +1 이다 — 코드 품질 부채가 늘어난 것이
-            # 아니다. 줄이려면 헤더 규약 자체를 바꿔야 하고 그건 별건이다.
-                        # +1: 신규 회귀 테스트 파일 1개의 저작권 헤더 E501(레포 전 파일 공통).
-            # +5: body-logging 신규 파일 5개(body_logger / body_log_flag /
-            #     body_log_records / schemas/body_log / 회귀 테스트)의 저작권 헤더 E501.
-            baseline: 475
+            # 466(기존) 위에 쌓인 증분은 **전부 신규 파일의 저작권 헤더 E501** 이다.
+            # 그 헤더는 레포의 모든 파일이 동일하게 갖는 100자 초과 한 줄이라, 파일을
+            # 하나 추가하면 필연적으로 +1 이다 — 코드 품질 부채가 늘어난 것이 아니다.
+            # 줄이려면 헤더 규약 자체를 바꿔야 하고 그건 별건이다.
+            #   +2  observability/provider_metrics.py, 그 회귀 테스트
+            #   +1  회귀 테스트 1개
+            #   +5  body-logging(body_logger / body_log_flag / body_log_records /
+            #       schemas/body_log / 회귀 테스트)
+            #   +1  OpenAI 방언·웹서치 본문 로깅 회귀 테스트
+            # 헤더 외 신규 위반은 0 이다(UP045 2건은 `X | None` 로 맞춰 유입시키지 않았다).
+            baseline: 476
           - service: cost-recorder-worker
                         # +1: 신규 회귀 테스트 파일 1개의 저작권 헤더 E501(레포 전 파일 공통).
             baseline: 22

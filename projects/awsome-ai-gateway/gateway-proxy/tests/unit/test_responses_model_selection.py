@@ -174,6 +174,14 @@ def _build(
     # No AgentCore MCP client → the web-search loop branch stays out of the way,
     # unless a test explicitly opts in (web_search=True).
     app_state.agentcore_mcp_client = MagicMock() if web_search else None
+    # ⚠️ 반드시 None 으로 못 박아야 한다. MagicMock 은 없는 속성을 자동으로 만들어 주므로
+    #    이 줄이 없으면 `app_state.body_logger` 가 **truthy 한 mock** 이 되고
+    #    `.enabled_effective` 도 truthy 라, "본문 로깅이 꺼진 배포" 라는 실제로 가장 흔한
+    #    상태를 더블이 표현하지 못한다. 그 상태에서 게이트는 mock 의 `is_enabled(...)`
+    #    반환값을 await 하려다 TypeError 로 죽는다 — 모델 선택과 무관한 실패다.
+    #    (본문 로깅 자체의 검증은 tests/regression/test_high_body_logging_gate.py 와
+    #     test_high_openai_dialect_body_logging.py 가 담당한다.)
+    app_state.body_logger = None
 
     state = {
         "auth_context": None,     # skips check_key_scope + rate limits; selection is what we test

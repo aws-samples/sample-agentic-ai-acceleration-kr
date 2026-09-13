@@ -12,6 +12,13 @@ from sqlalchemy.exc import DBAPIError
 
 from app.schemas.domain import ProviderType, TokenUsage
 from app.schemas.responses import ModelObject, ModelPricingObject, ModelsListResponse
+from app.services.body_log_records import (
+    build_body_record_for_nonstream,
+    build_body_record_for_stream,
+    model_alias_of,
+    provider_name,
+    resolve_body_logger,
+)
 from app.services.router_service import ModelInactiveError, RouterService
 from app.services.streaming import openai_sse_stream
 
@@ -325,9 +332,42 @@ async def _handle_openai(request: Request, path: str):
                 client=client,
             )
 
+        async def _log_body_stream(sse_text: str, log_status: str) -> None:
+            """스트림 종료 시 본문을 큐에 넣는다. 절대 블로킹하지 않는다(enqueue 만)."""
+            bl = getattr(request.app.state, "body_logger", None)
+            if bl is None:
+                return
+            await bl.enqueue(
+                build_body_record_for_stream(
+                    request_id=request_id,
+                    provider=provider_name(model_config),
+                    client=client,
+                    model_alias=model_alias_of(model_config),
+                    status=log_status,
+                    request_body=body,
+                    sse_text=sse_text,
+                    user_id=auth_context.user_id if auth_context else None,
+                    team_id=auth_context.team_id if auth_context else None,
+                    sso_subject=auth_context.sso_subject if auth_context else None,
+                    bedrock_request_id=aws_request_id,
+                )
+            )
+
+        # ⚠️ **사전** 게이팅. on_complete 를 넘기면 제너레이터가 SSE 프레임 전문을 메모리에
+        #    누적하므로(services/streaming.py), 스트림이 시작되기 **전에** 판정해야 한다.
+        _on_complete = (
+            _log_body_stream
+            if await resolve_body_logger(request.app.state, redis, session_factory)
+            else None
+        )
+
         return StreamingResponse(
             openai_sse_stream(
-                request, chunk_iter, on_usage=_record, tokenizer_hook=_estimate
+                request,
+                chunk_iter,
+                on_usage=_record,
+                tokenizer_hook=_estimate,
+                on_complete=_on_complete,
             ),
             status_code=status,
             media_type="text/event-stream",
@@ -356,6 +396,29 @@ async def _handle_openai(request: Request, path: str):
                 bedrock_request_id=(resp_headers or {}).get("x-amzn-requestid"),
                 client=client,
             )
+
+        # 본문 로깅(성공 **및** 오류). 위 cost_recorder 블록과 달리 토큰 수를 조건으로
+        # 걸지 않는다 — 조사에 필요한 것은 오히려 실패한 요청의 본문이고, 실패한 호출은
+        # usage 가 0 이라 그 조건을 달면 정확히 필요한 레코드만 사라진다.
+        body_logger = await resolve_body_logger(request.app.state, redis, session_factory)
+        if body_logger is not None:
+            await body_logger.enqueue(
+                build_body_record_for_nonstream(
+                    request_id=request_id,
+                    provider=provider_name(model_config),
+                    client=client,
+                    model_alias=model_alias_of(model_config),
+                    status_code=status,
+                    request_body=body,
+                    response_body=response_body,
+                    is_streaming=False,
+                    user_id=auth_context.user_id if auth_context else None,
+                    team_id=auth_context.team_id if auth_context else None,
+                    sso_subject=auth_context.sso_subject if auth_context else None,
+                    bedrock_request_id=(resp_headers or {}).get("x-amzn-requestid"),
+                )
+            )
+
         try:
             content = json.loads(response_body)
         except Exception:
@@ -650,6 +713,59 @@ async def _handle_responses(request: Request):
                 downgraded_from=state.get("downgraded_from"), client=client,
             )
 
+        # 본문 로깅 — 웹서치 경로 전용 훅. 이 경로는 아래 `if is_stream:` 블록보다 먼저
+        # 리턴하므로, 여기 배선하지 않으면 웹서치를 켠 프로파일의 본문이 조용히 미기록된다.
+        # Mantle 은 AWS invocation log 에도 남지 않으므로 그 조합에서는 본문의 정본이
+        # 어디에도 없게 된다.
+        #
+        # ⚠️ bedrock_request_id 는 여기서 의도적으로 None 이다 — 위 `_ws_record` 주석과
+        #    같은 이유다. 루프는 턴마다 별개의 Bedrock 호출을 하므로 단일 요청 id 가
+        #    이 레코드의 조인 키가 되지 못한다. 하나를 골라 넣으면 대조 리포트가 1:N 을
+        #    1:1 로 오판한다.
+        async def _ws_log_stream(sse_text: str, log_status: str) -> None:
+            bl = getattr(request.app.state, "body_logger", None)
+            if bl is None:
+                return
+            await bl.enqueue(
+                build_body_record_for_stream(
+                    request_id=request_id,
+                    provider=provider_name(model_config),
+                    client=client,
+                    model_alias=model_alias_of(model_config),
+                    status=log_status,
+                    request_body=body,
+                    sse_text=sse_text,
+                    user_id=auth_context.user_id if auth_context else None,
+                    team_id=auth_context.team_id if auth_context else None,
+                    sso_subject=auth_context.sso_subject if auth_context else None,
+                    bedrock_request_id=None,
+                )
+            )
+
+        async def _ws_log_nonstream(resp_status: int, resp_body: bytes) -> None:
+            bl = getattr(request.app.state, "body_logger", None)
+            if bl is None:
+                return
+            await bl.enqueue(
+                build_body_record_for_nonstream(
+                    request_id=request_id,
+                    provider=provider_name(model_config),
+                    client=client,
+                    model_alias=model_alias_of(model_config),
+                    status_code=resp_status,
+                    request_body=body,
+                    response_body=resp_body,
+                    is_streaming=False,
+                    user_id=auth_context.user_id if auth_context else None,
+                    team_id=auth_context.team_id if auth_context else None,
+                    sso_subject=auth_context.sso_subject if auth_context else None,
+                    bedrock_request_id=None,
+                )
+            )
+
+        # 사전 게이팅 — 훅을 넘기면 루프가 SSE 전문을 누적한다.
+        _ws_logging = await resolve_body_logger(request.app.state, redis, session_factory)
+
         _settings_ws = get_settings()
         return await run_web_search_loop(
             dialect="responses",
@@ -663,6 +779,8 @@ async def _handle_responses(request: Request):
             max_iterations=_settings_ws.web_search_max_iterations,
             total_deadline_sec=_settings_ws.web_search_total_deadline_sec,
             default_max_results=_settings_ws.web_search_max_results_default,
+            on_stream_complete=_ws_log_stream if _ws_logging else None,
+            on_nonstream_complete=_ws_log_nonstream if _ws_logging else None,
         )
 
     if is_stream:
@@ -691,10 +809,43 @@ async def _handle_responses(request: Request):
                 client=client,
             )
 
+        async def _log_body_stream(sse_text: str, log_status: str) -> None:
+            """스트림 종료 시 본문을 큐에 넣는다. 절대 블로킹하지 않는다(enqueue 만)."""
+            bl = getattr(request.app.state, "body_logger", None)
+            if bl is None:
+                return
+            await bl.enqueue(
+                build_body_record_for_stream(
+                    request_id=request_id,
+                    provider=provider_name(model_config),
+                    client=client,
+                    model_alias=model_alias_of(model_config),
+                    status=log_status,
+                    request_body=body,
+                    sse_text=sse_text,
+                    user_id=auth_context.user_id if auth_context else None,
+                    team_id=auth_context.team_id if auth_context else None,
+                    sso_subject=auth_context.sso_subject if auth_context else None,
+                    # Mantle 에서는 항상 None 이다(위 주석) — 그리고 바로 그것이 이 경로에
+                    # 본문 로깅이 **필요한** 이유다. AWS 쪽에 대조할 레코드가 없으므로 이
+                    # 레코드가 유일한 본문 정본이 된다.
+                    bedrock_request_id=aws_request_id,
+                )
+            )
+
+        # ⚠️ **사전** 게이팅. 근거는 _handle_openai 의 같은 주석 참조.
+        _on_complete = (
+            _log_body_stream
+            if await resolve_body_logger(request.app.state, redis, session_factory)
+            else None
+        )
+
         from app.services.streaming import responses_sse_stream
 
         return StreamingResponse(
-            responses_sse_stream(request, chunk_iter, on_usage=_record),
+            responses_sse_stream(
+                request, chunk_iter, on_usage=_record, on_complete=_on_complete
+            ),
             status_code=status,
             media_type="text/event-stream",
         )
@@ -712,6 +863,28 @@ async def _handle_responses(request: Request):
                 bedrock_request_id=(resp_headers or {}).get("x-amzn-requestid"),
                 client=client,
             )
+
+        # 본문 로깅(성공 **및** 오류). usage 조건을 걸지 않는 이유는 _handle_openai 의
+        # 같은 블록 주석 참조.
+        body_logger = await resolve_body_logger(request.app.state, redis, session_factory)
+        if body_logger is not None:
+            await body_logger.enqueue(
+                build_body_record_for_nonstream(
+                    request_id=request_id,
+                    provider=provider_name(model_config),
+                    client=client,
+                    model_alias=model_alias_of(model_config),
+                    status_code=status,
+                    request_body=body,
+                    response_body=response_body,
+                    is_streaming=False,
+                    user_id=auth_context.user_id if auth_context else None,
+                    team_id=auth_context.team_id if auth_context else None,
+                    sso_subject=auth_context.sso_subject if auth_context else None,
+                    bedrock_request_id=(resp_headers or {}).get("x-amzn-requestid"),
+                )
+            )
+
         try:
             content = json.loads(response_body)
         except Exception:
