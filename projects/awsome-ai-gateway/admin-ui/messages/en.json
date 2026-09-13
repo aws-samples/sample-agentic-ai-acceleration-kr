@@ -754,13 +754,17 @@
     },
     "bodyLogging": {
       "label": "Body logging (Invocation Body Logging)",
-      "description": "Stores request and response bodies in S3. Changes reach the gateway within a few seconds.",
+      "description": "Stores complete request and response bodies in S3. They are not masked, so whatever a user put in a prompt is stored verbatim. Changes reach the gateway within a few seconds.",
       "toggleLabel": "Toggle body logging",
+      "activeWarning": "Capturing — prompt and response bodies are being stored in S3 without masking.",
       "turnedOn": "Body logging is on. It takes effect within a few seconds.",
       "turnedOff": "Body logging is off. It takes effect within a few seconds.",
-      "confirmTitle": "Turn off body logging?",
-      "confirmMessage": "Request and response bodies will no longer be stored in S3. You can turn it back on at any time.",
-      "confirmLabel": "Turn off"
+      "confirmOnTitle": "Turn on body logging?",
+      "confirmOnMessage": "From now on every request and response body is stored in S3 without masking, including anything users paste into a prompt. Turning it on is recorded in the audit log.",
+      "confirmOnLabel": "Turn on",
+      "confirmOffTitle": "Turn off body logging?",
+      "confirmOffMessage": "Request and response bodies will no longer be stored in S3. Bodies from the period it was off cannot be recovered later. You can turn it back on at any time.",
+      "confirmOffLabel": "Turn off"
     }
   },
   "errors": {

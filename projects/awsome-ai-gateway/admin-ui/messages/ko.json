@@ -754,13 +754,17 @@
     },
     "bodyLogging": {
       "label": "본문 로깅 (Invocation Body Logging)",
-      "description": "요청·응답 본문을 S3에 적재합니다. 변경은 게이트웨이에 수 초 내 반영됩니다.",
+      "description": "요청·응답 본문 전문을 S3에 적재합니다. 마스킹하지 않으므로 사용자가 프롬프트에 넣은 내용이 그대로 저장됩니다. 변경은 게이트웨이에 수 초 내 반영됩니다.",
       "toggleLabel": "본문 로깅 토글",
+      "activeWarning": "수집 중 — 프롬프트·응답 본문이 마스킹 없이 S3에 저장됩니다.",
       "turnedOn": "본문 로깅을 켰습니다. 수 초 내 적용됩니다.",
       "turnedOff": "본문 로깅을 껐습니다. 수 초 내 적용됩니다.",
-      "confirmTitle": "본문 로깅을 끄시겠습니까?",
-      "confirmMessage": "끄면 이후 요청·응답 본문이 S3에 더 이상 적재되지 않습니다. 언제든 다시 켤 수 있습니다.",
-      "confirmLabel": "끄기"
+      "confirmOnTitle": "본문 로깅을 켜시겠습니까?",
+      "confirmOnMessage": "지금부터 모든 요청·응답 본문이 마스킹 없이 S3에 저장됩니다. 사용자가 프롬프트에 붙여 넣은 자료도 포함됩니다. 켜는 조작은 감사 로그에 기록됩니다.",
+      "confirmOnLabel": "켜기",
+      "confirmOffTitle": "본문 로깅을 끄시겠습니까?",
+      "confirmOffMessage": "끄면 이후 요청·응답 본문이 S3에 더 이상 적재되지 않습니다. 꺼져 있던 구간의 본문은 나중에 복구할 수 없습니다. 언제든 다시 켤 수 있습니다.",
+      "confirmOffLabel": "끄기"
     }
   },
   "errors": {
