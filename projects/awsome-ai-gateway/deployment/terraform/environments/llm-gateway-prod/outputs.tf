@@ -107,3 +107,19 @@ output "chat_agent_name" {
   value       = try(module.agentcore_runtime[0].agent_name, null)
   description = "AgentCore Runtime 등록 시 사용할 agent name"
 }
+
+# ─── 게이트웨이 본문 로깅 sink (gateway-proxy 설정값) ───
+# helm values 의 `gatewayProxy.env.FIREHOSE_STREAM_NAME` / `gatewayProxy.env.BODY_LOG_S3_BUCKET`
+# 에 그대로 옮긴다(차트에 전용 블록은 없다 — gateway-proxy 앱 설정은 gatewayProxy.env
+# 자유 map 을 통과한다). install-eks.sh 는 자동 주입하지 않는다: 마스킹되지 않은 본문을
+# 저장하는 스위치라 운영자가 명시적으로 적어야 한다.
+# 꺼져 있으면 빈 문자열이고, gateway-proxy 는 그것을 "미설정" 으로 읽어 로거를 no-op 으로
+# 만든다 — 즉 이 두 값을 비우는 것이 코드 변경 없이 확실하게 끄는 방법이다.
+output "body_log_firehose_stream" {
+  value       = module.body_logging.firehose_stream_name
+  description = "gateway-proxy FIREHOSE_STREAM_NAME 값 (미사용 시 빈 문자열 = 로깅 no-op)"
+}
+output "body_log_bucket" {
+  value       = module.body_logging.bucket_name
+  description = "gateway-proxy BODY_LOG_S3_BUCKET 값 (Firehose 레코드 상한 초과분 직행 fallback)"
+}

@@ -110,6 +110,30 @@ variable "bedrock_invocation_log_group_arn" {
   default     = ""
 }
 
+variable "body_log_firehose_arn" {
+  description = <<-EOT
+    요청/응답 본문 로깅 sink 의 Firehose delivery stream ARN
+    (modules/body-logging 의 `firehose_stream_arn` output).
+
+    빈 값 = 본문 로깅 미사용 → firehose 쓰기 statement 를 렌더하지 않는다.
+    권한은 Put 계열 **쓰기 전용**이다(main.tf 의 이유 주석 참조).
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "body_log_bucket_arn" {
+  description = <<-EOT
+    본문 로깅 sink 의 S3 버킷 ARN (modules/body-logging 의 `bucket_arn` output).
+    Firehose 레코드 상한을 넘는 본문의 직행 fallback 에만 쓴다.
+
+    ⚠️ `/*` 는 붙이지 말 것 — 정책에서 붙인다. 버킷 ARN 자체에 대한 권한(ListBucket)은
+    주지 않는다.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "tags" {
   type    = map(string)
   default = {}

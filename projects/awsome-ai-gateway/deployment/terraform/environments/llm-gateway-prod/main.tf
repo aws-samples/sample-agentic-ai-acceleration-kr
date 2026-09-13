@@ -68,6 +68,35 @@ module "irsa" {
   cognito_user_pool_arn      = module.cognito.user_pool_arn
   mantle_regions             = var.mantle_regions
 
+  # 본문 로깅 sink 쓰기 권한(쓰기 전용). body_logging 이 꺼져 있으면 빈 문자열이 와서
+  # statement 가 렌더되지 않는다.
+  body_log_firehose_arn = module.body_logging.firehose_stream_arn
+  body_log_bucket_arn   = module.body_logging.bucket_arn
+
+  tags = var.tags
+}
+
+# ─── 요청/응답 본문 로깅 sink (Firehose → S3) ───
+# ⚠️ 여기 담기는 것은 **마스킹되지 않은** 프롬프트/응답 본문이다. 그래서 기본이 false 고,
+#    켜도 그것만으로는 수집이 시작되지 않는다 — gateway-proxy 의 두 번째 잠금(관리자
+#    런타임 토글, /monitoring 화면)이 기본 OFF 다. 인프라 opt-in + 운영자 opt-in 둘 다
+#    필요하고, 켜는 조작은 audit.audit_logs 에 불변 행으로 남는다.
+# ⚠️ prod 에는 AWS 네이티브 invocation logging 모듈이 없다(그쪽은 dev 에서만 terraform 이
+#    소유한다). 이 sink 는 그것과 전혀 다른 것이다 — 계정×리전 단위 싱글턴 설정이 아니라
+#    이 스택이 만드는 일반 리소스라, 소유자 충돌이나 남의 설정을 덮어쓸 위험이 없다.
+module "body_logging" {
+  source = "../../modules/body-logging"
+
+  enabled     = var.enable_body_logging
+  project     = var.project
+  environment = var.environment
+
+  log_retention_days = var.body_log_retention_days
+  kms_key_arn        = var.body_log_kms_key_arn
+  # prod 은 반드시 false — 마스킹되지 않은 본문이 든 버킷이 destroy 한 번에 비워지지
+  # 않게 한다.
+  force_destroy = false
+
   tags = var.tags
 }
 

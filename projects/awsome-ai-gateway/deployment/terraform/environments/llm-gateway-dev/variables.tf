@@ -336,3 +336,24 @@ variable "bedrock_invocation_log_retention_days" {
   type        = number
   default     = 30
 }
+
+# ─── 게이트웨이 자체 본문 로깅 sink (Firehose → S3) ───
+# 위 AWS 네이티브 로깅과 **다른 것**이다. 차이:
+#   네이티브  = 계정×리전 단위 AWS 설정. Mantle 트래픽을 전혀 잡지 못한다.
+#   이 sink   = 게이트웨이가 직접 쓴다. Mantle·runtime 두 평면을 모두 덮는다.
+# Codex/Cowork 는 Mantle 을 쓰므로, 그 트래픽 본문의 정본은 이쪽밖에 없다.
+#
+# ⚠️ 이 스위치는 sink 를 **만들** 뿐이고 수집을 시작하지 않는다. 수집에는 관리자 런타임
+#    토글(/monitoring, 기본 OFF)이 추가로 필요하고, 켜는 조작은 audit.audit_logs 에
+#    불변 행으로 남는다. 본문은 현재 마스킹되지 않으므로 두 겹으로 잠가 둔다.
+variable "enable_body_logging" {
+  description = "요청/응답 본문 로깅 sink(S3 + Firehose + IAM)를 만들지 여부. 만들기만 하며 수집은 관리자 토글이 별도로 켠다"
+  type        = bool
+  default     = false
+}
+
+variable "body_log_retention_days" {
+  description = "본문 로그 S3 객체 만료일. 마스킹되지 않은 프롬프트가 들어 있으므로 무기한(0) 은 명시적 선택이어야 한다"
+  type        = number
+  default     = 90
+}

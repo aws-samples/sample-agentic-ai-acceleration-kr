@@ -131,6 +131,43 @@ data "aws_iam_policy_document" "bedrock" {
       resources = [var.claude_code_374_role_arn]
     }
   }
+
+  # --------------------------------------------------------------------------
+  # 요청/응답 **본문** 로깅 sink 쓰기 (modules/body-logging).
+  #
+  # ⚠️ 쓰기 전용이다. Get/List/Delete 를 넣지 않는다 — 게이트웨이는 자기가 넣은 본문을
+  #    다시 읽을 이유가 없고, 그 권한이 있으면 게이트웨이 파드 침해가 곧 **누적된 전체
+  #    프롬프트 이력의 유출**이 된다. 읽기는 사람이 별도 자격증명으로 한다.
+  #
+  # ⚠️ body-logging 모듈이 꺼져 있으면 ARN 이 빈 문자열로 와서 statement 자체가
+  #    렌더되지 않는다. `resources = [""]` 로 남으면 MalformedPolicyDocument 로 apply 가
+  #    깨지므로, 조건을 빼서는 안 된다.
+  # --------------------------------------------------------------------------
+  dynamic "statement" {
+    for_each = var.body_log_firehose_arn != "" ? [1] : []
+    content {
+      sid    = "BodyLogFirehoseWrite"
+      effect = "Allow"
+      actions = [
+        "firehose:PutRecord",
+        "firehose:PutRecordBatch",
+      ]
+      resources = [var.body_log_firehose_arn]
+    }
+  }
+
+  # Firehose 레코드 상한(1MB)을 넘는 본문의 S3 직행 fallback. 객체 하나를 넣는 것만
+  # 허용하고 버킷 열람(s3:ListBucket)은 주지 않는다 — 목록 권한이 있으면 침해 시
+  # 무엇이 쌓여 있는지 열거할 수 있다.
+  dynamic "statement" {
+    for_each = var.body_log_bucket_arn != "" ? [1] : []
+    content {
+      sid       = "BodyLogS3Fallback"
+      effect    = "Allow"
+      actions   = ["s3:PutObject"]
+      resources = ["${var.body_log_bucket_arn}/*"]
+    }
+  }
 }
 
 resource "aws_iam_policy" "bedrock" {

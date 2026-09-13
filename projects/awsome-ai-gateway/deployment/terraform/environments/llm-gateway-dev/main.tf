@@ -72,6 +72,34 @@ module "irsa" {
   # 빈 문자열이 와서 권한 statement 자체가 렌더되지 않는다(불필요한 권한을 남기지 않는다).
   bedrock_invocation_log_group_arn = module.bedrock_invocation_logging.log_group_arn
 
+  # 본문 로깅 sink 쓰기 권한(쓰기 전용). body_logging 이 꺼져 있으면 빈 문자열이 와서
+  # statement 가 렌더되지 않는다.
+  body_log_firehose_arn = module.body_logging.firehose_stream_arn
+  body_log_bucket_arn   = module.body_logging.bucket_arn
+
+  tags = var.tags
+}
+
+# ─── 요청/응답 본문 로깅 sink (Firehose → S3) ───
+# ⚠️ 여기 담기는 것은 **마스킹되지 않은** 프롬프트/응답 본문이다. 그래서 기본이 false 고,
+#    켜도 그것만으로는 수집이 시작되지 않는다 — gateway-proxy 의 두 번째 잠금(관리자
+#    런타임 토글, /monitoring 화면)이 기본 OFF 다. 즉 인프라 opt-in + 운영자 opt-in 둘 다
+#    필요하고, 켜는 조작은 audit.audit_logs 에 남는다.
+# ⚠️ AWS 네이티브 invocation logging(위 bedrock_invocation_logging)과 다른 것이다.
+#    그쪽은 계정×리전 단위 AWS 설정이고 Mantle 트래픽을 전혀 잡지 못한다. 이 sink 는
+#    게이트웨이가 직접 쓰므로 두 평면을 모두 덮는다.
+module "body_logging" {
+  source = "../../modules/body-logging"
+
+  enabled     = var.enable_body_logging
+  project     = var.project
+  environment = var.environment
+
+  log_retention_days = var.body_log_retention_days
+  # dev 라도 false 다 — 버킷 내용물이 프롬프트 본문이므로 destroy 로 조용히 비워지게
+  # 두지 않는다. 정말 필요하면 tfvars 에서 명시적으로 켠다.
+  force_destroy = false
+
   tags = var.tags
 }
 

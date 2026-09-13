@@ -506,6 +506,30 @@ gatewayProxy:
     BUDGET_DEFAULT_POLICY: "HARD_BLOCK"
     # Rate limit cache TTL
     RATE_LIMIT_CONFIG_TTL_SEC: "300"
+    # ── 요청/응답 **본문** 로깅 (기본 OFF) ──
+    #
+    # ⚠️ 켜면 게이트웨이가 요청 JSON 전문과 스트리밍 SSE 텍스트 전문을 S3 로 보낸다.
+    #    **마스킹하지 않는다** — 사용자가 프롬프트에 붙여 넣은 것이 그대로 저장된다.
+    #    같은 코드베이스의 trace 경로에는 PII 마스커가 기본 ON 이지만 본문 로거에는
+    #    적용되지 않는다(알고 있는 격차, 향후 개선 대상).
+    #
+    # 잠금이 두 겹이다. **둘 다** 열려야 수집이 시작된다:
+    #   1) 아래 FIREHOSE_STREAM_NAME 이 비어 있지 않아야 한다(정적). 비어 있으면 로거는
+    #      no-op 이고 boto3 클라이언트조차 만들지 않는다 — 로컬/compose 에서 자격증명
+    #      없이도 안전하다. 즉 **이 값을 비우는 것이 확실하게 끄는 방법**이다.
+    #   2) 관리자 런타임 토글(/monitoring 화면, public.system_settings, 기본 OFF).
+    #      배포만으로는 수집이 시작되지 않고, 켜는 조작은 audit.audit_logs 에 불변
+    #      행으로 남는다.
+    #
+    # 값은 terraform output body_log_firehose_stream / body_log_bucket 에서 가져온다
+    # (module "body_logging", 그쪽 기본값도 enabled=false 다). install-eks.sh 는 이 두
+    # 값을 자동 주입하지 않는다 — 마스킹되지 않은 본문을 저장하는 스위치라 운영자가
+    # 명시적으로 적어야 한다.
+    FIREHOSE_STREAM_NAME: ""
+    # Firehose 레코드 상한(1MB)을 넘는 본문의 S3 직행 fallback 버킷. 비어 있으면 상한
+    # 초과 레코드는 버려진다(요청은 영향 없음). 위 스트림과 같은 버킷이어야 조회 경로가
+    # 하나로 유지된다.
+    BODY_LOG_S3_BUCKET: ""
 
 # ----------------------------------------------------------------------------
 # Admin API (U2, control-plane) — 관리자 REST API + VK 발급
