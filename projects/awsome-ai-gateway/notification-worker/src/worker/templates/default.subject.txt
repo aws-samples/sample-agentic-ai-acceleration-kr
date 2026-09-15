@@ -1,1 +1,1 @@
-[DS Gateway] {{ event.type }} 알림
+[LLM Gateway] {{ event.type }} 알림

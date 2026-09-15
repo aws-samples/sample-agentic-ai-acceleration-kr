@@ -81,8 +81,8 @@ ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO auth.admin_jwt_configs (id, issuer, audience, public_key_pem, algorithm, is_active) VALUES
     ('00000000-0000-4000-a000-000000000030',
-     'ds-gateway-admin',
-     'ds-gateway-admin-api',
+     'llm-gateway-admin',
+     'llm-gateway-admin-api',
      '-----BEGIN PUBLIC KEY-----
 REPLACE_WITH_ACTUAL_RS256_PUBLIC_KEY
 -----END PUBLIC KEY-----',
