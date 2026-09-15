@@ -240,6 +240,44 @@ def _is_our_tool(tool: dict) -> bool:
     return isinstance(tool, dict) and tool.get("name") == GW_WEB_SEARCH_NAME
 
 
+# Anthropic 블록 / Responses 항목 중 **클라이언트가 실행해야 하는** 도구 호출 판정.
+#
+# ⚠️ 예전에는 각각 정확히 ``tool_use`` / ``function_call`` 만 셌다. 두 방언 모두 그것이
+#    도구 호출 항목의 전부가 아니다 — Responses 는 커스텀(freeform) 도구를
+#    ``custom_tool_call`` 로, 로컬 실행 도구를 ``local_shell_call`` / ``computer_call`` 로
+#    보내고, Anthropic 은 ``server_tool_use`` / ``mcp_tool_use`` 를 쓴다.
+#
+#    이 판정이 False 가 되면 ``is_search_turn`` 이 True 가 되어 게이트웨이가 검색을 돌리고
+#    루프를 한 바퀴 더 돈다 — 그 과정에서 **클라이언트의 도구 호출이 삼켜진다.** 클라이언트는
+#    자기가 실행해야 할 호출을 보지 못한 채 기다린다. 모델이 우리 web_search 와 자기 도구를
+#    같은 턴에 함께 호출하면(두 방언 모두 병렬 도구 호출을 지원한다) 바로 재현된다.
+#
+#    그래서 화이트리스트가 아니라 **접미사**로 판정한다: 새 호출 유형이 생겼을 때 삼키는
+#    쪽이 아니라 넘겨주는 쪽으로 틀리는 것이 안전하다(최악의 경우 한 턴 일찍 끝난다).
+def _is_client_tool_use_block(block: dict) -> bool:
+    """Anthropic: 우리 것이 아닌 도구 사용 블록인가."""
+    if not isinstance(block, dict):
+        return False
+    btype = block.get("type")
+    if not isinstance(btype, str) or "tool_use" not in btype:
+        return False
+    return block.get("name") != GW_WEB_SEARCH_NAME
+
+
+def _is_client_tool_call_item(item: dict, our_call_ids: set[str] | None = None) -> bool:
+    """Responses: 우리 것이 아닌 도구 호출 항목인가."""
+    if not isinstance(item, dict):
+        return False
+    itype = item.get("type")
+    if not isinstance(itype, str) or not itype.endswith("_call"):
+        return False
+    if item.get("name") == GW_WEB_SEARCH_NAME:
+        return False
+    if our_call_ids and item.get("call_id") in our_call_ids:
+        return False
+    return True
+
+
 def _client_declares_web_search(body: dict) -> bool:
     """True if the client's ORIGINAL request already declares a tool named web_search.
 
@@ -493,7 +531,7 @@ async def _anthropic_stream(
                         # OUR search — suppress, buffer input JSON.
                         suppressed[idx] = {"kind": "web_search", "buf": "",
                                            "id": block.get("id"), "name": block.get("name")}
-                    elif btype == "tool_use":
+                    elif _is_client_tool_use_block(block):
                         # CLIENT tool — terminal; forward re-indexed, buffer args to rebuild.
                         client_tool_present = True
                         gi = global_index
@@ -660,7 +698,13 @@ async def _anthropic_stream(
                              "error": {"type": "incomplete_stream",
                                        "message": "upstream ended without a terminal event"}},
                         )
-                    yield _sse("message_stop", {"type": "message_stop"})
+                    # ⚠️ 봉투를 한 번도 열지 않았으면(message_start 미전송) message_stop 을
+                    #    보내지 않는다. Anthropic SSE 계약은 message_start → … →
+                    #    message_stop 이고, start 없는 stop 은 SDK 파싱 오류가 된다 — 상류
+                    #    오류가 게이트웨이 버그처럼 보인다. 그때 종료 신호는 위 error
+                    #    프레임이다. _drain_error 와 아래 except 절은 이미 이 구분을 한다.
+                    if envelope_open:
+                        yield _sse("message_stop", {"type": "message_stop"})
                     break
 
                 # ⚠️ 클라이언트가 볼 수 없는 tool_use 로 끝났다고 말하지 않는다. 우리 검색의
@@ -671,13 +715,27 @@ async def _anthropic_stream(
                     emitted_stop_reason = "end_turn"
 
                 # Terminal: close the single envelope.
-                yield _sse(
-                    "message_delta",
-                    {"type": "message_delta",
-                     "delta": {"stop_reason": emitted_stop_reason, "stop_sequence": None},
-                     "usage": {"output_tokens": merged.output_tokens}},
-                )
-                yield _sse("message_stop", {"type": "message_stop"})
+                #
+                # ⚠️ usage 에 **입력 토큰도** 싣는다. message_start 는 첫 턴에서 한 번만
+                #    나가므로 그 프레임의 input_tokens 는 1턴치다. N 턴을 돈 요청에서
+                #    클라이언트(Claude Code 는 이 값으로 컨텍스트를 추적한다)와 감사 로그는
+                #    실제로 소비한 입력의 일부만 보게 된다 — 우리가 청구하는 양과도 어긋난다.
+                #    이미 보낸 message_start 를 되돌릴 수는 없으니, 마지막 프레임이 합계를
+                #    말해 준다. 캐시 버킷도 함께 실어야 input_tokens 와 details 가 서로
+                #    모순되지 않는다.
+                if envelope_open:
+                    yield _sse(
+                        "message_delta",
+                        {"type": "message_delta",
+                         "delta": {"stop_reason": emitted_stop_reason, "stop_sequence": None},
+                         "usage": {
+                             "input_tokens": merged.input_tokens,
+                             "output_tokens": merged.output_tokens,
+                             "cache_creation_input_tokens": merged.cache_creation_input_tokens,
+                             "cache_read_input_tokens": merged.cache_read_input_tokens,
+                         }},
+                    )
+                    yield _sse("message_stop", {"type": "message_stop"})
                 break
 
             # Search turn: run ALL requested searches (F-3) → one tool_result per tool_use_id,
@@ -792,8 +850,13 @@ async def _anthropic_nonstream(
             _merge_usage(merged, usage)
 
             content = final_body.get("content") or []
-            our_calls = [b for b in content if b.get("type") == "tool_use" and b.get("name") == GW_WEB_SEARCH_NAME]
-            client_calls = [b for b in content if b.get("type") == "tool_use" and b.get("name") != GW_WEB_SEARCH_NAME]
+            our_calls = [
+                b for b in content
+                if isinstance(b, dict)
+                and b.get("type") == "tool_use"
+                and b.get("name") == GW_WEB_SEARCH_NAME
+            ]
+            client_calls = [b for b in content if _is_client_tool_use_block(b)]
 
             if force_final or not our_calls or client_calls:
                 break  # terminal — return this body
@@ -837,11 +900,20 @@ async def _anthropic_nonstream(
         # Fire on_usage whenever any tokens accrued — even if a LATER turn failed after
         # earlier turns succeeded (tokens were consumed and must be accounted) (F-9).
         merged.web_search_count = searches_done
-        if (merged.input_tokens + merged.output_tokens) > 0:
-            try:
-                await on_usage(merged)
-            except Exception:
-                logger.warning("web_search.on_usage_failed")
+        merged.total_tokens = merged.input_tokens + merged.output_tokens
+        # ⚠️ 토큰이 0 이어도 **부른다.** 예전에는 `> 0` 조건이 걸려 있어서, 첫 턴이 상류
+        #    4xx/5xx 로 죽으면(토큰 0) on_usage 가 아예 불리지 않았다. 그 콜백이
+        #    ``cost_recorder.finalize`` 이고, finalize 의 zero-usage 경로가 RPM/TPM/비용
+        #    예약을 되돌리는 **유일한** 지점이다. 이 경로는 폴백 루프를 타지 않으므로
+        #    ``release_reservations`` 도 돌지 않는다 — 즉 400 을 받은 요청이 한 푼도 쓰지
+        #    않고 사용자의 분/시간 한도를 창이 끝날 때까지 물고 있었다.
+        #
+        #    토큰이 0 이면 finalize 는 usage_logs 행을 쓰지 않고 예약만 해제한다(그 경로의
+        #    조기 반환). 그래서 무조건 호출이 안전하다.
+        try:
+            await on_usage(merged)
+        except Exception:
+            logger.warning("web_search.on_usage_failed")
 
     if final_status == 200 and isinstance(final_body.get("usage"), dict):
         # Overwrite the returned body's usage with the merged (multi-turn) totals so the
@@ -853,10 +925,25 @@ async def _anthropic_nonstream(
     # modified thinking block. Prior-turn thinking may be omitted on a new user turn, so
     # this is safe. (Mirrors the streaming path's client-side suppression.)
     if final_status == 200 and isinstance(final_body.get("content"), list):
+        # ⚠️ 우리 web_search tool_use 블록도 함께 걷어낸다. 클라이언트 도구 호출과 우리
+        #    검색이 **같은 턴**에 함께 오면(두 방언 모두 병렬 도구 호출을 지원한다) 그 턴은
+        #    terminal 이라 이 본문이 그대로 나가고, 클라이언트는 자기가 선언하지 않은
+        #    ``web_search`` 도구 호출을 받는다. Anthropic 계약상 모든 tool_use 는 tool_result
+        #    로 답해야 하므로, 클라이언트는 없는 도구를 실행하려 하거나(Claude Code 는 알 수
+        #    없는 도구로 보고한다) 다음 턴에서 400 을 받는다. 스트리밍 경로는 이 블록들을
+        #    이미 억제한다 — 비스트리밍만 빠져 있었다.
         final_body["content"] = [
             b for b in final_body["content"]
-            if not (isinstance(b, dict) and b.get("type") in ("thinking", "redacted_thinking"))
+            if isinstance(b, dict)
+            and b.get("type") not in ("thinking", "redacted_thinking")
+            and not (b.get("type") == "tool_use" and b.get("name") == GW_WEB_SEARCH_NAME)
         ]
+        # 우리 것만 지웠는데 stop_reason 이 tool_use 로 남으면 클라이언트는 보이지 않는
+        # 도구 호출을 기다린다 — 스트리밍 스티처의 같은 판단.
+        if final_body.get("stop_reason") == "tool_use" and not any(
+            _is_client_tool_use_block(b) for b in final_body["content"]
+        ):
+            final_body["stop_reason"] = "end_turn"
     return JSONResponse(status_code=final_status, content=final_body)
 
 
@@ -974,7 +1061,7 @@ async def _responses_stream(
                         fn_arg_buf[oidx] = ""
                         if item.get("call_id"):
                             our_call_ids.add(item["call_id"])  # strip from final output (F-3 Responses)
-                    elif itype == "function_call":
+                    elif _is_client_tool_call_item(item, our_call_ids):
                         client_tool_present = True
                         gi = global_out_index; global_out_index += 1
                         local_to_global[oidx] = gi
@@ -1090,6 +1177,12 @@ async def _responses_stream(
                 # If a mid-stream `error` occurred, the error frame is the terminal signal —
                 # do NOT also emit a synthetic response.completed (NEW round2 High-1). Emit
                 # response.failed only if we never got a real terminal event.
+                # ⚠️ 봉투(response.created)를 한 번도 못 보냈으면 종료 객체도 만들지
+                #    않는다. created 없는 response.completed/failed 는 Responses SDK 가
+                #    상관지을 대상이 없어 파싱에서 실패한다 — 상류 오류가 게이트웨이 버그로
+                #    보인다. 그때 종료 신호는 이미 나간 error 프레임이다.
+                if not envelope_open:
+                    break
                 if error_seen and final_terminal_type == "response.completed":
                     yield _sse("response.failed",
                                {"type": "response.failed",
@@ -1265,8 +1358,13 @@ async def _responses_nonstream(
             _merge_usage(merged, usage)
 
             output = final_body.get("output") or []
-            our_calls = [o for o in output if o.get("type") == "function_call" and o.get("name") == GW_WEB_SEARCH_NAME]
-            client_calls = [o for o in output if o.get("type") == "function_call" and o.get("name") != GW_WEB_SEARCH_NAME]
+            our_calls = [
+                o for o in output
+                if isinstance(o, dict)
+                and o.get("type") == "function_call"
+                and o.get("name") == GW_WEB_SEARCH_NAME
+            ]
+            client_calls = [o for o in output if _is_client_tool_call_item(o)]
 
             if force_final or not our_calls or client_calls:
                 break
@@ -1303,11 +1401,13 @@ async def _responses_nonstream(
             conv_input = conv_input + new_items
     finally:
         merged.web_search_count = searches_done  # fire on any accrued usage even on late failure (F-9)
-        if (merged.input_tokens + merged.output_tokens) > 0:
-            try:
-                await on_usage(merged)
-            except Exception:
-                logger.warning("web_search.on_usage_failed")
+        merged.total_tokens = merged.input_tokens + merged.output_tokens
+        # 토큰 0 에서도 호출하는 이유는 _anthropic_nonstream 의 같은 블록 주석 참조
+        # (예약 해제가 이 콜백에만 달려 있다).
+        try:
+            await on_usage(merged)
+        except Exception:
+            logger.warning("web_search.on_usage_failed")
 
     if final_status == 200 and isinstance(final_body.get("usage"), dict):
         # Same wire-vs-billing split as _finalize_responses_obj: the client must see the
@@ -1316,6 +1416,18 @@ async def _responses_nonstream(
         final_body["usage"]["input_tokens"] = wire_input
         final_body["usage"]["output_tokens"] = merged.output_tokens
         final_body["usage"]["total_tokens"] = wire_input + merged.output_tokens
+    # ⚠️ 우리 web_search function_call 항목을 응답 output 에서 걷어낸다 — 근거는
+    #    _anthropic_nonstream 의 같은 블록 주석, 그리고 스트리밍 쪽
+    #    _finalize_responses_obj 가 이미 하고 있는 일과 동일하다. 비스트리밍만 빠져 있었다.
+    if final_status == 200 and isinstance(final_body.get("output"), list):
+        final_body["output"] = [
+            it for it in final_body["output"]
+            if not (
+                isinstance(it, dict)
+                and it.get("type") == "function_call"
+                and it.get("name") == GW_WEB_SEARCH_NAME
+            )
+        ]
     return JSONResponse(status_code=final_status, content=final_body)
 
 
