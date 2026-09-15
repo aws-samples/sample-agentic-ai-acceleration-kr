@@ -19,10 +19,16 @@ DOWNGRADE_PATH_PREFIXES = (
     "/v1/messages",
     "/v1/chat",
     "/v1/completions",
+    # ⚠️ Codex 는 이 경로로만 온다(Responses API). 빠져 있으면 그 클라이언트의 트래픽은
+    #    예산 임계 자동 강등을 **통째로 무시**한다 — 관리자는 강등 규칙을 저장하고 화면에서
+    #    활성으로 보지만, 정작 비용이 큰 클라이언트에만 적용되지 않는다. 설정이 없는 것보다
+    #    나쁘다: 적용되고 있다고 믿게 된다.
+    "/v1/responses",
     "/model/",
 )
 
-_OPENAI_PATH_PREFIXES = ("/v1/chat", "/v1/completions")
+#: 본문의 모델 필드 이름이 OpenAI 계열인 경로들. Responses 도 `model` 키를 쓰므로 함께 둔다.
+_OPENAI_PATH_PREFIXES = ("/v1/chat", "/v1/completions", "/v1/responses")
 
 
 def _path_eligible(path: str) -> bool:
