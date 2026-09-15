@@ -672,7 +672,15 @@ async def test_reserve_cost_team_cph_exceeded_returns_team_scope(mock_redis):
     assert result.allowed is False
     assert result.scope == "TEAM"
     assert result.limit_type == "cph"
-    assert mock_redis.eval.await_count == 2  # USER 통과 후 TEAM 검사
+    # USER 예약 → TEAM 검사(거부) → **USER 되돌리기** = 3회.
+    #
+    # ⚠️ 세 번째가 이 테스트의 요점이다. 예전에는 USER 카운터에 phantom 예약이 남았고,
+    #    거부 응답은 reserved_cost=0 을 반환하므로 하류의 어떤 정산도 그것을 알지 못했다
+    #    — 서빙되지 않은 요청이 창이 끝날 때까지 사용자의 비용 한도를 물고 있었다.
+    assert mock_redis.eval.await_count == 3, "USER 예약을 되돌리지 않는다"
+    unwind = mock_redis.eval.await_args_list[-1].args
+    assert "rl:cost:user:{u1}:cpm:" in unwind[2], unwind[2]
+    assert float(unwind[4]) == -5.0, f"되돌린 금액이 {unwind[4]} — -5.0 이어야 한다"
 
 
 @pytest.mark.asyncio
@@ -695,7 +703,14 @@ async def test_reserve_cost_unlimited_skips_lua(mock_redis):
 
 @pytest.mark.asyncio
 async def test_settle_cost_adjusts_user_and_team(mock_redis):
-    """post-settle 시 user + team 양쪽 스코프에 차액(음수일 수 있음) 반영(파이프라인)."""
+    """post-settle 시 user + team 양쪽 스코프에 차액(음수일 수 있음) 반영.
+
+    ⚠️ 예전에는 파이프라인 ``INCRBYFLOAT`` 4회였고, 이 테스트는 그 **횟수**를 셌다.
+       그런데 그 구현이 정확히 결함이었다: INCRBYFLOAT 는 없는 키를 만들고, 만들어진
+       키에는 TTL 이 없다. 이제 스코프별 Lua(EXISTS 가드 + EXPIRE 재설정)를 쓰므로
+       스코프 수만큼의 eval 이 돈다. 횟수가 아니라 **어느 창의 어느 키를 조정하는지**를
+       본다.
+    """
     svc = RateLimitService()
     await svc.settle_cost(
         mock_redis,
@@ -703,11 +718,22 @@ async def test_settle_cost_adjusts_user_and_team(mock_redis):
         actual_cost=Decimal("0.003"),
         reserved_cost=Decimal("0.010"),
         team_id="t1",
+        cpm_window_ts=1_800_000_060,
+        cph_window_ts=1_800_000_000,
     )
-    # USER cpm + USER cph + TEAM cpm + TEAM cph → 파이프라인에 4회 적재 + 1 execute.
-    pipe = mock_redis.pipeline.return_value
-    assert pipe.incrbyfloat.call_count == 4
-    pipe.execute.assert_awaited_once()
+    assert mock_redis.eval.await_count == 2, "USER/TEAM 스코프별 1회여야 한다"
+
+    seen_keys = []
+    for call in mock_redis.eval.await_args_list:
+        args = call.args
+        assert args[1] == 2, "키 2개(cpm/cph)만 넘겨야 한다 — cluster CROSSSLOT"
+        seen_keys.extend([args[2], args[3]])
+        # 차액은 음수(환불)
+        assert float(args[4]) < 0, f"차액이 {args[4]} — 환불이어야 한다"
+    assert "rl:cost:user:{u1}:cpm:1800000060" in seen_keys, seen_keys
+    assert "rl:cost:user:{u1}:cph:1800000000" in seen_keys, seen_keys
+    assert "rl:cost:team:{t1}:cpm:1800000060" in seen_keys, seen_keys
+    assert "rl:cost:team:{t1}:cph:1800000000" in seen_keys, seen_keys
 
 
 @pytest.mark.asyncio
@@ -720,8 +746,8 @@ async def test_settle_cost_noop_when_no_difference(mock_redis):
         reserved_cost=Decimal("0.005"),
         team_id="t1",
     )
-    # 차액 0 → 파이프라인 미생성.
-    mock_redis.pipeline.assert_not_called()
+    # 차액 0 → Redis 를 아예 건드리지 않는다.
+    mock_redis.eval.assert_not_called()
 
 
 # ─── CROSSSLOT 회귀 가드 (deepdive Q50) ───

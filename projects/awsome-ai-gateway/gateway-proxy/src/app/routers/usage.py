@@ -20,6 +20,18 @@ logger = structlog.get_logger(__name__)
 router = APIRouter()
 
 
+def _db_policy_label(policy) -> str:
+    """DB ``budget_policy`` enum → 응답의 소문자 라벨.
+
+    Redis 캐시에는 이미 소문자 문자열이 들어 있으므로(``budget_service`` 가 변환해서
+    넣는다), DB 로 내려간 경로만 여기서 맞춰 준다. 두 경로가 다른 표기를 내보내면
+    클라이언트가 정책에 따라 분기할 때 조용히 어긋난다.
+    """
+    raw = getattr(policy, "value", policy)
+    return str(raw).lower()
+
+
+
 @router.get("/v1/usage/me")
 async def usage_me(
     request: Request,
@@ -111,14 +123,25 @@ async def usage_me(
         except Exception:
             logger.warning("db_usage_fetch_failed", user_id=user_id)
 
-    # Budget 정보
-    budget_info = UsageBudgetInfo(
-        max_usd=Decimal("0"),
-        used_usd=Decimal("0"),
-        remaining_usd=Decimal("0"),
-        pct=0.0,
-        policy="hard_block",
-    )
+    # ── Budget 정보 ─────────────────────────────────────────────────────────────
+    #
+    # ⚠️ ``budget:config:user:{uid}`` 는 **TTL 300초**다(budget_service 가 캐시 미스 시
+    #    재생성한다). 즉 만료는 예외 상황이 아니라 **정상 동작**이다.
+    #
+    #    예전에는 그 키가 없으면 이 블록 전체를 건너뛰어 max/used/remaining 이 모두 0 인
+    #    기본값이 그대로 응답에 실렸다. 그래서 5분 넘게 요청을 보내지 않은 사용자가 CLI
+    #    statusline 을 열면 "$0 / $0" 을 봤다 — 한도도 없고 쓴 것도 없다는 뜻이다. 실제로는
+    #    한도가 있고 이미 상당액을 썼는데도.
+    #
+    #    더 나쁜 것은 ``used`` 조차 config 가 있을 때만 읽었다는 점이다. 사용액 키
+    #    ``budget:user:{uid}:{period}`` 에 진짜 값이 들어 있어도 함께 버려졌다.
+    #
+    #    이제 Redis 를 먼저 보고(실시간), 없거나 비면 DB 로 내려간다. DB 는 워커가
+    #    ``budget_usages`` 에 커밋한 값이라 최대 몇 초 뒤처질 뿐 사라지지 않는다.
+    limit: Decimal | None = None
+    used: Decimal | None = None
+    policy = "hard_block"
+
     if redis is not None:
         try:
             budget_config_raw = await redis.get(f"budget:config:user:{{{user_id}}}")
@@ -128,18 +151,69 @@ async def usage_me(
 
                 config = json.loads(budget_config_raw)
                 limit = Decimal(str(config.get("limit_usd", 0)))
-                used = Decimal(budget_usage_raw.decode() if budget_usage_raw else "0")
-                remaining = limit - used
-                pct = float((used / limit * 100) if limit > 0 else 0)
-                budget_info = UsageBudgetInfo(
-                    max_usd=limit,
-                    used_usd=used,
-                    remaining_usd=remaining,
-                    pct=round(pct, 2),
-                    policy=config.get("policy", "hard_block"),
+                policy = config.get("policy", "hard_block")
+            if budget_usage_raw:
+                used = Decimal(
+                    budget_usage_raw.decode()
+                    if isinstance(budget_usage_raw, bytes)
+                    else str(budget_usage_raw)
                 )
         except Exception:
             logger.warning("budget_info_fetch_failed", user_id=user_id)
+
+    # Redis 에서 못 채운 것만 DB 로 메운다. 조회 자체가 실패해도 응답은 나가야 한다 —
+    # 예산 표시가 없다고 사용량 조회를 실패시킬 이유는 없다.
+    if session_factory is not None and (limit is None or used is None):
+        try:
+            from app.models.budget import BudgetConfig, BudgetScope, BudgetUsage
+
+            async with session_factory() as db_session:
+                if limit is None:
+                    # client IS NULL = 사용자 전체 예산. 이 필터가 없으면 per-app 예산 행이
+                    # 잡혀 앱 하나의 한도가 사용자 전체 한도로 보고된다.
+                    cfg = (
+                        await db_session.execute(
+                            select(BudgetConfig)
+                            .where(BudgetConfig.scope == BudgetScope.USER)
+                            .where(BudgetConfig.scope_id == user_id)
+                            .where(BudgetConfig.client.is_(None))
+                            .where(BudgetConfig.is_active == True)  # noqa: E712
+                            # ⚠️ 의도적으로 LIMIT 을 걸지 않는다. per-app 행이 있는
+                            #    사용자에서 위 client 필터가 빠지면 두 행이 나와
+                            #    MultipleResultsFound 로 **시끄럽게** 실패한다. LIMIT 1 을
+                            #    걸면 물리적 순서에 따라 우연히 맞는 행이 나올 수 있고,
+                            #    그러면 필터를 지워도 테스트가 통과한다(대조군으로 확인).
+                            #    budget_service._hydrate_user_config_cache 와 같은 이유다.
+                        )
+                    ).scalar_one_or_none()
+                    if cfg is not None:
+                        limit = Decimal(str(cfg.max_budget_usd))
+                        policy = _db_policy_label(cfg.policy)
+                if used is None:
+                    row = (
+                        await db_session.execute(
+                            select(BudgetUsage.used_usd)
+                            .where(BudgetUsage.scope == BudgetScope.USER)
+                            .where(BudgetUsage.scope_id == user_id)
+                            .where(BudgetUsage.client.is_(None))
+                            .where(BudgetUsage.period == period)
+                            .limit(1)
+                        )
+                    ).scalar_one_or_none()
+                    if row is not None:
+                        used = Decimal(str(row))
+        except Exception:
+            logger.warning("budget_info_db_fallback_failed", user_id=user_id)
+
+    limit_final = limit if limit is not None else Decimal("0")
+    used_final = used if used is not None else Decimal("0")
+    budget_info = UsageBudgetInfo(
+        max_usd=limit_final,
+        used_usd=used_final,
+        remaining_usd=limit_final - used_final,
+        pct=round(float(used_final / limit_final * 100) if limit_final > 0 else 0.0, 2),
+        policy=policy,
+    )
 
     total_tokens = total_tokens_db + total_tokens_today
     total_cost = total_cost_db + total_cost_today

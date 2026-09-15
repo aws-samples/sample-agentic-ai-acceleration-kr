@@ -223,6 +223,8 @@ async def release_reservations(
                 actual_cost=Decimal("0"),
                 reserved_cost=cost_reserved,
                 team_id=str(auth_context.team_id) if auth_context.team_id else None,
+                cpm_window_ts=rls.get("cost_cpm_window_ts"),
+                cph_window_ts=rls.get("cost_cph_window_ts"),
             )
         except Exception:
             logger.warning("fallback_unwind_cost_failed")

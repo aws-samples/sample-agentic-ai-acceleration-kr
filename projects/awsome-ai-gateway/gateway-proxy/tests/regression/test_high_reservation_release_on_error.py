@@ -44,6 +44,23 @@ import pytest
 
 from app.services.fallback_loop import release_reservations
 
+
+@pytest.fixture(autouse=True)
+def _load_lua_scripts():
+    """비용 환불은 이제 Lua(``cost_settle_scope``)로 이뤄진다 — 앱은 부팅 때 읽는다.
+
+    ⚠️ 이 픽스처가 없으면 ``LuaScriptLoader.get`` 이 KeyError 를 내고, ``settle_cost`` 의
+       스코프별 except 가 그것을 삼켜 **환불이 조용히 일어나지 않는다**. 그 실패는
+       "환불 로직이 틀렸다" 와 구별되지 않는다(실측: 카운터가 예약값 그대로 남는다).
+       예전 구현은 순수 파이프라인이라 스크립트가 필요 없었다.
+    """
+    from app.services.lua_loader import LuaScriptLoader
+
+    LuaScriptLoader.load_all(
+        Path(__file__).resolve().parents[2] / "src" / "app" / "redis_scripts"
+    )
+
+
 _SRC = Path(__file__).resolve().parents[2] / "src" / "app"
 REDIS_PROOF_URL = os.environ.get("REDIS_PROOF_URL")
 

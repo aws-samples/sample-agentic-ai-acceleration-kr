@@ -200,6 +200,10 @@ async def enforce_rate_limits(
         "tpm_descriptors": _only_tpm(descriptors),
         "tpm_reserved": reserved,
         "cost_reserved": cost_result.reserved_cost,
+        # 정산은 **예약이 들어간 창**으로 돌아가야 한다. settle 시점에 창을 다시 계산하면
+        # 경계를 넘긴 요청의 환불이 소비한 적 없는 다음 창에 얹힌다.
+        "cost_cpm_window_ts": cost_result.cpm_window_ts,
+        "cost_cph_window_ts": cost_result.cph_window_ts,
     }
     return None
 

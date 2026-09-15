@@ -127,6 +127,8 @@ class CostRecorder:
                             actual_cost=Decimal("0"),
                             reserved_cost=reserved_cost,
                             team_id=str(auth_context.team_id) if auth_context.team_id else None,
+                            cpm_window_ts=rate_limit_state.get("cost_cpm_window_ts"),
+                            cph_window_ts=rate_limit_state.get("cost_cph_window_ts"),
                         )
                     except Exception:
                         logger.warning(
@@ -259,6 +261,8 @@ class CostRecorder:
                     actual_cost=cost_usd,
                     reserved_cost=cost_reserved,
                     team_id=auth_context.team_id,
+                    cpm_window_ts=(rate_limit_state or {}).get("cost_cpm_window_ts"),
+                    cph_window_ts=(rate_limit_state or {}).get("cost_cph_window_ts"),
                 )
             except Exception:
                 logger.warning("cost_settle_failed", user_id=auth_context.user_id)
