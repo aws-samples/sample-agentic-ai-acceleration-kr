@@ -424,34 +424,71 @@ class BatchFlusher:
         max_budget_usd 를 조회해 이메일 템플릿을 렌더링한다.
         """
         for e in entries:
-            if e.threshold_triggered is None:
-                continue
-            try:
-                # ⚠️ 도메인 필드는 반드시 `payload` 봉투 안에 넣는다. notification-worker 의
-                #    NotificationEvent(notification-worker/src/worker/schemas/events.py:39-44)
-                #    는 payload 를 필수로 요구하고 핸들러/recipient_resolver 가 그 안을
-                #    읽는다. 예전엔 전부 평평해서 worker 가 "payload Field required" 로
-                #    전량 폐기했고, 예산 80% 경고가 한 번도 발송되지 않았다.
-                #    envelope 4필드(event_id/type/timestamp/source)만 최상위에 둔다.
-                event = {
-                    "event_id": e.request_id,  # idempotency hint
-                    "type": "budget_threshold",
-                    "timestamp": e.completed_at,
-                    "source": "cost-recorder-worker",
-                    "payload": {
-                        "user_id": e.user_id,
-                        "team_id": e.team_id,
-                        "threshold_pct": e.threshold_triggered,
-                        "current_used_usd": str(e.cost_usd),
-                        "period": e.period,
-                        "policy": e.threshold_policy or "hard_block",
-                        "target_type": "user",
-                    },
-                }
-                await self._redis.publish("notifications:budget", json.dumps(event))
-            except Exception:
-                logger.warning(
-                    "threshold_publish_failed",
-                    user_id=e.user_id,
-                    threshold=e.threshold_triggered,
-                )
+            # ⚠️ 스코프별 · 임계값별로 **각각** 발행한다.
+            #
+            #    예전에는 ``threshold_triggered`` 단일 값 하나만 보고 한 건을 발행하면서
+            #    payload 의 ``target_type`` 을 "user" 로 하드코딩했다. 그래서:
+            #      * 팀/앱 예산 교차는 발행 대상 자체가 없었다(게이트웨이가 그 결과를
+            #        버렸고, 담을 필드도 없었다).
+            #      * 한 요청이 80/90/100 을 함께 넘어도 한 건만 나갔다.
+            #
+            #    구버전 엔트리(``threshold_events`` 없음)는 아래 폴백으로 예전과 동일하게
+            #    처리한다 — 배포 중 스트림에 남아 있는 메시지가 있다.
+            events = list(e.threshold_events)
+            if not events and e.threshold_triggered is not None:
+                from worker.schemas.cost_stream import ThresholdEvent
+
+                events = [
+                    ThresholdEvent(
+                        scope="user",
+                        threshold_pct=e.threshold_triggered,
+                        # 구버전 엔트리에는 누적값이 없다. 0 을 싣는 대신 그 요청의 비용을
+                        # 그대로 두되(예전 동작), 새 경로에서는 누적값이 실린다.
+                        used_usd=e.cost_usd,
+                        limit_usd=Decimal("0"),
+                    )
+                ]
+            for ev in events:
+                await self._publish_one_threshold(e, ev)
+
+    async def _publish_one_threshold(self, e: CostStreamEntry, ev) -> None:
+        """임계값 교차 한 건을 ``notifications:budget`` 에 발행."""
+        try:
+            # ⚠️ 도메인 필드는 반드시 `payload` 봉투 안에 넣는다. notification-worker 의
+            #    NotificationEvent(notification-worker/src/worker/schemas/events.py:39-44)
+            #    는 payload 를 필수로 요구하고 핸들러/recipient_resolver 가 그 안을
+            #    읽는다. 예전엔 전부 평평해서 worker 가 "payload Field required" 로
+            #    전량 폐기했고, 예산 80% 경고가 한 번도 발송되지 않았다.
+            #    envelope 4필드(event_id/type/timestamp/source)만 최상위에 둔다.
+            event = {
+                # ⚠️ event_id 는 request_id 만으로는 부족하다 — 한 요청이 여러 스코프·
+                #    여러 임계값을 넘으면 같은 id 로 여러 건이 나가고, 수신 측의 멱등
+                #    처리가 두 번째부터를 중복으로 버린다(그러면 100% 알림이 사라진다).
+                "event_id": f"{e.request_id}:{ev.scope}:{ev.threshold_pct}",
+                "type": "budget_threshold",
+                "timestamp": e.completed_at,
+                "source": "cost-recorder-worker",
+                "payload": {
+                    "user_id": e.user_id,
+                    "team_id": e.team_id,
+                    "threshold_pct": ev.threshold_pct,
+                    # 누적 사용액. 예전에는 이 자리에 **그 요청 하나의 비용**이 실려서
+                    # 메일이 "현재 $0.03 사용" 이라고 말했다.
+                    "current_used_usd": str(ev.used_usd),
+                    "limit_usd": str(ev.limit_usd),
+                    "period": e.period,
+                    "policy": e.threshold_policy or "hard_block",
+                    # 하드코딩이었다 — 팀/앱 교차도 "user" 로 나갔다(그리고 애초에
+                    # 팀/앱 교차는 발행되지 않았다).
+                    "target_type": ev.scope,
+                    "client": ev.client,
+                },
+            }
+            await self._redis.publish("notifications:budget", json.dumps(event))
+        except Exception:
+            logger.warning(
+                "threshold_publish_failed",
+                user_id=e.user_id,
+                scope=ev.scope,
+                threshold=ev.threshold_pct,
+            )
