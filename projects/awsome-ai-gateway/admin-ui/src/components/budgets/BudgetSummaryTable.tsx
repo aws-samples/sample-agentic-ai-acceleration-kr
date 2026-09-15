@@ -23,6 +23,8 @@ type DialogTarget = {
   type: (typeof BudgetScope)[keyof typeof BudgetScope];
   currentLimit: number;
   parentLimit?: number;
+  // 저장된 임계값. undefined/null 이면 다이얼로그가 기본값으로 초기화한다.
+  alertThresholds?: number[] | null;
 };
 
 const UNASSIGNED_KEY = '__unassigned__';
@@ -105,6 +107,7 @@ export function BudgetSummaryTable({ items, isAdmin }: BudgetSummaryTableProps) 
       name: item.target_name,
       type: item.target_type,
       currentLimit: item.limit ?? 0,
+      alertThresholds: item.alert_thresholds ?? null,
     });
     setIsDialogOpen(true);
   };

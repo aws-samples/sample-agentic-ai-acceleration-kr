@@ -30,6 +30,7 @@ export default async function BudgetsPage() {
     used_usd: string;
     remaining_usd: string | null;
     usage_pct: string | null;
+    alert_thresholds?: number[] | null;
   }
 
   const raw = await adminAPI
@@ -51,6 +52,9 @@ export default async function BudgetsPage() {
       remaining: r.remaining_usd != null ? parseFloat(r.remaining_usd) || 0 : null,
       usage_pct: pct,
       alert_level: pct != null ? (pct >= 100 ? 'CRITICAL' : pct >= 80 ? 'WARNING' : 'NORMAL') : 'NORMAL',
+      // ⚠️ `?? null` 이 아니라 그대로 넘긴다 — 빈 배열은 "알림 없음" 이라는 유효한 설정이고
+      //    null(예산 미설정)과 구별해야 한다.
+      alert_thresholds: r.alert_thresholds ?? null,
     } as BudgetSummaryItem;
   });
 
