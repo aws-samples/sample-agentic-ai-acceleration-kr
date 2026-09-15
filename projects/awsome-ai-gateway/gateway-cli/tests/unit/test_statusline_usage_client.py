@@ -112,8 +112,9 @@ def test_fetch_usage_parses_model_breakdown() -> None:
 def test_fetch_usage_tolerates_missing_budget() -> None:
     """예산 미설정 사용자는 서버가 budget 을 0 으로 채운다 — 죽지 말고 0 이어야 한다.
 
-    (usage.py 는 Redis 에 budget:config 가 없으면 max_usd=0 인 UsageBudgetInfo 를
-    돌려준다. 나눗셈 0 방어가 클라이언트 쪽에도 필요한지 고정한다.)
+    (⚠️ 예전 근거는 "Redis 에 budget:config 가 없으면 서버가 0 을 준다" 였는데, 그것은
+    결함이었고 지금은 서버가 DB 로 내려가 실제 한도를 돌려준다. 이 테스트가 고정하는
+    것은 **한도가 정말로 없는** 사용자에 대한 클라이언트 쪽 나눗셈 0 방어다.)
     """
     responses.add(
         responses.GET,

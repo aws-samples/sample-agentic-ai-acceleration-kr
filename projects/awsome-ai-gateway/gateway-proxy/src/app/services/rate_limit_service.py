@@ -411,6 +411,12 @@ class RateLimitService:
         if has_team_limit:
             scopes.append(("TEAM", "team", team_id, team_cpm, team_cph))
 
+        # 이미 카운터를 올린 스코프. 뒤 스코프가 거부하면 이 목록을 되돌린다 —
+        # 예전에는 USER 통과 → TEAM 거부 시 USER 카운터에 phantom 예약이 남았고,
+        # 거부 응답은 reserved_cost=0 을 반환하므로 **하류의 어떤 정산도 그것을 알지
+        # 못했다**. 서빙되지 않은 요청이 사용자의 분/시간 비용 한도를 창이 끝날 때까지
+        # 물고 있었다.
+        committed: list[tuple[str, str]] = []
         for label, prefix, sid, cpm, cph in scopes:
             cpm_key = f"rl:cost:{prefix}:{{{sid}}}:cpm:{cpm_window_ts}"
             cph_key = f"rl:cost:{prefix}:{{{sid}}}:cph:{cph_window_ts}"
@@ -432,6 +438,9 @@ class RateLimitService:
                 logger.exception("cost_reserve_scope_failed", scope=label, user_id=user_id)
                 _record_fail_open(label, "cost")
                 if _fail_closed():
+                    await self._release_cost_scopes(
+                        redis, committed, estimated_cost, cpm_window_ts, cph_window_ts
+                    )
                     return CostLimitResult(
                         allowed=False,
                         scope=label,
@@ -441,6 +450,9 @@ class RateLimitService:
                     )
                 continue
             if not result["allowed"]:
+                await self._release_cost_scopes(
+                    redis, committed, estimated_cost, cpm_window_ts, cph_window_ts
+                )
                 return CostLimitResult(
                     allowed=False,
                     scope=result.get("scope"),
@@ -454,9 +466,83 @@ class RateLimitService:
                     retry_after=result.get("retry_after"),
                     reserved_cost=Decimal("0"),
                 )
+            committed.append((prefix, sid))
 
         # 전 scope 통과 — 예약 커밋됨(각 scope eval 이 INCRBYFLOAT 수행).
-        return CostLimitResult(allowed=True, reserved_cost=estimated_cost)
+        #
+        # ⚠️ 예약이 들어간 **창**을 함께 돌려준다. 정산이 settle 시점의 현재 창을 다시
+        #    계산하면 경계를 넘긴 요청의 환불이 엉뚱한 창에 얹힌다(settle_cost 참조).
+        return CostLimitResult(
+            allowed=True,
+            reserved_cost=estimated_cost,
+            cpm_window_ts=cpm_window_ts,
+            cph_window_ts=cph_window_ts,
+        )
+
+    # CPM/CPH 창 길이와, 예약 시 거는 TTL(창 길이의 2배 = 늦은 정산을 위한 유예).
+    # cost_rate_limit_scope.lua 의 EXPIRE 값과 **같아야 한다**.
+    _CPM_WINDOW_SEC = 60
+    _CPH_WINDOW_SEC = 3600
+    _CPM_TTL_SEC = 120
+    _CPH_TTL_SEC = 7200
+
+    async def _settle_cost_scope(
+        self,
+        redis,
+        *,
+        prefix: str,
+        scope_id: str,
+        adjustment: Decimal,
+        cpm_window_ts: int,
+        cph_window_ts: int,
+    ) -> None:
+        """한 스코프의 cpm/cph 2키를 조정한다 — **이미 존재하는 키만**.
+
+        키 2개는 같은 hash tag 를 공유하므로 cluster 에서도 단일 슬롯이다. USER/TEAM 을
+        한 번에 넘기지 않는 이유는 cost_rate_limit_scope.lua 와 동일하다(CROSSSLOT).
+        """
+        now = int(time.time())
+        # 남은 유예 시간. 0 이하면 그 창은 이미 지났다 → Lua 가 건드리지 않는다.
+        cpm_ttl = cpm_window_ts + self._CPM_TTL_SEC - now
+        cph_ttl = cph_window_ts + self._CPH_TTL_SEC - now
+        script = LuaScriptLoader.get("cost_settle_scope")
+        await _guarded_eval(
+            redis,
+            script,
+            2,
+            f"rl:cost:{prefix}:{{{scope_id}}}:cpm:{cpm_window_ts}",
+            f"rl:cost:{prefix}:{{{scope_id}}}:cph:{cph_window_ts}",
+            str(float(adjustment)),
+            str(cpm_ttl),
+            str(cph_ttl),
+        )
+
+    async def _release_cost_scopes(
+        self,
+        redis,
+        committed: list[tuple[str, str]],
+        reserved_cost: Decimal,
+        cpm_window_ts: int,
+        cph_window_ts: int,
+    ) -> None:
+        """앞선 스코프에 이미 커밋된 예약을 되돌린다(뒤 스코프가 거부했을 때).
+
+        되돌리기 실패로 요청 처리를 바꿀 이유는 없다 — 창은 스스로 굴러간다.
+        """
+        if not committed or reserved_cost == Decimal("0"):
+            return
+        for prefix, sid in committed:
+            try:
+                await self._settle_cost_scope(
+                    redis,
+                    prefix=prefix,
+                    scope_id=sid,
+                    adjustment=-reserved_cost,
+                    cpm_window_ts=cpm_window_ts,
+                    cph_window_ts=cph_window_ts,
+                )
+            except Exception:
+                logger.warning("cost_reserve_unwind_failed", scope=prefix, scope_id=sid)
 
     async def settle_cost(
         self,
@@ -466,29 +552,60 @@ class RateLimitService:
         actual_cost: Decimal,
         reserved_cost: Decimal,
         team_id: str | None = None,
+        cpm_window_ts: int | None = None,
+        cph_window_ts: int | None = None,
     ) -> None:
-        """CPM/CPH 사후 정산 — 실제 비용과 예약분 차이 조정 (USER + TEAM)."""
+        """CPM/CPH 사후 정산 — 실제 비용과 예약분 차이 조정 (USER + TEAM).
+
+        ⚠️ **어느 창을 조정하는가**가 이 함수의 핵심이다.
+
+        예전에는 정산 시점의 ``now`` 로 창을 다시 계산했다. 예약은 max_tokens 기준 과대
+        추정이라 차액은 거의 항상 음수(환불)인데, 요청이 분 경계를 넘기면(60초를 넘는
+        스트리밍은 매번 그렇다) 그 환불이 **다음 창**에 얹혔다. 그 창은 이 요청이 소비한
+        적이 없으므로, 사용자는 쓰지 않은 헤드룸을 받는다. 동시에 예약이 실제로 들어간
+        창은 과대 예약을 그대로 안고 남는다 — 한 요청이 두 창을 동시에 왜곡한다.
+
+        게다가 ``INCRBYFLOAT`` 는 없는 키를 **만든다**. 그렇게 만들어진 키에는 TTL 이
+        없어서, 경계를 넘는 요청마다 ``rl:cost:*`` 에 불멸의 키가 하나씩 쌓였다.
+
+        이제 예약이 들어간 창을 받아 그 창만 조정하고, 그 창의 키가 이미 사라졌으면
+        **아무것도 하지 않는다** — 조정할 대상이 없는 것이 맞다. 예약분도 그 키와 함께
+        만료됐고, 없는 키를 되살려 음수를 넣는 것은 정산이 아니라 다른 창에 대한
+        할인이다.
+
+        창을 모르고 불린 경우(구 호출자)에는 현재 창을 쓴다. 그때도 EXISTS 가드는
+        살아 있으므로 최소한 TTL 없는 키가 새로 생기지는 않는다.
+        """
         adjustment = actual_cost - reserved_cost
         if adjustment == Decimal("0"):
             return
 
         now = int(time.time())
-        cpm_window_ts = (now // 60) * 60
-        cph_window_ts = (now // 3600) * 3600
-        adj_float = float(adjustment)
+        if cpm_window_ts is None:
+            cpm_window_ts = (now // self._CPM_WINDOW_SEC) * self._CPM_WINDOW_SEC
+        if cph_window_ts is None:
+            cph_window_ts = (now // self._CPH_WINDOW_SEC) * self._CPH_WINDOW_SEC
 
-        # 파이프라이닝(deepdive Q50): 2~4 incrbyfloat 를 순차 await 대신 한 파이프라인으로.
-        # 비트랜잭션 파이프라인은 cluster 에서 키별 노드 라우팅 → cross-slot 안전.
-        try:
-            pipe = redis.pipeline(transaction=False)
-            pipe.incrbyfloat(f"rl:cost:user:{{{user_id}}}:cpm:{cpm_window_ts}", adj_float)
-            pipe.incrbyfloat(f"rl:cost:user:{{{user_id}}}:cph:{cph_window_ts}", adj_float)
-            if team_id:
-                pipe.incrbyfloat(f"rl:cost:team:{{{team_id}}}:cpm:{cpm_window_ts}", adj_float)
-                pipe.incrbyfloat(f"rl:cost:team:{{{team_id}}}:cph:{cph_window_ts}", adj_float)
-            await pipe.execute()
-        except Exception:
-            logger.warning("cost_settle_failed", user_id=user_id, adjustment=str(adjustment))
+        scopes = [("user", user_id)]
+        if team_id:
+            scopes.append(("team", team_id))
+        for prefix, sid in scopes:
+            try:
+                await self._settle_cost_scope(
+                    redis,
+                    prefix=prefix,
+                    scope_id=sid,
+                    adjustment=adjustment,
+                    cpm_window_ts=cpm_window_ts,
+                    cph_window_ts=cph_window_ts,
+                )
+            except Exception:
+                logger.warning(
+                    "cost_settle_failed",
+                    scope=prefix,
+                    user_id=user_id,
+                    adjustment=str(adjustment),
+                )
 
 
 class InMemoryRateLimiter:

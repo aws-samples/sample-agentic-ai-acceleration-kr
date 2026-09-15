@@ -225,14 +225,36 @@ class TestFallsBackOn502ThenSucceeds:
                 "tpm_descriptors": ["desc1"],
                 "tpm_reserved": 500,
                 "cost_reserved": Decimal("0.01"),
+                "cost_cpm_window_ts": 1_800_000_060,
+                "cost_cph_window_ts": 1_800_000_000,
             }
             return None
 
         async def _fake_settle_tpm(redis, descriptors, reserved, actual):
             settle_tpm_calls.append({"descriptors": descriptors, "reserved": reserved, "actual": actual})
 
-        async def _fake_settle_cost(redis, *, user_id, actual_cost, reserved_cost, team_id):
-            settle_cost_calls.append({"user_id": user_id, "actual": actual_cost, "reserved": reserved_cost})
+        # ⚠️ 창 kwargs 를 받도록 유지해야 한다. 시그니처가 맞지 않으면 TypeError 가
+        #    release_reservations 의 broad except 에 삼켜져 "정산이 아예 안 불렸다" 로
+        #    보인다 — 실제로 이 테스트가 그렇게 실패했다.
+        async def _fake_settle_cost(
+            redis,
+            *,
+            user_id,
+            actual_cost,
+            reserved_cost,
+            team_id,
+            cpm_window_ts=None,
+            cph_window_ts=None,
+        ):
+            settle_cost_calls.append(
+                {
+                    "user_id": user_id,
+                    "actual": actual_cost,
+                    "reserved": reserved_cost,
+                    "cpm_window_ts": cpm_window_ts,
+                    "cph_window_ts": cph_window_ts,
+                }
+            )
 
         from fakeredis import aioredis as fr
         fake_redis = fr.FakeRedis(decode_responses=True)
@@ -269,6 +291,10 @@ class TestFallsBackOn502ThenSucceeds:
         assert len(settle_cost_calls) >= 1
         assert settle_cost_calls[0]["actual"] == Decimal("0")
         assert settle_cost_calls[0]["reserved"] == Decimal("0.01")
+        # 예약이 들어간 창이 그대로 정산으로 전달돼야 한다 — settle 시점에 창을 다시
+        # 계산하면 경계를 넘긴 요청의 환불이 소비한 적 없는 창에 얹힌다.
+        assert settle_cost_calls[0]["cpm_window_ts"] == 1_800_000_060
+        assert settle_cost_calls[0]["cph_window_ts"] == 1_800_000_000
 
         # CB: failure recorded for the failed original, success for fallback
         cb.record_failure.assert_awaited()

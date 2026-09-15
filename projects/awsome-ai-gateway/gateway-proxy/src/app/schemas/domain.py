@@ -160,6 +160,11 @@ class CostLimitResult(BaseModel):
     retry_after: int | None = None
     reserved_cost: Decimal = Decimal("0")
     window_reset: int = 0
+    # 예약이 **어느 창에** 들어갔는지. 정산은 이 창으로 돌아가야 한다 — settle 시점의
+    # 현재 창을 다시 계산하면, 분 경계를 넘긴 요청의 환불이 소비한 적 없는 다음 창에
+    # 얹힌다(rate_limit_service.settle_cost 주석 참조).
+    cpm_window_ts: int | None = None
+    cph_window_ts: int | None = None
 
 
 def split_cached_input(input_total: int, cached_tokens: int) -> tuple[int, int]:
