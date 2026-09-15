@@ -39,6 +39,19 @@ def calculate_cost(usage: TokenUsage, pricing: ModelConfigSchema) -> Decimal:
     )
 
 
+
+def usage_status_for(http_status: int) -> str:
+    """HTTP 상태 → ``usage.usage_status`` 라벨.
+
+    enum 라벨은 ``('SUCCESS','ERROR','TIMEOUT')`` 셋뿐이다. 504/408/524 만 TIMEOUT 으로
+    구분하고 나머지 실패는 ERROR 다 — 상류가 타임아웃과 거부를 다르게 다뤄야 하는 것은
+    운영자이고(재시도 대상인지 아닌지), 그 구분이 라벨의 존재 이유다.
+    """
+    if http_status in (408, 504, 524):
+        return "TIMEOUT"
+    return "SUCCESS" if 200 <= http_status < 300 else "ERROR"
+
+
 class CostRecorder:
     """요청 완료 시점 critical path 처리기 (FR-3.3 리팩터, 2026-04-20).
 
@@ -300,6 +313,67 @@ class CostRecorder:
 
         return cost_usd
 
+    async def record_failure(
+        self,
+        redis,
+        auth_context: AuthContext,
+        model_config: ModelConfigSchema,
+        *,
+        request_id: str,
+        http_status: int,
+        duration_ms: int,
+        is_stream: bool = False,
+        downgraded_from: str | None = None,
+        availability_fallback_from: str | None = None,
+        bedrock_request_id: str | None = None,
+        client: str | None = None,
+    ) -> None:
+        """실패로 끝난 요청을 ``usage_logs`` 에 남긴다 — 토큰 0, 비용 0, status=ERROR/TIMEOUT.
+
+        왜 필요한가
+        -----------
+        라우터의 실패 반환은 ``finalize`` 를 아예 부르지 않았다. 그래서 실패한 요청은
+        ``usage_logs`` 에 **행이 없었고**, 워커는 남은 성공 행에 status 를 ``"SUCCESS"`` 로
+        하드코딩해 넣었다. 두 사실이 겹쳐 admin-api 의 세 모니터링 엔드포인트가 계산하는
+        ``error_rate_pct`` 는 분자도 0, 분모도 성공뿐이라 **구조적으로 항상 0.00%** 였다.
+
+        그것이 단순한 결측보다 나쁜 이유: 화면은 비어 있지 않고 "0%" 를 녹색으로 칠해
+        보여준다. 상류가 절반씩 5xx 를 뱉는 중에도 운영자의 건강 화면은 정상이라고
+        적극적으로 주장한다.
+
+        예약 해제는 여기서 하지 않는다
+        ------------------------------
+        RPM/TPM/비용 예약은 ``release_reservations`` 가 비-2xx 응답에서 이미 되돌린다.
+        여기서 또 건드리면 이중 해제가 되어 사용자에게 남의 헤드룸을 준다. 이 메서드는
+        **기록만** 한다 — 예산 차감도, settle 도, 메트릭도 없다.
+
+        비용 0 을 쓰는 것도 의도다. 상류가 거부한 요청에는 청구할 것이 없고, 0 은
+        ``budget_usages`` 의 가산 UPSERT 에서 값을 바꾸지 않는다.
+        """
+        if not request_id:
+            return
+        try:
+            await self._publish_to_stream(
+                redis,
+                auth_context=auth_context,
+                model_config=model_config,
+                usage=TokenUsage(input_tokens=0, output_tokens=0),
+                cost_usd=Decimal("0"),
+                request_id=request_id,
+                is_stream=is_stream,
+                duration_ms=duration_ms,
+                ttft_ms=None,
+                threshold_triggered=None,
+                status=usage_status_for(http_status),
+                downgraded_from=downgraded_from,
+                availability_fallback_from=availability_fallback_from,
+                bedrock_request_id=bedrock_request_id,
+                client=client,
+            )
+        except Exception:
+            # 기록 실패가 이미 만들어진 오류 응답을 바꿀 이유는 없다.
+            logger.exception("usage_failure_record_failed", request_id=request_id)
+
     async def _publish_to_stream(
         self,
         redis,
@@ -313,6 +387,7 @@ class CostRecorder:
         duration_ms: int,
         ttft_ms: int | None = None,
         threshold_triggered: int | None,
+        status: str = "SUCCESS",
         downgraded_from: str | None = None,
         availability_fallback_from: str | None = None,
         bedrock_request_id: str | None = None,
@@ -348,6 +423,7 @@ class CostRecorder:
             web_search_count=usage.web_search_count,
             cost_usd=cost_usd,
             latency_ms=duration_ms,
+            status=status,  # type: ignore[arg-type]
             ttft_ms=ttft_ms,
             is_streaming=is_stream,
             estimated_usage=bool(usage.estimated),

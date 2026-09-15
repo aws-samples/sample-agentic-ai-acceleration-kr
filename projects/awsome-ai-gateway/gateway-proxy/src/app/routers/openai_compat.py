@@ -409,6 +409,22 @@ async def _handle_openai(request: Request, path: str):
             #    아무 데도 없다 — 이 라우트에는 폴백 루프가 없어 그쪽 unwind 도 안 돈다.
             #    400 을 연속으로 받은 사용자가 실제 지출 0 으로 자기 한도를 소진했다.
             await release_reservations(redis=redis, state=state, auth_context=auth_context)
+            # 그리고 **기록**한다. 이 경로는 finalize 를 타지 않으므로 usage_logs 에 행이
+            # 아예 생기지 않았고, 워커는 남은 성공 행에 status 를 SUCCESS 로 하드코딩해
+            # 넣었다 — 둘이 겹쳐 admin-api 의 error_rate_pct 가 항상 0.00% 였다.
+            if auth_context is not None:
+                await cost_recorder.record_failure(
+                    redis,
+                    auth_context,
+                    model_config,
+                    request_id=request_id,
+                    http_status=status,
+                    duration_ms=int((time.monotonic() - start_time) * 1000),
+                    is_stream=False,
+                    downgraded_from=state.get("downgraded_from"),
+                    bedrock_request_id=(resp_headers or {}).get("x-amzn-requestid"),
+                    client=client,
+                )
 
         # 본문 로깅(성공 **및** 오류). 위 cost_recorder 블록과 달리 토큰 수를 조건으로
         # 걸지 않는다 — 조사에 필요한 것은 오히려 실패한 요청의 본문이고, 실패한 호출은
@@ -910,8 +926,21 @@ async def _handle_responses(request: Request):
                 client=client,
             )
         else:
-            # 예약 되돌리기 — 근거는 _handle_openai 의 같은 블록 주석 참조.
+            # 예약 되돌리기 + 실패 기록 — 근거는 _handle_openai 의 같은 블록 주석 참조.
             await release_reservations(redis=redis, state=state, auth_context=auth_context)
+            if auth_context is not None:
+                await cost_recorder.record_failure(
+                    redis,
+                    auth_context,
+                    model_config,
+                    request_id=request_id,
+                    http_status=status,
+                    duration_ms=int((time.monotonic() - start_time) * 1000),
+                    is_stream=False,
+                    downgraded_from=state.get("downgraded_from"),
+                    bedrock_request_id=(resp_headers or {}).get("x-amzn-requestid"),
+                    client=client,
+                )
 
         # 본문 로깅(성공 **및** 오류). usage 조건을 걸지 않는 이유는 _handle_openai 의
         # 같은 블록 주석 참조.
