@@ -393,8 +393,9 @@ jobs:
             #   +1  예산 폴백 정책 회귀 테스트
             #   +1  readiness / Responses usage 회귀 테스트
             #   +1  thinking 정규화 배선 회귀 테스트
+            #   +1  끊김 배수 회귀 테스트
             # 헤더 외 신규 위반은 0 이다(UP045 2건은 `X | None` 로 맞춰 유입시키지 않았다).
-            baseline: 481
+            baseline: 482
           - service: cost-recorder-worker
             # 21(기존) 위의 증분은 전부 신규 파일의 저작권 헤더 E501 이다 — 레포의 모든
             # 파일이 갖는 100자 초과 한 줄이라 파일을 추가하면 필연적으로 +1 이고, 코드

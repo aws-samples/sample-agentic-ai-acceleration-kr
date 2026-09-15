@@ -31,6 +31,118 @@ TokenizerHook = Callable[[str], Awaitable[int | None]] | None
 OnComplete = Callable[[str, str], Awaitable[None]] | None
 
 
+#: 펌프가 미리 읽어 둘 수 있는 청크 수. 상류가 프레임 루프보다 빠를 때의 버퍼이자
+#: 배압(backpressure) 지점이다 — 큐가 차면 펌프가 상류 읽기를 멈춘다.
+#: ⚠️ 무제한으로 두면 느린 클라이언트 하나가 상류 전체를 메모리에 담는다.
+_PUMP_READ_AHEAD = 16
+
+#: 상류가 정상 종료했음을 큐로 알리는 표지. ``None`` 을 쓸 수 없다 — 어댑터가 빈
+#: 청크를 흘릴 수 있고 그것과 구별되지 않는다.
+_PUMP_EOF = object()
+
+
+class _UpstreamPump:
+    """상류 읽기를 **별도 태스크**로 옮겨, 프레임 루프의 취소가 상류를 닫지 않게 한다.
+
+    왜 필요한가
+    -----------
+    프레임 루프는 거의 모든 시간을 ``await asyncio.wait_for(iterator.__anext__(), ...)``
+    에서 파킹된 상태로 보낸다(모델이 생각하는 동안). 클라이언트가 그 시점에 끊으면
+    Starlette 이 응답 태스크를 취소하고, ``CancelledError`` 가 **상류 제너레이터 안으로**
+    전달되어 그것을 닫는다. 그래서 과금을 지키려고 띄우는 배수(drain) 태스크는 이미
+    끝난 제너레이터를 순회하게 되고 **한 청크도 얻지 못한다.**
+
+    실측(python 3.12, 두 모양을 같은 상류로 비교):
+      현재 모양  upstream_got CancelledError → upstream_finally → drain_start →
+                 drain_end,  배수 청크 **0개**
+      펌프 모양  drain_start → drain_chunk c2..c5 → drain_end,  배수 청크 **4개**
+
+    잃는 것이 무엇인지가 중요하다. Anthropic 방언에서 최종 ``output_tokens`` 를 담은
+    ``message_delta`` 와 ``amazon-bedrock-invocationMetrics`` 프레임은 스트림 끝에 온다 —
+    끊긴 뒤 배수가 비면 output_tokens 가 0 이고 과금이 tokenizer 추정치로 떨어진다.
+    Responses 방언은 더 나쁘다: usage 가 종결 이벤트 **안에만** 있어서 usage 전체가 0 이
+    되고, cost_recorder 가 usage_logs 행을 아예 만들지 않는다. 그래서
+    ``stream_disponnect_drain_timeout`` 설정은 실질적으로 죽은 설정이었다.
+
+    ⚠️ 도착 시각을 **펌프에서** 찍는다. 프레임 루프에서 찍으면 미리 읽어 둔 청크가
+       실제 도착보다 늦은 시각을 받아 TTFT 가 부풀려진다(read-ahead 만큼).
+    """
+
+    def __init__(
+        self,
+        chunk_iter: AsyncIterator[bytes],
+        *,
+        read_ahead: int = _PUMP_READ_AHEAD,
+        label: str = "stream",
+    ) -> None:
+        self._iterator = chunk_iter.__aiter__()
+        self._queue: asyncio.Queue = asyncio.Queue(maxsize=read_ahead)
+        self._label = label
+        self._task = asyncio.create_task(self._run())
+
+    async def _run(self) -> None:
+        """상류를 끝까지 읽어 큐에 넣는다. 예외도 큐로 전달한다.
+
+        ⚠️ 예외를 던지지 않고 큐로 넘기는 이유: 이 태스크는 아무도 await 하지 않으므로,
+           여기서 던지면 "Task exception was never retrieved" 로 로그만 남고 프레임
+           루프는 영원히 기다린다.
+        """
+        try:
+            async for chunk in self._iterator:
+                await self._queue.put((chunk, time.monotonic()))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — 프레임 루프가 되던진다
+            await self._queue.put(exc)
+        else:
+            await self._queue.put(_PUMP_EOF)
+
+    async def next(self, *, timeout: float) -> tuple[bytes, float]:
+        """다음 ``(청크, 도착시각)``. EOF 면 ``StopAsyncIteration``.
+
+        상류 예외는 여기서 그대로 되던진다 — 프레임 루프의 기존 except 절이 잡는다.
+        """
+        item = await asyncio.wait_for(self._queue.get(), timeout=timeout)
+        if item is _PUMP_EOF:
+            raise StopAsyncIteration
+        if isinstance(item, BaseException):
+            raise item
+        return item
+
+    async def drain(self, *, timeout: float) -> AsyncIterator[bytes]:
+        """클라이언트가 끊긴 뒤 남은 청크를 계속 받는다(과금 보존).
+
+        ⚠️ 펌프 태스크는 여전히 살아 있으므로 상류는 계속 읽힌다 — 그것이 이 클래스의
+           존재 이유다. 여기서 하는 일은 큐를 비우는 것뿐이다.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                logger.warning("stream_drain_timeout", label=self._label)
+                return
+            try:
+                item = await asyncio.wait_for(self._queue.get(), timeout=remaining)
+            except TimeoutError:
+                logger.warning("stream_drain_timeout", label=self._label)
+                return
+            if item is _PUMP_EOF:
+                return
+            if isinstance(item, BaseException):
+                logger.info("stream_drain_upstream_error", label=self._label)
+                return
+            yield item[0]
+
+    def close(self) -> None:
+        """펌프 태스크를 정리한다. 정상 종료·오류 반환 경로에서 부른다.
+
+        ⚠️ ``await`` 하지 않는다 — 이 메서드는 제너레이터가 닫히는 경로에서도 불릴 수
+           있고, 그 시점의 await 는 "async generator ignored GeneratorExit" 를 유발한다.
+        """
+        if not self._task.done():
+            self._task.cancel()
+
+
 def _resolve_timeouts(
     idle_timeout: float | None, drain_timeout: float | None
 ) -> tuple[float, float]:
@@ -93,7 +205,11 @@ async def bedrock_anthropic_sse_stream(
     }
     accumulated_text: list[str] = []  # KI-08: content_block_delta.delta.text 누적
     first_token_time: float | None = None
-    iterator = chunk_iter.__aiter__()
+    pump = _UpstreamPump(chunk_iter, label="anthropic")
+    #: 방금 펌프에서 꺼낸 청크의 **도착** 시각. TTFT 를 이 값으로 찍는다.
+    #: ⚠️ 포맷 시점의 monotonic() 을 쓰면 미리 읽어 둔 청크(read-ahead)가 실제 도착보다
+    #:    늦은 시각을 받아 TTFT 가 부풀려진다.
+    chunk_arrived_at: float | None = None
     client_disconnected = False
     # 과금 멱등 가드. 종료 경로가 4개(정상/idle timeout/upstream 예외/클라이언트 끊김
     # → 백그라운드 drain)라, 가드 없이 각 경로에서 finalize 를 호출하면 **이중 과금**이
@@ -106,7 +222,7 @@ async def bedrock_anthropic_sse_stream(
 
     def _format(chunk: bytes) -> bytes:
         """Parse chunk, update counters, return SSE-formatted bytes."""
-        nonlocal first_token_time
+        nonlocal first_token_time, chunk_arrived_at
         try:
             data = json.loads(chunk)
         except (json.JSONDecodeError, TypeError):
@@ -130,7 +246,12 @@ async def bedrock_anthropic_sse_stream(
             if delta.get("type") == "text_delta":
                 if t := delta.get("text"):
                     if first_token_time is None:
-                        first_token_time = time.monotonic()
+                        # 도착 시각(펌프에서 찍음). 포맷 시점이 아니다 — 위 주석 참조.
+                        first_token_time = (
+                            chunk_arrived_at
+                            if chunk_arrived_at is not None
+                            else time.monotonic()
+                        )
                     accumulated_text.append(t)
         elif etype == "message_delta":
             u = data.get("usage", {})
@@ -231,16 +352,19 @@ async def bedrock_anthropic_sse_stream(
             logger.exception("on_usage_callback_failed")
 
     async def _drain_remaining() -> None:
-        deadline = time.monotonic() + drain_timeout
+        """클라이언트가 끊긴 뒤에도 남은 프레임을 소비해 과금을 보존한다.
+
+        ⚠️ 펌프를 통해 받는다. 예전에는 ``iterator`` 를 직접 순회했는데, 클라이언트 끊김이
+           그 iterator 를 이미 닫아 놓기 때문에 **한 청크도 얻지 못했다**(실측). 즉
+           ``stream_disconnect_drain_timeout`` 은 죽은 설정이었다.
+        """
         try:
-            async for chunk in iterator:
-                if time.monotonic() > deadline:
-                    logger.warning("stream_drain_timeout")
-                    break
+            async for chunk in pump.drain(timeout=drain_timeout):
                 _format(chunk)  # side effect: updates counters
         except Exception:
             logger.exception("stream_drain_error")
         finally:
+            pump.close()
             await _fire_on_usage()
             await _fire_on_complete("partial")
 
@@ -251,7 +375,7 @@ async def bedrock_anthropic_sse_stream(
     try:
         while True:
             try:
-                chunk = await asyncio.wait_for(iterator.__anext__(), timeout=idle_timeout)
+                chunk, chunk_arrived_at = await pump.next(timeout=idle_timeout)
             except StopAsyncIteration:
                 break
             except TimeoutError:
@@ -296,6 +420,8 @@ async def bedrock_anthropic_sse_stream(
         yield f"event: error\ndata: {json.dumps(err)}\n\n".encode()
         return
 
+    # 정상 종료 — 펌프 태스크를 정리한다(끊김 경로는 배수의 finally 가 닫는다).
+    pump.close()
     if not client_disconnected:
         await _fire_on_usage()
         # 정상 종료 — 클라이언트가 끊기지 않았고 스트림이 끝까지 갔다.
@@ -329,7 +455,11 @@ async def openai_sse_stream(
     latest_usage: TokenUsage | None = None
     accumulated_text: list[str] = []  # KI-08: delta.content 누적
     first_token_time: float | None = None
-    iterator = chunk_iter.__aiter__()
+    pump = _UpstreamPump(chunk_iter, label="openai")
+    #: 방금 펌프에서 꺼낸 청크의 **도착** 시각. TTFT 를 이 값으로 찍는다.
+    #: ⚠️ 포맷 시점의 monotonic() 을 쓰면 미리 읽어 둔 청크(read-ahead)가 실제 도착보다
+    #:    늦은 시각을 받아 TTFT 가 부풀려진다.
+    chunk_arrived_at: float | None = None
     client_disconnected = False
     usage_fired = False  # 과금 멱등 가드 — bedrock_anthropic_sse_stream 과 동일 계약
     accumulated_frames: list[str] = []  # 본문 로깅용(on_complete 없으면 미사용)
@@ -341,7 +471,7 @@ async def openai_sse_stream(
 
     def _scan_usage(chunk: bytes) -> TokenUsage | None:
         """Scan a (possibly multi-frame) chunk for usage + accumulate delta content."""
-        nonlocal first_token_time
+        nonlocal first_token_time, chunk_arrived_at
         try:
             text = chunk.decode("utf-8", errors="ignore")
         except Exception:
@@ -363,7 +493,12 @@ async def openai_sse_stream(
                 delta = choice.get("delta") or {}
                 if isinstance(delta, dict) and (c := delta.get("content")):
                     if first_token_time is None:
-                        first_token_time = time.monotonic()
+                        # 도착 시각(펌프에서 찍음). 포맷 시점이 아니다 — 위 주석 참조.
+                        first_token_time = (
+                            chunk_arrived_at
+                            if chunk_arrived_at is not None
+                            else time.monotonic()
+                        )
                     accumulated_text.append(c)
             if u := data.get("usage"):
                 # Shared Chat-wire parser: splits the cache-inclusive prompt count into
@@ -435,18 +570,16 @@ async def openai_sse_stream(
             logger.exception("on_usage_callback_failed")
 
     async def _drain_remaining() -> None:
+        """근거는 anthropic 헬퍼의 같은 함수 주석 참조(펌프 없이는 0청크)."""
         nonlocal latest_usage
-        deadline = time.monotonic() + drain_timeout
         try:
-            async for chunk in iterator:
-                if time.monotonic() > deadline:
-                    logger.warning("stream_drain_timeout")
-                    break
+            async for chunk in pump.drain(timeout=drain_timeout):
                 if u := _scan_usage(chunk):
                     latest_usage = u
         except Exception:
             logger.exception("stream_drain_error")
         finally:
+            pump.close()
             await _fire_on_usage()
             await _fire_on_complete("partial")
 
@@ -457,7 +590,7 @@ async def openai_sse_stream(
     try:
         while True:
             try:
-                chunk = await asyncio.wait_for(iterator.__anext__(), timeout=idle_timeout)
+                chunk, chunk_arrived_at = await pump.next(timeout=idle_timeout)
             except StopAsyncIteration:
                 break
             except TimeoutError:
@@ -495,6 +628,8 @@ async def openai_sse_stream(
         yield _emit_error_chunk("stream_error", str(exc) or "stream_error")
         return
 
+    # 정상 종료 — 펌프 태스크를 정리한다(끊김 경로는 배수의 finally 가 닫는다).
+    pump.close()
     if not client_disconnected:
         await _fire_on_usage()
         # 정상 종료 — 클라이언트가 끊기지 않았고 스트림이 끝까지 갔다.
@@ -530,7 +665,11 @@ async def responses_sse_stream(
     latest_usage: TokenUsage | None = None
     accumulated_text: list[str] = []
     first_token_time: float | None = None
-    iterator = chunk_iter.__aiter__()
+    pump = _UpstreamPump(chunk_iter, label="responses")
+    #: 방금 펌프에서 꺼낸 청크의 **도착** 시각. TTFT 를 이 값으로 찍는다.
+    #: ⚠️ 포맷 시점의 monotonic() 을 쓰면 미리 읽어 둔 청크(read-ahead)가 실제 도착보다
+    #:    늦은 시각을 받아 TTFT 가 부풀려진다.
+    chunk_arrived_at: float | None = None
     client_disconnected = False
     usage_fired = False  # 과금 멱등 가드 — bedrock_anthropic_sse_stream 과 동일 계약
     accumulated_frames: list[str] = []  # 본문 로깅용(on_complete 없으면 미사용)
@@ -567,7 +706,12 @@ async def responses_sse_stream(
             if etype == "response.output_text.delta":
                 if (d := data.get("delta")) and isinstance(d, str):
                     if first_token_time is None:
-                        first_token_time = time.monotonic()
+                        # 도착 시각(펌프에서 찍음). 포맷 시점이 아니다 — 위 주석 참조.
+                        first_token_time = (
+                            chunk_arrived_at
+                            if chunk_arrived_at is not None
+                            else time.monotonic()
+                        )
                     accumulated_text.append(d)
             elif etype in ("response.completed", "response.incomplete", "response.failed"):
                 resp = data.get("response")
@@ -649,23 +793,25 @@ async def responses_sse_stream(
             logger.exception("on_usage_callback_failed")
 
     async def _drain_remaining() -> None:
-        deadline = time.monotonic() + drain_timeout
+        """근거는 anthropic 헬퍼의 같은 함수 주석 참조.
+
+        ⚠️ 이 방언에서 가장 비싸다: usage 가 종결 이벤트 **안에만** 있어서, 배수가 비면
+           usage 전체가 0 이고 cost_recorder 가 usage_logs 행을 아예 만들지 않는다.
+        """
         try:
-            async for chunk in iterator:
-                if time.monotonic() > deadline:
-                    logger.warning("responses_stream_drain_timeout")
-                    break
+            async for chunk in pump.drain(timeout=drain_timeout):
                 _process(chunk)  # updates latest_usage/accumulated_text as a side effect
         except Exception:
             logger.exception("responses_stream_drain_error")
         finally:
+            pump.close()
             await _fire_on_usage()
             await _fire_on_complete("partial")
 
     try:
         while True:
             try:
-                chunk = await asyncio.wait_for(iterator.__anext__(), timeout=idle_timeout)
+                chunk, chunk_arrived_at = await pump.next(timeout=idle_timeout)
             except StopAsyncIteration:
                 break
             except TimeoutError:
@@ -700,6 +846,8 @@ async def responses_sse_stream(
         yield _emit_error_chunk("stream_error", str(exc) or "stream_error")
         return
 
+    # 정상 종료 — 펌프 태스크를 정리한다(끊김 경로는 배수의 finally 가 닫는다).
+    pump.close()
     if not client_disconnected:
         await _fire_on_usage()
         # 정상 종료 — 클라이언트가 끊기지 않았고 스트림이 끝까지 갔다.
