@@ -60,17 +60,29 @@ def _load_worker_events():
 
 
 def _published_event_keys() -> set[str]:
-    """batch_flusher._publish_thresholds 가 발행하는 dict 의 최상위 키를 AST 로 뽑는다.
+    """batch_flusher 가 예산 알림으로 발행하는 dict 의 최상위 키를 AST 로 뽑는다.
 
     실제로 publish 를 호출하려면 cost-recorder-worker 패키지를 import 해야 하는데
     위 이유로 불가능하다. 대신 소스의 dict 리터럴을 읽어 키 집합을 확인한다 —
     누군가 다시 평평하게 되돌리면(= 원래 사고) 키 집합이 달라져 실패한다.
+
+    ⚠️ **특정 함수 이름에 매달지 않는다.** 처음에는 ``_publish_thresholds`` 안만 뒤졌는데,
+       스코프별 발행으로 리팩터하면서 리터럴이 헬퍼로 옮겨가자 이 검사가 "리터럴을 찾지
+       못했다" 로 실패했다 — 계약은 그대로인데 검사가 위치에 의존한 것이다. 이제 모듈
+       전체에서 ``notifications:budget`` 으로 publish 하는 함수를 찾아 그 안의 리터럴을
+       읽는다.
     """
     if not BATCH_FLUSHER.exists():
         pytest.skip(f"{BATCH_FLUSHER} 없음 (부분 체크아웃)")
     tree = ast.parse(BATCH_FLUSHER.read_text(encoding="utf-8"))
     for node in ast.walk(tree):
-        if not (isinstance(node, ast.AsyncFunctionDef) and node.name == "_publish_thresholds"):
+        if not isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)):
+            continue
+        publishes_budget = any(
+            isinstance(c, ast.Constant) and c.value == "notifications:budget"
+            for c in ast.walk(node)
+        )
+        if not publishes_budget:
             continue
         for inner in ast.walk(node):
             if (
@@ -85,7 +97,9 @@ def _published_event_keys() -> set[str]:
                     for k in inner.value.keys
                     if isinstance(k, ast.Constant) and isinstance(k.value, str)
                 }
-    pytest.fail("batch_flusher._publish_thresholds 안에서 `event = {...}` 리터럴을 찾지 못했다")
+    pytest.fail(
+        "notifications:budget 으로 publish 하는 함수에서 `event = {...}` 리터럴을 찾지 못했다"
+    )
 
 
 def _seed_event_types() -> set[str]:

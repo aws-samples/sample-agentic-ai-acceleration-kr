@@ -39,6 +39,45 @@ def calculate_cost(usage: TokenUsage, pricing: ModelConfigSchema) -> Decimal:
     )
 
 
+
+def _threshold_events(result: dict | None, scope: str, client: str | None = None) -> list:
+    """budget_deduct.lua 의 결과에서 이 스코프의 교차 이벤트를 만든다.
+
+    ⚠️ ``crossed`` 키의 **부재**가 "교차 없음" 이다. cjson 은 빈 Lua 테이블을 JSON 객체
+       ``{}`` 로 인코딩하므로 Lua 쪽이 빈 배열을 실을 수 없고, 그래서 비어 있으면 키를
+       생략한다(같은 함정으로 app_clients 게이트가 조용히 닫힌 전례가 있다).
+
+    ⚠️ 구버전 Lua(``crossed`` 없음, ``threshold_triggered`` 만)와도 호환된다 — 배포 중
+       파드 혼재 구간에서 한쪽만 새 스크립트를 로드한 상태가 실제로 생긴다.
+    """
+    from app.schemas.cost_stream import ThresholdEvent
+
+    if not isinstance(result, dict):
+        return []
+    raw = result.get("crossed")
+    if not isinstance(raw, list) or not raw:
+        single = result.get("threshold_triggered")
+        raw = [single] if isinstance(single, (int, float)) else []
+    used = result.get("new_used")
+    limit = result.get("limit")
+    events = []
+    for pct in raw:
+        try:
+            events.append(
+                ThresholdEvent(
+                    scope=scope,
+                    threshold_pct=int(pct),
+                    used_usd=Decimal(str(used if used is not None else 0)),
+                    limit_usd=Decimal(str(limit if limit is not None else 0)),
+                    client=client,
+                )
+            )
+        except Exception:
+            # 한 건이 이상해도 다른 스코프의 알림을 잃지 않는다.
+            logger.warning("threshold_event_build_failed", scope=scope, pct=pct)
+    return events
+
+
 class CostRecorder:
     """요청 완료 시점 critical path 처리기 (FR-3.3 리팩터, 2026-04-20).
 
@@ -166,6 +205,7 @@ class CostRecorder:
 
         # 1. Redis 예산 차감 + 임계값 체크
         threshold_triggered = None
+        threshold_events: list = []
         if redis is not None:
             from app.services.budget_service import PER_APP_BUDGET_CLIENTS
             from app.services.lua_loader import LuaScriptLoader
@@ -189,18 +229,26 @@ class CostRecorder:
                 )
                 result = json.loads(raw)
                 threshold_triggered = result.get("threshold_triggered")
+                threshold_events.extend(_threshold_events(result, "user"))
             except Exception:
                 logger.exception("budget_deduct_failed", user_id=auth_context.user_id)
 
             # 팀 예산 차감
+            #
+            # ⚠️ 예전에는 이 EVAL 의 **반환값을 버렸다.** Lua 는 팀 스코프의 임계값 교차를
+            #    정확히 계산해서 돌려주는데 아무도 읽지 않았고, 스트림 엔트리에는 단일
+            #    ``threshold_triggered`` 필드밖에 없어서 담을 자리도 없었다. 결과적으로
+            #    팀 예산 80%/100% 알림은 **구조적으로 발송 불가능**했다 — 팀 한도를 다 쓴
+            #    팀에게 아무 신호도 가지 않는다.
             try:
-                await redis.eval(
+                team_raw = await redis.eval(
                     LuaScriptLoader.get("budget_deduct"),
                     2,
                     team_usage_key,
                     team_config_key,
                     str(cost_usd),
                 )
+                threshold_events.extend(_threshold_events(json.loads(team_raw), "team"))
             except Exception:
                 logger.warning("team_budget_deduct_failed", team_id=auth_context.team_id)
 
@@ -236,9 +284,14 @@ class CostRecorder:
                 client_usage_key = f"budget:user:{{{auth_context.user_id}}}:{client}:{period}"
                 client_config_key = f"budget:config:user:{{{auth_context.user_id}}}:{client}"
                 try:
-                    await redis.eval(
+                    client_raw = await redis.eval(
                         LuaScriptLoader.get("budget_deduct"),
                         2, client_usage_key, client_config_key, str(cost_usd),
+                    )
+                    # 팀 스코프와 같은 이유로 반환값을 읽는다 — per-app 예산 알림도
+                    # 여기서만 만들 수 있다.
+                    threshold_events.extend(
+                        _threshold_events(json.loads(client_raw), "client", client)
                     )
                 except Exception:
                     logger.warning("client_budget_deduct_failed", client=client)
@@ -292,6 +345,7 @@ class CostRecorder:
                 duration_ms=duration_ms,
                 ttft_ms=ttft_ms,
                 threshold_triggered=threshold_triggered,
+                threshold_events=threshold_events,
                 downgraded_from=downgraded_from,
                 availability_fallback_from=availability_fallback_from,
                 bedrock_request_id=bedrock_request_id,
@@ -313,6 +367,7 @@ class CostRecorder:
         duration_ms: int,
         ttft_ms: int | None = None,
         threshold_triggered: int | None,
+        threshold_events: list | None = None,
         downgraded_from: str | None = None,
         availability_fallback_from: str | None = None,
         bedrock_request_id: str | None = None,
@@ -354,6 +409,7 @@ class CostRecorder:
             downgraded_from=downgraded_from,
             availability_fallback_from=availability_fallback_from,
             threshold_triggered=threshold_triggered,
+            threshold_events=threshold_events or [],
             threshold_policy=None,  # worker가 budget_configs에서 조회해 채움
             sso_subject=auth_context.sso_subject,
             bedrock_request_id=bedrock_request_id,

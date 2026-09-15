@@ -316,17 +316,18 @@ jobs:
           uv run pytest -q -p no:cacheprovider \
             tests/regression/test_critical_model_client_scope_real_db.py \
             tests/regression/test_high_reservation_release_on_error.py \
-            tests/regression/test_high_budget_fallback_policy.py > /tmp/proof3.txt 2>&1
+            tests/regression/test_high_budget_fallback_policy.py \
+            tests/regression/test_medium_threshold_all_crossings.py > /tmp/proof3.txt 2>&1
           status=$?
           tail -30 /tmp/proof3.txt
           if [ "$status" -ne 0 ]; then exit "$status"; fi
           passed=$(grep -oE "[0-9]+ passed" /tmp/proof3.txt | tail -1 | grep -oE "[0-9]+" || echo 0)
-          # 로컬 실측 기준선: 29 passed (실 DB 3 + 예약 해제 10 + 예산 정책 16).
+          # 로컬 실측 기준선: 41 passed (실 DB 3 + 예약 해제 10 + 예산 정책 16 + 임계값 교차 12).
           # ⚠️ 예약 해제 파일은 REDIS_PROOF_URL 을 요구한다 — 환불은 incrbyfloat 로
           #    카운터를 움직이는 것이라, 가짜 Redis 로는 부호가 반대인 환불도 통과한다.
           #    두 env 중 하나라도 안 걸리면 통과 수가 떨어져 여기서 실패한다.
-          if [ "${passed:-0}" -lt 29 ]; then
-            echo "::error::통과 ${passed} 건(기대 29) — PROOF_DSN/REDIS_PROOF_URL 이 안 걸려 skip 됐다."
+          if [ "${passed:-0}" -lt 41 ]; then
+            echo "::error::통과 ${passed} 건(기대 41) — PROOF_DSN/REDIS_PROOF_URL 이 안 걸려 skip 됐다."
             exit 1
           fi
 
@@ -393,15 +394,25 @@ jobs:
             #   +1  예산 폴백 정책 회귀 테스트
             #   +1  readiness / Responses usage 회귀 테스트
             #   +1  thinking 정규화 배선 회귀 테스트
+            #   +1  임계값 전량/스코프별 교차 회귀 테스트
+            # ⚠️ 487 = 481 + 지금 열려 있는 여섯 브랜치가 각각 추가하는 1건.
+            #
+            #    머지 시 main 의 선언값은 **마지막에 들어온 브랜치의 값**이 되므로, 래칫 줄을
+            #    건드리는 모든 브랜치가 같은 최대값을 선언해야 한다. 하나라도 낮으면 그것이
+            #    마지막에 들어올 때 main 이 깨진다(#82 가 그렇게 깨졌다).
+            #
+            #    ⚠️ 이 값은 열린 브랜치가 하나 늘 때마다 함께 올려야 한다 — 즉 배치를 키울수록
+            #    비용이 붙는다. 먼저 머지하는 편이 싸다. 전부 들어오면 실측은 484 이고
+            #    CI 가 낮추라는 notice 를 낸다.
             # 헤더 외 신규 위반은 0 이다(UP045 2건은 `X | None` 로 맞춰 유입시키지 않았다).
-            baseline: 481
+            baseline: 487
           - service: cost-recorder-worker
             # 21(기존) 위의 증분은 전부 신규 파일의 저작권 헤더 E501 이다 — 레포의 모든
             # 파일이 갖는 100자 초과 한 줄이라 파일을 추가하면 필연적으로 +1 이고, 코드
             # 품질 부채가 늘어난 것이 아니다.
             #   +1  per-app 예산 행 회귀 테스트
             #   +1  재처리/고아 PEL 회귀 테스트
-            baseline: 23
+            baseline: 24
           - service: notification-worker
             baseline: 93
           - service: admin-chat-agent
