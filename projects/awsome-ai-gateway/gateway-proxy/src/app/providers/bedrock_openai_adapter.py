@@ -63,7 +63,12 @@ import httpx
 import structlog
 
 from app.providers.base import ProviderAdapter
-from app.providers.openai_usage import extract_chat_usage, extract_responses_usage
+from app.providers.openai_usage import (
+    chat_chunk_is_terminal,
+    extract_chat_usage,
+    extract_responses_usage,
+    is_terminal_responses_payload,
+)
 from app.schemas.domain import TokenUsage
 
 logger = structlog.get_logger(__name__)
@@ -323,25 +328,51 @@ class BedrockOpenAIAdapter(ProviderAdapter):
         # (with the space openai_sse_stream requires) and terminates with `data: [DONE]`,
         # so raw passthrough is byte-compatible with the vLLM path already in production.
         async def _gen_responses() -> AsyncIterator[bytes]:
+            # ⚠️ 종료 프레임을 이미 넘겼는지 기억한다 — 근거는 openai_usage 의 같은 섹션
+            #    주석(완료된 응답 뒤에 오류 프레임을 붙이면 Codex 가 재시도한다).
+            terminal_seen = False
             try:
                 async for line in resp.aiter_lines():
                     if line.startswith("data:"):
                         payload = line[len("data:"):].strip()
+                        if is_terminal_responses_payload(payload):
+                            terminal_seen = True
                         if payload and payload != "[DONE]":
                             yield payload.encode()
             except Exception:
-                logger.exception("bedrock_openai_stream_failed", model_id=model_id, wire=wire)
-                yield _error_chunk(wire, "Bedrock (OpenAI) stream failed")
+                if terminal_seen:
+                    # 응답은 완결됐고 예외는 연결 정리 단계에서 났다. 오류 프레임을 붙이면
+                    # 이미 받은 성공을 실패로 덮는다.
+                    logger.warning(
+                        "bedrock_openai_stream_teardown_after_terminal",
+                        model_id=model_id, wire=wire, exc_info=True,
+                    )
+                else:
+                    logger.exception(
+                        "bedrock_openai_stream_failed", model_id=model_id, wire=wire
+                    )
+                    yield _error_chunk(wire, "Bedrock (OpenAI) stream failed")
             finally:
                 await cm.__aexit__(None, None, None)
 
         async def _gen_chat() -> AsyncIterator[bytes]:
+            terminal_seen = False
             try:
                 async for chunk in resp.aiter_bytes():
+                    if chat_chunk_is_terminal(chunk):
+                        terminal_seen = True
                     yield chunk
             except Exception:
-                logger.exception("bedrock_openai_stream_failed", model_id=model_id, wire=wire)
-                yield _error_chunk(wire, "Bedrock (OpenAI) stream failed")
+                if terminal_seen:
+                    logger.warning(
+                        "bedrock_openai_stream_teardown_after_terminal",
+                        model_id=model_id, wire=wire, exc_info=True,
+                    )
+                else:
+                    logger.exception(
+                        "bedrock_openai_stream_failed", model_id=model_id, wire=wire
+                    )
+                    yield _error_chunk(wire, "Bedrock (OpenAI) stream failed")
             finally:
                 await cm.__aexit__(None, None, None)
 
