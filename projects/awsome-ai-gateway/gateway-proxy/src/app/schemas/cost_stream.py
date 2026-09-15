@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -39,6 +40,16 @@ class CostStreamEntry(BaseModel):
     cost_usd: Decimal
 
     latency_ms: int
+    # 요청의 최종 처리 결과. usage.usage_status enum 과 라벨이 **일치해야 한다** —
+    # 워커가 이 문자열을 그대로 `CAST(:status AS usage.usage_status)` 에 넣는다.
+    #
+    # ⚠️ Literal 로 묶는 이유: 잘못된 라벨은 INSERT 시점에 배치 전체를 깨뜨리고
+    #    per-row 폴백으로 떨어진다. 파싱 시점에 걸리면 그 한 건만 경고와 함께
+    #    버려지므로, 실패가 보이는 곳이 앞으로 당겨진다.
+    #
+    # 기본값이 SUCCESS 인 것은 구버전 엔트리(이 필드가 없는 메시지)가 스트림에
+    # 남아 있을 수 있기 때문이다 — 그 엔트리들은 성공 경로에서만 발행됐다.
+    status: Literal["SUCCESS", "ERROR", "TIMEOUT"] = "SUCCESS"
     # TTFT(time to first token) in ms. 스트리밍 첫 콘텐츠 델타까지의 시간.
     # 비스트리밍/미검출은 latency_ms와 동일 값. 구버전(schema_version 1) 엔트리는 부재 → None.
     ttft_ms: int | None = None
@@ -79,6 +90,7 @@ class CostStreamEntry(BaseModel):
         reasoning_tokens: int = 0,
         web_search_count: int = 0,
         latency_ms: int,
+        status: Literal["SUCCESS", "ERROR", "TIMEOUT"] = "SUCCESS",
         ttft_ms: int | None = None,
         is_streaming: bool,
         estimated_usage: bool,
@@ -106,6 +118,7 @@ class CostStreamEntry(BaseModel):
             web_search_count=web_search_count,
             cost_usd=cost_usd,
             latency_ms=latency_ms,
+            status=status,
             ttft_ms=ttft_ms,
             is_streaming=is_streaming,
             estimated_usage=estimated_usage,

@@ -9,6 +9,7 @@ DB writer 로 넘기는 흐름. 양쪽 파일을 동기화 상태로 유지 (지
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -34,6 +35,13 @@ class CostStreamEntry(BaseModel):
     cost_usd: Decimal
 
     latency_ms: int
+    # 요청의 최종 처리 결과. 게이트웨이가 보내며, 그대로
+    # `CAST(:status AS usage.usage_status)` 에 들어간다 — 라벨이 enum 과 다르면
+    # INSERT 가 깨진다. 그래서 여기서 Literal 로 막는다(파싱 실패는 그 한 건만
+    # 경고와 함께 버려지고 ACK 되므로 스트림이 막히지 않는다).
+    #
+    # 기본값 SUCCESS: 이 필드가 없는 구버전 엔트리는 성공 경로에서만 발행됐다.
+    status: Literal["SUCCESS", "ERROR", "TIMEOUT"] = "SUCCESS"
     # TTFT(time to first token) in ms. 스트리밍 첫 콘텐츠 델타까지의 시간.
     # 비스트리밍/미검출은 latency_ms와 동일 값. 구버전(schema_version 1) 엔트리는 부재 → None.
     ttft_ms: int | None = None

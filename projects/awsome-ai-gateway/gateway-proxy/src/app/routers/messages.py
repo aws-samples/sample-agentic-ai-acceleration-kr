@@ -598,6 +598,37 @@ async def messages(request: Request) -> StreamingResponse | JSONResponse:
     availability_fallback_from = result.availability_fallback_from
     tokenizer = getattr(request.app.state, "tokenizer", None)
 
+    # 실패로 끝난 요청을 usage_logs 에 남긴다 — 아래 네 갈래 실패 출구를 **한 곳**에서
+    # 덮는다: all_open 503, bytes 페이로드(폴백 전멸), 스트리밍 오류 제너레이터,
+    # 그리고 usage 가 비어 finalize 가 스킵되는 비스트리밍 오류.
+    #
+    # ⚠️ 왜 출구마다 넣지 않는가: 네 곳에 흩어 놓으면 다음에 출구가 하나 늘 때 조용히
+    #    빠진다. 실제로 그렇게 빠져 있었고, 그 결과 실패한 요청은 행이 **아예 없었다**.
+    #    워커는 남은 성공 행에 status 를 SUCCESS 로 하드코딩해 넣었으므로, admin-api 의
+    #    세 모니터링 엔드포인트가 계산하는 error_rate_pct 는 분자도 0, 분모도 성공뿐이라
+    #    구조적으로 항상 0.00% 였다 — 화면은 비어 있지 않고 "0%" 를 녹색으로 칠했다.
+    #
+    # 2xx 인데 usage 가 없는 경우(부분 응답 등)는 여기서 걸리지 않는다 — 아래
+    # 비스트리밍 분기의 기존 가드가 담당하고, 그쪽은 status 도 SUCCESS 다.
+    #
+    # 비-2xx 가 usage 를 동반하는 경우에는 finalize 도 함께 돌 수 있다. 그때는
+    # usage_logs.request_id UNIQUE + ON CONFLICT DO NOTHING 으로 먼저 도착한 쪽(이
+    # ERROR 행)이 남는다. 예산 차감은 Redis 에서 finalize 가 하므로 영향이 없고,
+    # 상류가 거부한 요청에는 청구액이 없으므로 비용 0 이 맞다.
+    if auth_context is not None and not (200 <= status < 300):
+        await cost_recorder.record_failure(
+            redis,
+            auth_context,
+            effective_model_config,
+            request_id=request_id,
+            http_status=status,
+            duration_ms=int((time.monotonic() - start_time) * 1000),
+            is_stream=is_stream,
+            downgraded_from=state.get("downgraded_from"),
+            availability_fallback_from=availability_fallback_from,
+            client=client,
+        )
+
     # Synthetic all-open 503
     if result.all_open:
         _settings = get_settings()

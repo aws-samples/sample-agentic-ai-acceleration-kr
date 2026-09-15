@@ -313,7 +313,9 @@ class BatchFlusher:
                 "cost_usd": str(e.cost_usd),
                 "latency_ms": e.latency_ms,
                 "ttft_ms": e.ttft_ms,
-                "status": "SUCCESS",
+                # ⚠️ 하드코딩이었다 — 실패한 요청까지 SUCCESS 로 적혀서
+                #    admin-api 의 error_rate_pct 가 구조적으로 항상 0.00% 였다.
+                "status": e.status,
                 # asyncpg requires datetime instances for timestamptz bindings,
                 # not ISO strings — parse here rather than letting CAST handle it.
                 "requested_at": datetime.fromisoformat(e.requested_at),
