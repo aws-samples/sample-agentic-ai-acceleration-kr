@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from typing import Annotated
+
 from pydantic import BaseModel, Field
 
 from app.schemas.common import BudgetPolicy
@@ -15,7 +17,17 @@ from app.schemas.common import BudgetPolicy
 class SetBudgetRequest(BaseModel):
     max_budget_usd: Decimal = Field(ge=0, decimal_places=4)
     policy: BudgetPolicy = BudgetPolicy.HARD_BLOCK
-    alert_thresholds: list[int] = Field(default=[80, 90, 100], description="Budget usage % thresholds for alert notifications")
+    # ⚠️ 범위를 여기서도 강제한다. DB 는 ``budget.alert_pct`` 도메인(1..100)으로 막고
+    #    admin-ui 는 zod 로 막는데, API 스키마만 비어 있었다 — 즉 UI 를 거치지 않는
+    #    호출이 ``[150]`` 을 보내면 스키마를 통과해 DB 에서 터진다(422 여야 할 것이
+    #    500 이 된다). 세 계층의 범위가 **같아야** 한다.
+    #
+    #    빈 목록은 허용한다 — "이 예산에는 알림을 보내지 않는다" 는 유효한 설정이고,
+    #    막으면 알림을 끌 방법이 없다.
+    alert_thresholds: list[Annotated[int, Field(ge=1, le=100)]] = Field(
+        default=[80, 90, 100],
+        description="Budget usage % thresholds for alert notifications (1-100; empty = no alerts)",
+    )
 
 
 class AllocateBudgetItem(BaseModel):
@@ -72,6 +84,10 @@ class BudgetSummaryItem(BaseModel):
     usage_pct: Decimal | None
     department_id: str | None = None
     department_name: str | None = None
+    # 저장된 알림 임계값. ⚠️ 예전에는 쓰기 전용이었다 — UI 는 값을 보낼 수 있지만 되읽을
+    # 수 없어서, 다이얼로그를 다시 열면 항상 [80,90,100] 이 보였다. 예산 미설정 대상은
+    # None(설정 자체가 없다)이고 빈 목록은 "알림 없음" 이라는 유효한 설정이다.
+    alert_thresholds: list[int] | None = None
 
 
 class BudgetSummaryResponse(BaseModel):

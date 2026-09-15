@@ -234,6 +234,10 @@ class BudgetService:
             policy=BudgetPolicy(data.policy.value),
             allocated_by=actor.user_id,
             effective_from=date.today(),
+            # ⚠️ migration 0037 이전에는 이 값을 담을 컬럼이 없어서 Redis 설정 키에만
+            #    써졌다 — 그 키의 TTL 은 300초이고, 만료되면 gateway-proxy 의 재수화가
+            #    기본값으로 되돌렸다. 즉 운영자 설정이 5분만 살아 있었다.
+            alert_thresholds=sorted(set(data.alert_thresholds)),
             is_active=True,
         )
         await repo.upsert_config(config)
@@ -303,6 +307,10 @@ class BudgetService:
             policy=BudgetPolicy(data.policy.value),
             allocated_by=actor.user_id,
             effective_from=date.today(),
+            # ⚠️ migration 0037 이전에는 이 값을 담을 컬럼이 없어서 Redis 설정 키에만
+            #    써졌다 — 그 키의 TTL 은 300초이고, 만료되면 gateway-proxy 의 재수화가
+            #    기본값으로 되돌렸다. 즉 운영자 설정이 5분만 살아 있었다.
+            alert_thresholds=sorted(set(data.alert_thresholds)),
             is_active=True,
         )
         await repo.upsert_config(config)
@@ -422,6 +430,10 @@ class BudgetService:
             policy=BudgetPolicy(data.policy.value),
             allocated_by=actor.user_id,
             effective_from=date.today(),
+            # ⚠️ migration 0037 이전에는 이 값을 담을 컬럼이 없어서 Redis 설정 키에만
+            #    써졌다 — 그 키의 TTL 은 300초이고, 만료되면 gateway-proxy 의 재수화가
+            #    기본값으로 되돌렸다. 즉 운영자 설정이 5분만 살아 있었다.
+            alert_thresholds=sorted(set(data.alert_thresholds)),
             is_active=True,
         )
         await repo.upsert_config(config)
@@ -590,6 +602,9 @@ class BudgetService:
                 policy=team_config.policy,
                 allocated_by=actor.user_id,
                 effective_from=date.today(),
+                # 팀에서 파생된 사용자 예산은 팀의 임계값을 물려받는다 — 여기서 기본값을
+                # 다시 쓰면 팀 설정과 어긋난 알림이 나간다.
+                alert_thresholds=list(team_config.alert_thresholds or []),
                 is_active=True,
             )
             await repo.upsert_config(config)
@@ -763,11 +778,13 @@ class BudgetService:
                 limit = cfg.max_budget_usd
                 remaining = limit - used
                 pct = (used / limit * 100) if limit > 0 else Decimal("0")
+                thresholds = list(cfg.alert_thresholds or [])
             else:
                 used = Decimal("0")
                 limit = None
                 remaining = None
                 pct = None
+                thresholds = None
             items.append(
                 BudgetSummaryItem(
                     target_type=scope_enum.value.lower(),
@@ -781,6 +798,7 @@ class BudgetService:
                     usage_pct=pct,
                     department_id=department_id,
                     department_name=department_name,
+                    alert_thresholds=thresholds,
                 )
             )
 
@@ -957,7 +975,9 @@ class BudgetService:
                 scope_id=cfg.scope_id,
                 max_budget_usd=cfg.max_budget_usd,
                 policy=cfg.policy,
-                alert_thresholds=[80, 90, 100],  # DB에 컬럼 없음 — 표준 기본값
+                # migration 0037 이후 DB 가 진실의 원천이다(예전 하드코딩은 운영자
+                # 설정을 워밍업이 덮어쓰게 만들었다).
+                alert_thresholds=list(cfg.alert_thresholds or []),
             )
             count += 1
         logger.info("team_budget_cache.warmed", count=count)

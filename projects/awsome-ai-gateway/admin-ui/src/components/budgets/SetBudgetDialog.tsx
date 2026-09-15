@@ -27,6 +27,7 @@ interface SetBudgetDialogProps {
     type: (typeof BudgetScope)[keyof typeof BudgetScope];
     currentLimit: number;
     parentLimit?: number;
+    alertThresholds?: number[] | null;
   } | null;
 }
 
@@ -62,7 +63,15 @@ export function SetBudgetDialog({ isOpen, onClose, target }: SetBudgetDialogProp
   const [error, setError] = useState<string | null>(null);
   const [value, setValue] = useState<string>(String(target?.currentLimit ?? ''));
   const [policy, setPolicy] = useState<'HARD_BLOCK' | 'SOFT_WARNING' | 'THROTTLE'>('HARD_BLOCK');
-  const [thresholds, setThresholds] = useState<number[]>(DEFAULT_THRESHOLDS);
+  // ⚠️ 저장된 값으로 초기화한다. 예전에는 항상 DEFAULT_THRESHOLDS 였고(서버가 값을
+  //    돌려주지 않았다), 50% 를 저장한 뒤 다시 열면 저장한 값이 사라진 것처럼 보였다.
+  //    부모가 `key={selectedItem?.id}` 로 대상마다 리마운트하므로 이 초기화가 매번 돈다.
+  //
+  //    빈 배열은 "알림 없음" 이라는 유효한 설정이므로 `|| DEFAULT` 로 채우면 안 된다 —
+  //    운영자가 비운 설정이 되살아난다. null/undefined(예산 미설정)만 기본값을 쓴다.
+  const [thresholds, setThresholds] = useState<number[]>(
+    target?.alertThresholds ?? DEFAULT_THRESHOLDS,
+  );
   const [newThreshold, setNewThreshold] = useState<string>('50');
 
   // per-app(client) 예산 — USER scope 에서만 사용. 빈 문자열 = 미설정.

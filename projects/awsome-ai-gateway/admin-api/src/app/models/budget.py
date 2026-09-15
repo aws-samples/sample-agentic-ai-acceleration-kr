@@ -61,6 +61,19 @@ class BudgetConfig(Base):
     allocated_by: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("auth.users.id"), nullable=False)
     effective_from: Mapped[date] = mapped_column(Date, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # 운영자가 설정한 임계값 알림 %. migration 0037.
+    #
+    # ⚠️ 이 컬럼이 없던 동안 UI/API/Lua 는 모두 이 값을 다루고 있었고, 저장소만 없었다.
+    #    그래서 운영자 설정이 Redis 설정 키의 TTL(300초) 동안만 살아 있다가 조용히
+    #    기본값 [80,90,100] 으로 되돌아갔다.
+    #
+    #    빈 배열은 유효하며 "알림 없음" 을 뜻한다. NOT NULL 이므로 "미설정" 은 없다 —
+    #    NULL 을 허용하면 읽는 쪽마다 기본값 규칙을 구현해야 하고, 한 곳이 빠지면 임계값이
+    #    빈 목록으로 읽혀 알림이 조용히 사라진다.
+    alert_thresholds: Mapped[list[int]] = mapped_column(
+        ARRAY(Integer), nullable=False, default=lambda: [80, 90, 100]
+    )
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
