@@ -178,6 +178,9 @@ async def enforce_rate_limits(
         redis, descriptors, reserved_tokens=reserved
     )
     if not tpm_result.allowed:
+        # ⚠️ 앞 단계에서 RPM 카운터가 이미 올라갔다. 되돌리지 않으면 상류에 가지도 않은
+        #    요청이 그 창(60s) 동안 사용자의 RPM 한 칸을 차지한다.
+        await svc.release_rpm(redis, descriptors, request_id or "")
         return _build_429(tpm_result, metrics)
 
     # CPM/CPH 체크 (Pre-reserve, FR-4.6 — USER+TEAM 2 스코프)
@@ -193,6 +196,11 @@ async def enforce_rate_limits(
         team_cph_limit=limits.team.cph,
     )
     if not cost_result.allowed:
+        # ⚠️ 앞 두 단계의 예약이 모두 잡혀 있다. 여기서 되돌리지 않으면 아무도 못 한다 —
+        #    아래 `state["rate_limit_state"]` 는 통과 경로에서만 써지므로, 하류의
+        #    release_reservations 는 이 요청에 대해 볼 것이 없다.
+        await svc.release_tpm(redis, descriptors, reserved)
+        await svc.release_rpm(redis, descriptors, request_id or "")
         return _build_cost_429(cost_result, metrics)
 
     # 통과 — settle용 정보 주입

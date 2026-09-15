@@ -166,6 +166,9 @@ class RateLimitService:
         script = LuaScriptLoader.get("rate_limit_check")
 
         last: dict | None = None
+        #: 이미 카운터를 올린 스코프들. 뒤 스코프가 거부하면 이것들을 되돌린다
+        #: (release_rpm 주석 참조 — fast-fail 순서 때문에 반드시 생기는 상황이다).
+        counted: list[ScopeDescriptor] = []
         for d in effective:
             key = build_rl_key(d.scope, d.scope_id, d.model_alias, "rpm")
             # num_scopes=1 — 동일 Lua 를 단일 스코프로 호출(슬롯 1개).
@@ -183,6 +186,10 @@ class RateLimitService:
                     return blocked
                 continue
             if not result["allowed"]:
+                # ⚠️ 앞선 스코프에서 이미 올린 카운터를 되돌린다. 이걸 빼면 팀 한도에
+                #    걸린 요청이 사용자 자신의 RPM 창을 차지한 채 남는다.
+                if counted:
+                    await self.release_rpm(redis, counted, req_id)
                 return RateLimitResult(
                     allowed=False,
                     remaining=result.get("remaining", 0),
@@ -192,6 +199,7 @@ class RateLimitService:
                     scope=result.get("scope"),
                     limit_type=result.get("limit_type"),
                 )
+            counted.append(d)
             last = result
 
         # 전 scope 통과 — 마지막(가장 광역) scope 결과의 remaining/limit 노출.
@@ -230,6 +238,8 @@ class RateLimitService:
         script = LuaScriptLoader.get("rate_limit_tpm_check")
 
         last: dict | None = None
+        #: 이미 예약이 잡힌 스코프들. 뒤 스코프가 거부하면 이것들을 환불한다.
+        reserved_scopes: list[ScopeDescriptor] = []
         for d in effective:
             cur, prev, win = build_tpm_key_group(d.scope, d.scope_id, d.model_alias)
             # num_scopes=1 — 이 scope 의 3키만(같은 hash tag = 단일 슬롯).
@@ -252,6 +262,10 @@ class RateLimitService:
                     return blocked
                 continue
             if not result["allowed"]:
+                # ⚠️ 앞선 스코프의 예약을 환불한다. USER 가 통과하고 TEAM 이 거부하면,
+                #    상류에 가지도 않은 요청이 사용자의 TPM 창을 예약분만큼 물고 있게 된다.
+                if reserved_scopes:
+                    await self.release_tpm(redis, reserved_scopes, reserved_tokens)
                 return RateLimitResult(
                     allowed=False,
                     remaining=result.get("remaining", -1),
@@ -261,6 +275,7 @@ class RateLimitService:
                     scope=result.get("scope"),
                     limit_type=result.get("limit_type"),
                 )
+            reserved_scopes.append(d)
             last = result
 
         if last is not None:
@@ -271,6 +286,51 @@ class RateLimitService:
                 window_reset=last.get("window_reset") or 0,
             )
         return RateLimitResult(allowed=True, remaining=-1, limit=-1)
+
+    async def release_rpm(
+        self,
+        redis,
+        descriptors: list[ScopeDescriptor],
+        request_id: str,
+    ) -> None:
+        """RPM 카운터에서 이 요청의 멤버를 제거한다.
+
+        ⚠️ 왜 필요한가. RPM 은 ZSET 이고 ``rate_limit_check.lua`` 가 이 요청을
+           ``<request_id>:1`` 멤버로 넣는다(스코프당 eval 이라 Lua 안의 인덱스는 항상 1).
+           그런데 검사는 **fast-fail** 로 USER → TEAM → GLOBAL 순서다. USER 가 통과해
+           카운터가 올라간 뒤 TEAM 이 거부하면, 그 요청은 **서빙되지 않았는데** 사용자의
+           RPM 창을 한 칸 차지한 채 남는다. 팀 한도에 계속 걸리는 상황에서는 사용자 자신의
+           창이 서빙되지 않은 요청으로 채워진다.
+
+           단계 간에도 같다: RPM 이 통과한 뒤 TPM 이나 비용이 거부하면 그 RPM 증가분을
+           아무도 되돌리지 않았다.
+
+        실패해도 예외를 올리지 않는다 — 되돌리기 실패로 요청 처리를 바꿀 이유가 없고,
+        RPM 창은 다음 윈도우에서 자연히 정리된다.
+        """
+        member = f"{request_id}:1"
+        for d in descriptors:
+            if not (d.rpm_limit and d.rpm_limit > 0):
+                continue
+            try:
+                await redis.zrem(
+                    build_rl_key(d.scope, d.scope_id, d.model_alias, "rpm"), member
+                )
+            except Exception:
+                logger.warning("rpm_release_failed", scope=d.scope.value)
+
+    async def release_tpm(
+        self,
+        redis,
+        descriptors: list[ScopeDescriptor],
+        reserved_tokens: int,
+    ) -> None:
+        """TPM 예약을 전액 환불한다(``settle_tpm`` 의 actual=0 케이스).
+
+        이름을 따로 두는 이유: 호출 지점에서 "정산" 과 "취소" 를 구분해 읽히게 하려는 것.
+        요청이 상류에 가지도 않은 경우에는 정산할 실사용량이 없다.
+        """
+        await self.settle_tpm(redis, descriptors, reserved_tokens, 0)
 
     async def settle_tpm(
         self,
