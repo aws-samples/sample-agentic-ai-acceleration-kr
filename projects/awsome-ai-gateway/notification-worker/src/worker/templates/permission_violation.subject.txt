@@ -1,1 +1,1 @@
-[DS Gateway] 권한 위반 감지
+[LLM Gateway] 권한 위반 감지

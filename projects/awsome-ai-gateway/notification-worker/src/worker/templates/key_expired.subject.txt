@@ -1,1 +1,1 @@
-[DS Gateway] Virtual Key 만료됨
+[LLM Gateway] Virtual Key 만료됨

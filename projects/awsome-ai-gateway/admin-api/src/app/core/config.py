@@ -40,7 +40,10 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
 
     # ── Database (PostgreSQL) ──
-    DATABASE_URL: str = "postgresql+asyncpg://admin_api_user:changeme@localhost:5432/ds_gateway"
+    # 로컬 개발용 폴백. 배포에서는 helm 이 DATABASE_URL 을 주입한다(_helpers.tpl).
+    # ⚠️ DB 이름은 docker-compose 의 POSTGRES_DB 기본값(``gateway``)과 같아야 한다.
+    #    예전 기본값은 그것과 어긋나 있었고, 사내 조직명을 담고 있었다.
+    DATABASE_URL: str = "postgresql+asyncpg://admin_api_user:changeme@localhost:5432/gateway"
     DB_POOL_SIZE: int = 10
     DB_MAX_OVERFLOW: int = 20
     DB_POOL_TIMEOUT: int = 30

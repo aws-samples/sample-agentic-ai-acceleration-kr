@@ -1,1 +1,1 @@
-[DS Gateway] Virtual Key 강제 무효화 알림
+[LLM Gateway] Virtual Key 강제 무효화 알림
