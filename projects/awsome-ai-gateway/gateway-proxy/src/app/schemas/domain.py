@@ -101,6 +101,22 @@ class ModelPricingSchema(BaseModel):
     cache_write_1h_per_1k: Decimal = Decimal("0")    # 1-hour TTL
     cache_read_per_1k: Decimal = Decimal("0")
 
+    # ── Context-band pricing ────────────────────────────────────────────────
+    # 일부 모델(현재 GPT-5.6 terra/sol/luna)은 한 요청의 프롬프트가 임계 토큰을 넘으면
+    # 그 요청 **전체**를 더 높은 요율로 청구한다. OpenAI 문구를 AWS 모델카드가 그대로
+    # 인용: "Prompts with >272K input tokens are priced at 2x input and 1.5x output for
+    # the full request." — 계단 하나(초과분 누진 아님).
+    #
+    # ⚠️ ``threshold`` 가 None 이면 밴드 없음(오늘 동작·Claude/자가호스팅). Anthropic 은
+    #    1M 컨텍스트를 표준 단가로 청구하므로 밴드 표가 아예 없다.
+    #
+    # 배수로 저장하는 이유: short 요율이 유일한 진실원이고 long 은 그로부터 파생된다
+    # — 두 요율을 독립 저장하면 서로 어긋날 수 있다(카드가 정확히 2x/2x/1.5x 를 게시).
+    long_context_threshold_tokens: int | None = None
+    long_context_input_mult: Decimal = Decimal("1")
+    long_context_cache_mult: Decimal = Decimal("1")
+    long_context_output_mult: Decimal = Decimal("1")
+
 
 class ModelConfigSchema(BaseModel):
     provider_model_id: str

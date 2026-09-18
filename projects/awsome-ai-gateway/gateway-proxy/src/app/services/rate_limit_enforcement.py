@@ -214,8 +214,15 @@ def _estimate_cost(
     Cache 단가는 Pre-reserve 단계에서 판정 불가하므로 제외.
     """
     pricing = model_config.pricing
-    input_cost = (Decimal(estimated_input) / Decimal(1000)) * pricing.input_per_1k
-    output_cost = (Decimal(max_output) / Decimal(1000)) * pricing.output_per_1k
+    # Context-band: 예약 추정도 밴드를 태워야 한다 — 안 그러면 long-context 요청이
+    # 실비의 절반만 예약해 조기 429 방어가 무너진다(과대 예약이 목적인데 과소가 됨).
+    # 캐시는 사전 판정 불가라 제외하지만, 임계 비교는 estimated_input(요청 입력)으로 한다.
+    im = om = Decimal("1")
+    thr = getattr(pricing, "long_context_threshold_tokens", None)
+    if thr is not None and estimated_input > thr:
+        im, om = pricing.long_context_input_mult, pricing.long_context_output_mult
+    input_cost = (Decimal(estimated_input) / Decimal(1000)) * pricing.input_per_1k * im
+    output_cost = (Decimal(max_output) / Decimal(1000)) * pricing.output_per_1k * om
     return (input_cost + output_cost).quantize(Decimal("0.000001"))
 
 

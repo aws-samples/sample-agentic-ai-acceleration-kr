@@ -120,6 +120,15 @@ def _orm_to_schema(alias_row: ModelAlias, pricing_row: Optional[ModelPricing]) -
             cache_write_per_1k=pricing_row.cache_creation_5m_price_per_1k_tokens,
             cache_write_1h_per_1k=pricing_row.cache_creation_1h_price_per_1k_tokens,
             cache_read_per_1k=pricing_row.cache_read_price_per_1k_tokens,
+            # Context-band(0038). 다른 요율 컬럼과 **같은 방식으로 직접 읽는다** — 셋 다
+            # NOT NULL DEFAULT 1 이라 SELECT 로 온 행에는 항상 존재한다. ``getattr(...)
+            # or Decimal("1")`` 은 쓰지 않는다: mult 가 0 이면 ``0 or 1`` 이 1 로 새어
+            # (helm ``| default 100`` 이 0 을 삼킨 사고와 동류) 0 배수를 조용히 뒤집는다.
+            # threshold 만 nullable(NULL=밴드 없음).
+            long_context_threshold_tokens=pricing_row.long_context_threshold_tokens,
+            long_context_input_mult=pricing_row.long_context_input_mult,
+            long_context_cache_mult=pricing_row.long_context_cache_mult,
+            long_context_output_mult=pricing_row.long_context_output_mult,
         )
     else:
         p = ModelPricingSchema(input_per_1k=Decimal("0"), output_per_1k=Decimal("0"))

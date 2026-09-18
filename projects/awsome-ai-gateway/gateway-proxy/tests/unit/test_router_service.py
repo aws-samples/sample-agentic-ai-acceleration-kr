@@ -45,6 +45,13 @@ def sample_pricing_row():
     # pydantic Decimal ValidationError in the cache-miss/DB-rebuild path.
     row.cache_creation_1h_price_per_1k_tokens = Decimal("0.006000")
     row.cache_read_price_per_1k_tokens = Decimal("0.000300")
+    # Context-band 컬럼(0038). 같은 이유로 실제 값이어야 한다 — 자동 MagicMock 속성은
+    # ``getattr(...) or Decimal("1")`` 에서 truthy Mock 으로 새어 pydantic Decimal 검증을
+    # 깨뜨린다. threshold None = 밴드 없음(이 샘플 모델은 Claude/일반, 밴드 대상 아님).
+    row.long_context_threshold_tokens = None
+    row.long_context_input_mult = Decimal("1")
+    row.long_context_cache_mult = Decimal("1")
+    row.long_context_output_mult = Decimal("1")
     return row
 
 

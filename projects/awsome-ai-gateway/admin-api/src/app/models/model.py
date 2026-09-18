@@ -123,6 +123,17 @@ class ModelPricing(Base):
     cache_read_price_per_1k_tokens: Mapped[Decimal] = mapped_column(
         Numeric(10, 6), nullable=False, default=Decimal("0")
     )
+    # Context-band pricing (migration 0038) — see gateway-proxy ModelPricingSchema.
+    long_context_threshold_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    long_context_input_mult: Mapped[Decimal] = mapped_column(
+        Numeric(6, 4), nullable=False, server_default="1"
+    )
+    long_context_cache_mult: Mapped[Decimal] = mapped_column(
+        Numeric(6, 4), nullable=False, server_default="1"
+    )
+    long_context_output_mult: Mapped[Decimal] = mapped_column(
+        Numeric(6, 4), nullable=False, server_default="1"
+    )
     effective_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     effective_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("auth.users.id"), nullable=False)

@@ -317,17 +317,19 @@ jobs:
             tests/regression/test_critical_model_client_scope_real_db.py \
             tests/regression/test_high_reservation_release_on_error.py \
             tests/regression/test_high_budget_fallback_policy.py \
-            tests/regression/test_medium_operator_thresholds_persist.py > /tmp/proof3.txt 2>&1
+            tests/regression/test_medium_operator_thresholds_persist.py \
+            tests/regression/test_medium_context_band_pricing.py > /tmp/proof3.txt 2>&1
           status=$?
           tail -30 /tmp/proof3.txt
           if [ "$status" -ne 0 ]; then exit "$status"; fi
           passed=$(grep -oE "[0-9]+ passed" /tmp/proof3.txt | tail -1 | grep -oE "[0-9]+" || echo 0)
-          # 로컬 실측 기준선: 47 passed (실 DB 3 + 예약 해제 10 + 예산 정책 16 + 임계값 영속 18).
+          # 로컬 실측 기준선: 61 passed (실 DB 3 + 예약 해제 10 + 예산 정책 16 + 임계값 영속 18
+          #   + 컨텍스트 밴드 14: calculate_cost/estimate/schema 12 + 실 PG 마이그레이션 왕복 2).
           # ⚠️ 예약 해제 파일은 REDIS_PROOF_URL 을 요구한다 — 환불은 incrbyfloat 로
           #    카운터를 움직이는 것이라, 가짜 Redis 로는 부호가 반대인 환불도 통과한다.
           #    두 env 중 하나라도 안 걸리면 통과 수가 떨어져 여기서 실패한다.
-          if [ "${passed:-0}" -lt 47 ]; then
-            echo "::error::통과 ${passed} 건(기대 47) — PROOF_DSN/REDIS_PROOF_URL 이 안 걸려 skip 됐다."
+          if [ "${passed:-0}" -lt 61 ]; then
+            echo "::error::통과 ${passed} 건(기대 61) — PROOF_DSN/REDIS_PROOF_URL 이 안 걸려 skip 됐다."
             exit 1
           fi
 

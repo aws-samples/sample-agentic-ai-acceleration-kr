@@ -655,3 +655,17 @@ ALTER TABLE budget.budget_configs
     ADD COLUMN IF NOT EXISTS alert_thresholds budget.alert_pct[]
     NOT NULL DEFAULT '{80,90,100}';
 
+
+-- migration 0038: context-band pricing. 일부 모델(GPT-5.6)은 한 요청 프롬프트가 임계를
+-- 넘으면 요청 전체를 더 높은 요율로 청구한다. threshold NULL = 밴드 없음(오늘 동작·Claude).
+-- ⚠️ 밴드 **데이터**(GPT-5.6 활성화)는 이 컬럼을 쓰는 gpt-5.6 행 자체가 마이그레이션
+--    0025/0032 에서만 생기므로 여기(init)엔 두지 않는다 — 0038 이 그 행에 밴드를 켠다.
+--    init 은 컬럼만 보장한다(ORM ↔ init 미러 원칙).
+ALTER TABLE model.model_pricings
+    ADD COLUMN IF NOT EXISTS long_context_threshold_tokens INTEGER;
+ALTER TABLE model.model_pricings
+    ADD COLUMN IF NOT EXISTS long_context_input_mult  NUMERIC(6,4) NOT NULL DEFAULT 1;
+ALTER TABLE model.model_pricings
+    ADD COLUMN IF NOT EXISTS long_context_cache_mult  NUMERIC(6,4) NOT NULL DEFAULT 1;
+ALTER TABLE model.model_pricings
+    ADD COLUMN IF NOT EXISTS long_context_output_mult NUMERIC(6,4) NOT NULL DEFAULT 1;

@@ -29,11 +29,32 @@ def calculate_cost(usage: TokenUsage, pricing: ModelConfigSchema) -> Decimal:
       - 1-hour (ttl=3600): pricing.cache_write_1h_per_1k
     """
     p = pricing.pricing
-    input_cost = (Decimal(usage.input_tokens) / 1000) * p.input_per_1k
-    output_cost = (Decimal(usage.output_tokens) / 1000) * p.output_per_1k
+
+    # Context-band: 프롬프트가 임계를 넘으면 요청 **전체**가 long 요율(계단 하나).
+    # ⚠️ 임계와 비교하는 값은 **프롬프트 전체 토큰**이다 = 세 입력 버킷의 합. OpenAI
+    #    방언은 split_openai_input 뒤 세 버킷이 상호배타이고(순입력/캐시읽기/캐시쓰기),
+    #    Anthropic 은 input_tokens 가 캐시를 이미 제외한다 — 어느 방언이든 합이 곧
+    #    프롬프트 크기다. OpenAI 의 ">272K input tokens" 는 캐시 포함 프롬프트를 뜻한다.
+    im = cm = om = Decimal("1")
+    thr = p.long_context_threshold_tokens
+    if thr is not None:
+        prompt_tokens = (
+            usage.input_tokens
+            + usage.cache_read_input_tokens
+            + usage.cache_creation_input_tokens
+        )
+        if prompt_tokens > thr:
+            im, cm, om = (
+                p.long_context_input_mult,
+                p.long_context_cache_mult,
+                p.long_context_output_mult,
+            )
+
+    input_cost = (Decimal(usage.input_tokens) / 1000) * p.input_per_1k * im
+    output_cost = (Decimal(usage.output_tokens) / 1000) * p.output_per_1k * om
     cache_write_rate = p.cache_write_1h_per_1k if usage.cache_ttl_1h else p.cache_write_per_1k
-    cache_write_cost = (Decimal(usage.cache_creation_input_tokens) / 1000) * cache_write_rate
-    cache_read_cost = (Decimal(usage.cache_read_input_tokens) / 1000) * p.cache_read_per_1k
+    cache_write_cost = (Decimal(usage.cache_creation_input_tokens) / 1000) * cache_write_rate * cm
+    cache_read_cost = (Decimal(usage.cache_read_input_tokens) / 1000) * p.cache_read_per_1k * cm
     return (input_cost + output_cost + cache_write_cost + cache_read_cost).quantize(
         COST_PRECISION, rounding=ROUND_HALF_UP
     )
