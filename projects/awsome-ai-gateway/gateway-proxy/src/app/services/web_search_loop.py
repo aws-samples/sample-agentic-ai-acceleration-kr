@@ -350,6 +350,30 @@ def _wire_input(usage: TokenUsage) -> int:
     )
 
 
+def _prompt_snapshot(input_tokens: int, cache_creation: int, cache_read: int) -> TokenUsage:
+    """한 턴의 프롬프트 세 버킷을 얼려 둔다 — 클라이언트-facing usage 용."""
+    return TokenUsage(
+        input_tokens=int(input_tokens or 0),
+        cache_creation_input_tokens=int(cache_creation or 0),
+        cache_read_input_tokens=int(cache_read or 0),
+    )
+
+
+def _client_prompt_usage(first_turn: TokenUsage | None, merged: TokenUsage) -> TokenUsage:
+    """클라이언트가 보는 프롬프트 버킷 = **첫 턴**의 것(N턴 합산이 아니다).
+
+    ⚠️ Claude Code / Cowork / Codex 는 응답의 ``input + cache_read + cache_write`` 를
+       "내 컨텍스트 창이 얼마나 찼나" 로 읽고 한계 근처에서 auto-compact 한다. 첫 턴의
+       프롬프트가 곧 클라이언트의 대화이고, 이후 턴은 그 대화에 **우리** 검색결과를 더해
+       재전송한 것이라 클라이언트는 그 부분을 자기 컨텍스트로 갖고 있지 않다. N턴을
+       합산하면 실제 컨텍스트의 N배를 보고하게 된다(미국 dev 실측 2026-09-16: 실제
+       26.7k → 검색 3회 후 106.6k 보고; 55k Cowork 세션이 270k 로 보고돼 200k 창을 넘겨
+       매 검색 턴마다 compact). **청구는 무영향** — on_usage() 는 여전히 N턴 합산을 받는다.
+       완료된 턴이 없으면(스냅샷 대상 없음) merged 로 폴백해 payload 자기정합을 유지한다.
+    """
+    return first_turn if first_turn is not None else merged
+
+
 def _sse(event: str, data: dict) -> bytes:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
 
@@ -452,6 +476,7 @@ async def _anthropic_stream(
     tool_use/tool_result plumbing; runs the search between turns.
     """
     merged = TokenUsage()
+    first_turn: TokenUsage | None = None  # 첫 턴 프롬프트 → 클라이언트 usage(컨텍스트 게이지)
     conversation: list[dict] = list(base_body.get("messages") or [])
     searches_done = 0        # successful searches → web_search_count (billing/attribution)
     search_attempts = 0      # ALL search rounds incl. failures → loop guard (F-5)
@@ -519,6 +544,12 @@ async def _anthropic_stream(
                     merged.input_tokens += int(u.get("input_tokens", 0) or 0)
                     merged.cache_creation_input_tokens += int(u.get("cache_creation_input_tokens", 0) or 0)
                     merged.cache_read_input_tokens += int(u.get("cache_read_input_tokens", 0) or 0)
+                    if first_turn is None:
+                        first_turn = _prompt_snapshot(
+                            u.get("input_tokens", 0),
+                            u.get("cache_creation_input_tokens", 0),
+                            u.get("cache_read_input_tokens", 0),
+                        )
                     if not envelope_open:
                         envelope_open = True
                         yield _sse("message_start", ev)
@@ -716,23 +747,23 @@ async def _anthropic_stream(
 
                 # Terminal: close the single envelope.
                 #
-                # ⚠️ usage 에 **입력 토큰도** 싣는다. message_start 는 첫 턴에서 한 번만
-                #    나가므로 그 프레임의 input_tokens 는 1턴치다. N 턴을 돈 요청에서
-                #    클라이언트(Claude Code 는 이 값으로 컨텍스트를 추적한다)와 감사 로그는
-                #    실제로 소비한 입력의 일부만 보게 된다 — 우리가 청구하는 양과도 어긋난다.
-                #    이미 보낸 message_start 를 되돌릴 수는 없으니, 마지막 프레임이 합계를
-                #    말해 준다. 캐시 버킷도 함께 실어야 input_tokens 와 details 가 서로
-                #    모순되지 않는다.
+                # ⚠️ 종료 프레임의 usage 는 **입력=첫 턴, 출력=합산**이다.
+                #    입력을 N턴 합산으로 실으면 클라이언트(Claude Code/Cowork)의 컨텍스트
+                #    게이지가 실제의 N배로 부풀어 매 검색 턴마다 auto-compact 가 돈다
+                #    (_client_prompt_usage 의 실측 근거 참조). 출력은 진짜로 N턴에 걸쳐
+                #    생성됐으니 합산이 맞다. 청구는 무영향 — on_usage 는 아래 finally 에서
+                #    여전히 merged(합산)를 받는다.
                 if envelope_open:
+                    gauge = _client_prompt_usage(first_turn, merged)
                     yield _sse(
                         "message_delta",
                         {"type": "message_delta",
                          "delta": {"stop_reason": emitted_stop_reason, "stop_sequence": None},
                          "usage": {
-                             "input_tokens": merged.input_tokens,
+                             "input_tokens": gauge.input_tokens,
                              "output_tokens": merged.output_tokens,
-                             "cache_creation_input_tokens": merged.cache_creation_input_tokens,
-                             "cache_read_input_tokens": merged.cache_read_input_tokens,
+                             "cache_creation_input_tokens": gauge.cache_creation_input_tokens,
+                             "cache_read_input_tokens": gauge.cache_read_input_tokens,
                          }},
                     )
                     yield _sse("message_stop", {"type": "message_stop"})
@@ -826,6 +857,7 @@ async def _anthropic_nonstream(
     from app.providers.bedrock_adapter import _extract_bedrock_usage
 
     merged = TokenUsage()
+    first_turn: TokenUsage | None = None  # 첫 턴 프롬프트 → 클라이언트 usage(컨텍스트 게이지)
     conversation: list[dict] = list(base_body.get("messages") or [])
     searches_done = 0
     search_attempts = 0      # loop guard incl. failures (F-5)
@@ -848,6 +880,11 @@ async def _anthropic_nonstream(
             if status != 200:
                 break
             _merge_usage(merged, usage)
+            if first_turn is None:
+                first_turn = _prompt_snapshot(
+                    usage.input_tokens, usage.cache_creation_input_tokens,
+                    usage.cache_read_input_tokens,
+                )
 
             content = final_body.get("content") or []
             our_calls = [
@@ -916,9 +953,10 @@ async def _anthropic_nonstream(
             logger.warning("web_search.on_usage_failed")
 
     if final_status == 200 and isinstance(final_body.get("usage"), dict):
-        # Overwrite the returned body's usage with the merged (multi-turn) totals so the
-        # client sees the full accounting; reasoning stays a submetric.
-        final_body["usage"]["input_tokens"] = merged.input_tokens
+        # 입력=첫 턴(클라이언트 컨텍스트 게이지), 출력=N턴 합산. 청구는 finally 의
+        # on_usage(merged) 가 별도 처리 — 근거는 _client_prompt_usage.
+        gauge = _client_prompt_usage(first_turn, merged)
+        final_body["usage"]["input_tokens"] = gauge.input_tokens
         final_body["usage"]["output_tokens"] = merged.output_tokens
     # Strip thinking/redacted_thinking from the CLIENT-returned body: the client replays
     # this (possibly stitched) assistant message on its next turn, and Bedrock rejects a
@@ -983,6 +1021,7 @@ async def _responses_stream(
     for our web_search; runs the search between turns.
     """
     merged = TokenUsage()
+    first_turn: TokenUsage | None = None  # 첫 턴 프롬프트 → 클라이언트 usage(컨텍스트 게이지)
     conv_input: list = _normalize_responses_input(base_body)
     searches_done = 0        # successful → web_search_count
     search_attempts = 0      # all rounds incl. failures → loop guard (F-5)
@@ -1128,6 +1167,12 @@ async def _responses_stream(
                     # turn caches a different amount, and typically exactly one turn of a
                     # search loop writes the cache while the rest read it.
                     _merge_usage(merged, extract_responses_usage(resp_obj))
+                    if first_turn is None:
+                        _t = extract_responses_usage(resp_obj)
+                        first_turn = _prompt_snapshot(
+                            _t.input_tokens, _t.cache_creation_input_tokens,
+                            _t.cache_read_input_tokens,
+                        )
                     # captured; emit our own terminal event at envelope close
                 elif etype == "error":
                     error_seen = True  # NEW round2 High-1: do not also emit a fake completed
@@ -1189,7 +1234,8 @@ async def _responses_stream(
                                 "response": _finalize_responses_obj(
                                     final_response_obj, merged, global_out_index,
                                     "response.failed", our_call_ids,
-                                    envelope_id=envelope_response_id)})
+                                    envelope_id=envelope_response_id,
+                                    client_prompt=first_turn)})
                 else:
                     yield _sse(
                         final_terminal_type,
@@ -1197,7 +1243,8 @@ async def _responses_stream(
                          "response": _finalize_responses_obj(
                              final_response_obj, merged, global_out_index,
                              final_terminal_type, our_call_ids,
-                             envelope_id=envelope_response_id)},
+                             envelope_id=envelope_response_id,
+                             client_prompt=first_turn)},
                     )
                 break
 
@@ -1244,7 +1291,8 @@ async def _responses_stream(
             yield _sse("response.failed",
                        {"type": "response.failed",
                         "response": _finalize_responses_obj(
-                            final_response_obj, merged, global_out_index, "response.failed", our_call_ids)})
+                            final_response_obj, merged, global_out_index, "response.failed", our_call_ids,
+                            client_prompt=first_turn)})
         return
     finally:
         merged.web_search_count = searches_done
@@ -1260,6 +1308,7 @@ def _finalize_responses_obj(
     terminal_type: str = "response.completed",
     our_call_ids: Optional[set] = None,
     envelope_id: str | None = None,
+    client_prompt: TokenUsage | None = None,
 ) -> dict:
     """Build the terminal response object with merged usage (multi-turn totals).
 
@@ -1290,14 +1339,17 @@ def _finalize_responses_obj(
     # the non-cached billing bucket, so add both cache buckets back on the way out.
     # Emitting the billing value here would produce cached_tokens > input_tokens — an
     # impossible payload. Both sub-counters are echoed for the same reason.
-    wire_input = _wire_input(merged)
+    # 입력(및 캐시 세부)은 클라이언트 컨텍스트 게이지라 **첫 턴** 기준(합산 아님) —
+    # 근거는 _client_prompt_usage. 출력은 N턴 합산. 청구는 on_usage(merged) 별도.
+    gauge = _client_prompt_usage(client_prompt, merged)
+    wire_input = _wire_input(gauge)
     obj["usage"] = {
         "input_tokens": wire_input,
         "output_tokens": merged.output_tokens,
         "total_tokens": wire_input + merged.output_tokens,
         "input_tokens_details": {
-            "cached_tokens": merged.cache_read_input_tokens,
-            "cache_write_tokens": merged.cache_creation_input_tokens,
+            "cached_tokens": gauge.cache_read_input_tokens,
+            "cache_write_tokens": gauge.cache_creation_input_tokens,
         },
         "output_tokens_details": {"reasoning_tokens": merged.reasoning_tokens},
     }
@@ -1334,6 +1386,7 @@ async def _responses_nonstream(
     max_searches_per_turn: int = 0,
 ) -> JSONResponse:
     merged = TokenUsage()
+    first_turn: TokenUsage | None = None  # 첫 턴 프롬프트 → 클라이언트 usage(컨텍스트 게이지)
     conv_input: list = _normalize_responses_input(base_body)
     searches_done = 0
     search_attempts = 0      # loop guard incl. failures (F-5)
@@ -1356,6 +1409,11 @@ async def _responses_nonstream(
             if status != 200:
                 break
             _merge_usage(merged, usage)
+            if first_turn is None:
+                first_turn = _prompt_snapshot(
+                    usage.input_tokens, usage.cache_creation_input_tokens,
+                    usage.cache_read_input_tokens,
+                )
 
             output = final_body.get("output") or []
             our_calls = [
@@ -1410,9 +1468,9 @@ async def _responses_nonstream(
             logger.warning("web_search.on_usage_failed")
 
     if final_status == 200 and isinstance(final_body.get("usage"), dict):
-        # Same wire-vs-billing split as _finalize_responses_obj: the client must see the
-        # cache-INCLUSIVE prompt count that the Responses spec defines.
-        wire_input = _wire_input(merged)
+        # 입력=첫 턴 wire(클라이언트 컨텍스트 게이지), 출력=N턴 합산 — _client_prompt_usage.
+        # cache-INCLUSIVE prompt count(Responses spec)이되 합산이 아니라 첫 턴 기준.
+        wire_input = _wire_input(_client_prompt_usage(first_turn, merged))
         final_body["usage"]["input_tokens"] = wire_input
         final_body["usage"]["output_tokens"] = merged.output_tokens
         final_body["usage"]["total_tokens"] = wire_input + merged.output_tokens

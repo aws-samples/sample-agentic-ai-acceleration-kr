@@ -49,7 +49,11 @@ import json
 
 import pytest
 
+from pathlib import Path
+
 import app.services.web_search_loop as wsl
+
+_LAST_BILLED: list = []  # 마지막 _run_anthropic 의 on_usage(merged) 관측
 
 
 def _raw(ev: dict) -> bytes:
@@ -454,8 +458,10 @@ async def _run_anthropic(turns, **kw):
 
         return 200, gen(), {}, None
 
-    async def on_usage(_u):
-        pass
+    billed: list = []
+
+    async def on_usage(u):
+        billed.append(u)
 
     out: list[str] = []
     async for chunk in wsl._anthropic_stream(
@@ -470,6 +476,8 @@ async def _run_anthropic(turns, **kw):
         **kw,
     ):
         out.append(chunk.decode())
+    _LAST_BILLED.clear()
+    _LAST_BILLED.extend(billed)
     return out
 
 
@@ -639,11 +647,13 @@ def _anthropic_final(inp: int) -> list[bytes]:
     ]
 
 
-async def test_the_terminal_frame_reports_the_input_summed_over_all_turns():
-    """⚠️ ``message_start`` 는 첫 턴에 한 번만 나간다 — 그 값은 1턴치다.
+async def test_the_terminal_frame_reports_the_first_turn_input_not_the_sum():
+    """⚠️ 클라이언트 컨텍스트 게이지는 **첫 턴** 입력이어야 한다(N턴 합산 아님).
 
-    Claude Code 는 usage 로 컨텍스트를 추적하므로, N 턴을 돈 요청에서 그 값만 보면 우리가
-    청구하는 양과 어긋난다.
+    Claude Code/Cowork 는 응답 usage 의 input+cache 를 "내 컨텍스트가 얼마나 찼나" 로
+    읽는다. 이후 턴은 대화에 우리 검색결과를 더해 재전송한 것이라, 합산하면 게이지가
+    N배로 부풀어 매 검색 턴마다 auto-compact 가 돈다(미국 dev 실측). 이전 구현은 여기서
+    합산(60)을 실어 정확히 그 회귀를 만들었다 — 이 테스트가 그 회귀를 고정한다.
     """
     out = await _run_anthropic([_anthropic_search_turn(1, 10), _anthropic_final(50)])
     starts = _payloads(out, "message_start")
@@ -653,10 +663,20 @@ async def test_the_terminal_frame_reports_the_input_summed_over_all_turns():
 
     assert deltas, "종료 프레임이 없다"
     final_usage = deltas[-1]["usage"]
-    assert final_usage.get("input_tokens") == 60, (
-        f"종료 프레임의 입력이 {final_usage.get('input_tokens')} — 10+50=60 이어야 한다"
+    assert final_usage.get("input_tokens") == 10, (
+        f"종료 프레임 입력이 {final_usage.get('input_tokens')} — 첫 턴 10 이어야 한다"
+        " (합산 60 이면 게이지 부풀림 회귀)"
     )
+    # 출력은 진짜로 N턴에 걸쳐 생성됐으니 합산이 맞다.
     assert final_usage.get("output_tokens") == 8, f"출력이 {final_usage.get('output_tokens')}"
+
+    # ⚠️ billing 은 반대다 — on_usage 는 여전히 N턴 **합산**(60)을 받아야 한다.
+    #    게이지를 첫 턴으로 바꾼 것이 청구를 깎으면 안 된다(wire vs billing 분리).
+    assert _LAST_BILLED, "on_usage 가 안 불렸다"
+    assert _LAST_BILLED[-1].input_tokens == 60, (
+        f"billing 입력이 {_LAST_BILLED[-1].input_tokens} — 합산 60 이어야 한다"
+        " (게이지 정정이 청구를 깎으면 안 된다)"
+    )
 
 
 async def test_the_terminal_frame_carries_the_cache_buckets_too():
@@ -666,3 +686,39 @@ async def test_the_terminal_frame_carries_the_cache_buckets_too():
     for k in ("input_tokens", "output_tokens",
               "cache_creation_input_tokens", "cache_read_input_tokens"):
         assert k in usage, f"{k} 가 없다: {usage}"
+
+
+def test_all_four_client_facing_usage_sites_route_through_first_turn():
+    """⚠️ 4경로(스트림/논스트림 × Anthropic/Responses)가 **모두** 첫 턴 게이지를 써야 한다.
+
+    한 경로만 merged(합산)로 되돌아가도 그 방언·모드의 클라이언트에서 게이지 부풀림이
+    재발한다 — #86 이 경고한 "한 경로 누락" 패턴. 문자열이 아니라 호출 수로 못 박는다:
+    각 경로가 종료 usage 를 만들 때 _client_prompt_usage 를 통과한다.
+    """
+    import ast
+
+    src = (
+        Path(__file__).resolve().parents[2]
+        / "src" / "app" / "services" / "web_search_loop.py"
+    ).read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    calls = sum(
+        1
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Name)
+        and n.func.id == "_client_prompt_usage"
+    )
+    assert calls >= 4, (
+        f"_client_prompt_usage 호출이 {calls}곳 — 4경로(anthropic stream/nonstream, "
+        "responses stream/nonstream) 각각 첫 턴 게이지를 써야 한다"
+    )
+
+    # 그리고 종료 프레임/최종 body 가 client input 으로 merged.input_tokens 를 **직접**
+    # 싣지 않는지(빌링용 total_tokens 계산의 merged 는 무관) — 게이지 자리엔 gauge 만.
+    assert '"input_tokens": merged.input_tokens' not in src, (
+        "종료 프레임이 여전히 merged.input_tokens 를 클라이언트에 싣는다"
+    )
+    assert 'final_body["usage"]["input_tokens"] = merged.input_tokens' not in src, (
+        "non-stream 최종 body 가 여전히 merged 입력을 싣는다"
+    )
