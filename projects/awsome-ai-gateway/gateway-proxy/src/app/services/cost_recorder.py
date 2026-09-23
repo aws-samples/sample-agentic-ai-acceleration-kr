@@ -21,19 +21,63 @@ COST_STREAM_KEY = "cost:stream"
 COST_STREAM_MAXLEN = 100_000
 
 
+def resolve_context_tier(usage: TokenUsage, pricing: ModelConfigSchema) -> str | None:
+    """272K long-context 티어 판정 — 과금과 감사기록(usage_logs.context_tier)이 공유하는
+    단일 판정점 (마이그레이션 0038/0039).
+
+    반환:
+      · None    = 티어 없는 모델(threshold 미설정: Claude 등) → 단일 요율.
+      · "short" = 티어 있는 모델이고 이번 요청 프롬프트가 임계값 이하.
+      · "long"  = 티어 있는 모델이고 임계값 초과 → 입력 2배·출력 1.5배로 청구됨.
+
+    ★ 비교 대상은 usage.input_tokens 가 아니라 **프롬프트 총량**(세 입력 버킷의 합)이다.
+      split_openai_input 이 OpenAI usage 를 서로 겹치지 않는 세 버킷(비캐시/캐시읽기/캐시쓰기)
+      으로 분해하므로, AWS 가 말하는 "input tokens"(캐시 포함 프롬프트)를 되살리려면 셋을 다시
+      더해야 한다. input_tokens 만 보면 캐시 히트가 큰 요청이 임계값 아래로 오판돼 과소청구된다.
+
+    청구와 감사가 어긋나지 않도록(청구=long/기록=short) 판정은 여기 한 곳에서만 한다.
+    """
+    threshold = pricing.pricing.long_context_threshold_tokens
+    if threshold is None:
+        return None
+    prompt_total = (
+        usage.input_tokens
+        + usage.cache_read_input_tokens
+        + usage.cache_creation_input_tokens
+    )
+    return "long" if prompt_total > threshold else "short"
+
+
 def calculate_cost(usage: TokenUsage, pricing: ModelConfigSchema) -> Decimal:
     """비용 계산: input + output + cache_write + cache_read.
 
-    cache_write 단가는 요청의 cache TTL에 따라 분기:
-      - 5-min (default): pricing.cache_write_per_1k
-      - 1-hour (ttl=3600): pricing.cache_write_1h_per_1k
+    cache_write 단가는 요청의 cache TTL에 따라 분기(5m/1h). long-context 티어(0038)에서는
+    프롬프트가 임계를 넘으면 각 항이 long 요율로 재청구된다 — 판정은 resolve_context_tier
+    한 곳에서만(감사기록과 동일 판정 공유). threshold 없는 모델은 None → 전부 short =
+    오늘의 단일 요율 동작 그대로.
+
+    quantize 는 마지막에 한 번만 — 항마다 반올림하면 오차가 누적된다.
     """
     p = pricing.pricing
-    input_cost = (Decimal(usage.input_tokens) / 1000) * p.input_per_1k
-    output_cost = (Decimal(usage.output_tokens) / 1000) * p.output_per_1k
-    cache_write_rate = p.cache_write_1h_per_1k if usage.cache_ttl_1h else p.cache_write_per_1k
+    long_ctx = resolve_context_tier(usage, pricing) == "long"
+
+    def _rate(short_rate: Decimal, long_rate: Decimal | None) -> Decimal:
+        # long 단가가 None 이면 short 로 폴백(fail-safe): threshold 만 두고 특정 버킷 long
+        # 단가를 비운 행에서도 크래시 없이 최소 short 로 과금한다.
+        return long_rate if (long_ctx and long_rate is not None) else short_rate
+
+    input_rate = _rate(p.input_per_1k, p.long_input_per_1k)
+    output_rate = _rate(p.output_per_1k, p.long_output_per_1k)
+    if usage.cache_ttl_1h:
+        cache_write_rate = _rate(p.cache_write_1h_per_1k, p.long_cache_write_1h_per_1k)
+    else:
+        cache_write_rate = _rate(p.cache_write_per_1k, p.long_cache_write_per_1k)
+    cache_read_rate = _rate(p.cache_read_per_1k, p.long_cache_read_per_1k)
+
+    input_cost = (Decimal(usage.input_tokens) / 1000) * input_rate
+    output_cost = (Decimal(usage.output_tokens) / 1000) * output_rate
     cache_write_cost = (Decimal(usage.cache_creation_input_tokens) / 1000) * cache_write_rate
-    cache_read_cost = (Decimal(usage.cache_read_input_tokens) / 1000) * p.cache_read_per_1k
+    cache_read_cost = (Decimal(usage.cache_read_input_tokens) / 1000) * cache_read_rate
     return (input_cost + output_cost + cache_write_cost + cache_read_cost).quantize(
         COST_PRECISION, rounding=ROUND_HALF_UP
     )
@@ -333,6 +377,8 @@ class CostRecorder:
             else str(model_config.provider)
         )
 
+        # 청구와 **같은 입력**으로 티어를 판정해 감사 기록에 싣는다(불일치 방지).
+        context_tier = resolve_context_tier(usage, model_config)
         entry = CostStreamEntry.make(
             request_id=request_id,
             user_id=auth_context.user_id,
@@ -358,6 +404,7 @@ class CostRecorder:
             sso_subject=auth_context.sso_subject,
             bedrock_request_id=bedrock_request_id,
             client=client,
+            context_tier=context_tier,
         )
 
         payload_json = entry.model_dump_json()

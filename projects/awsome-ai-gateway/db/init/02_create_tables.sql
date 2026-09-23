@@ -655,3 +655,35 @@ ALTER TABLE budget.budget_configs
     ADD COLUMN IF NOT EXISTS alert_thresholds budget.alert_pct[]
     NOT NULL DEFAULT '{80,90,100}';
 
+
+-- migration 0038: context 크기축 요금제(272K long-context). GPT-5.6 은 프롬프트가 임계를
+-- 넘으면 요청 전체를 long 요율로 청구한다. threshold NULL = 티어 없음(오늘 동작·Claude).
+-- 배수(long=short×2)가 아니라 명시 요율 컬럼을 두는 이유는 AWS Price List 자동연동 때문이다
+-- (Price List 는 달러 요율을 준다). 컬럼은 전부 NULLABLE(NULL='이 버킷 long 미설정').
+ALTER TABLE model.model_pricings ADD COLUMN IF NOT EXISTS long_context_threshold_tokens INTEGER;
+ALTER TABLE model.model_pricings ADD COLUMN IF NOT EXISTS long_context_input_price_per_1k_tokens NUMERIC(10,6);
+ALTER TABLE model.model_pricings ADD COLUMN IF NOT EXISTS long_context_output_price_per_1k_tokens NUMERIC(10,6);
+ALTER TABLE model.model_pricings ADD COLUMN IF NOT EXISTS long_context_cache_creation_5m_price_per_1k_tokens NUMERIC(10,6);
+ALTER TABLE model.model_pricings ADD COLUMN IF NOT EXISTS long_context_cache_creation_1h_price_per_1k_tokens NUMERIC(10,6);
+ALTER TABLE model.model_pricings ADD COLUMN IF NOT EXISTS long_context_cache_read_price_per_1k_tokens NUMERIC(10,6);
+
+-- 값-가드 시딩: 열린 gpt-5.6 행의 현재 short 요율에 카드 배수(in×2·out×1.5·cache×2)를 곱해
+-- long 을 채운다. alias 이름/plane 무관하게 pub 의 실제 short 요율을 추적한다.
+-- ⚠️ 이 시드 데이터를 쓰는 gpt-5.6 행 자체는 마이그레이션 0025/0032 에서만 생기므로, 이
+--    UPDATE 는 init-only DB 에서는 매칭 0건(무해)이고 마이그레이션까지 적용된 DB 에서만 실효.
+UPDATE model.model_pricings p
+SET long_context_threshold_tokens = 272000,
+    long_context_input_price_per_1k_tokens = p.input_price_per_1k_tokens * 2,
+    long_context_output_price_per_1k_tokens = p.output_price_per_1k_tokens * 1.5,
+    long_context_cache_creation_5m_price_per_1k_tokens = p.cache_creation_5m_price_per_1k_tokens * 2,
+    long_context_cache_creation_1h_price_per_1k_tokens = p.cache_creation_1h_price_per_1k_tokens * 2,
+    long_context_cache_read_price_per_1k_tokens = p.cache_read_price_per_1k_tokens * 2
+FROM model.model_aliases a
+WHERE a.alias = p.model_alias
+  AND p.effective_until IS NULL
+  AND p.long_context_threshold_tokens IS NULL
+  AND a.provider_model_id LIKE '%openai.gpt-5.6-%';
+
+-- migration 0039: 요청별 청구 티어 감사. 게이트웨이 resolve_context_tier 가 청구와 이 값을
+-- 같은 판정으로 채운다(청구=long/기록=short 불일치 방지). 'short'|'long'|NULL(티어없는 모델).
+ALTER TABLE usage.usage_logs ADD COLUMN IF NOT EXISTS context_tier VARCHAR(8);
