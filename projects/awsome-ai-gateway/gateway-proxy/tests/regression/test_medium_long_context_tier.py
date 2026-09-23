@@ -40,18 +40,23 @@ from app.services.cost_recorder import calculate_cost, resolve_context_tier
 
 # terra Geo/In-Region short (per 1k) — 카드값. long = short × {in:2, out:1.5, cache:2}.
 _IN, _OUT, _CW, _CR = Decimal("0.0022"), Decimal("0.0132"), Decimal("0.00275"), Decimal("0.00022")
+# 1h TTL 캐시-쓰기는 5m 과 **별도 컬럼**이다. 카드상 두 값은 같지만, 코드가 5m 이 아니라
+# 1h 컬럼을 읽는지 증명하려면 테스트에서는 5m 과 다른 값을 준다(_CW=0.00275 vs 1h=0.0033).
+_CW1H = Decimal("0.0033")
 _THRESHOLD = 272000
 
 
 def _cfg(*, tier: bool, partial_long: bool = False) -> ModelConfigSchema:
     p = ModelPricingSchema(
-        input_per_1k=_IN, output_per_1k=_OUT, cache_write_per_1k=_CW, cache_read_per_1k=_CR
+        input_per_1k=_IN, output_per_1k=_OUT, cache_write_per_1k=_CW,
+        cache_write_1h_per_1k=_CW1H, cache_read_per_1k=_CR,
     )
     if tier:
         p.long_context_threshold_tokens = _THRESHOLD
         p.long_input_per_1k = _IN * 2
         p.long_output_per_1k = _OUT * Decimal("1.5")
         p.long_cache_write_per_1k = _CW * 2
+        p.long_cache_write_1h_per_1k = _CW1H * 2
         p.long_cache_read_per_1k = _CR * 2
         if partial_long:
             # 특정 버킷 long 단가를 비워 fail-safe(→ short) 를 검증.
@@ -63,9 +68,10 @@ def _cfg(*, tier: bool, partial_long: bool = False) -> ModelConfigSchema:
     )
 
 
-def _u(*, inp=0, out=0, cw=0, cr=0):
+def _u(*, inp=0, out=0, cw=0, cr=0, ttl_1h=False):
     u = TokenUsage(input_tokens=inp, output_tokens=out,
-                   cache_creation_input_tokens=cw, cache_read_input_tokens=cr)
+                   cache_creation_input_tokens=cw, cache_read_input_tokens=cr,
+                   cache_ttl_1h=ttl_1h)
     u.total_tokens = inp + out
     return u
 
@@ -114,6 +120,26 @@ def test_cache_buckets_rerated_long():
     cost = calculate_cost(_u(inp=280_000, cw=5_000, cr=10_000), _cfg(tier=True))
     # long: 280×0.0044 + cw 5×0.0055 + cr 10×0.00044 = 1.232 + 0.0275 + 0.0044
     assert cost == Decimal("1.263900"), cost
+
+
+def test_cache_write_1h_bucket_rerated_long():
+    """⚠️ 1h TTL 캐시-쓰기의 long 쌍둥이. cache_ttl_1h=True 면 calculate_cost 는 1h long
+    컬럼(long_cache_write_1h_per_1k)을 써야 한다 — 5m long 컬럼이 아니라. 5m 과 다른 값
+    (1h short 0.0033 vs 5m short 0.00275)으로 어느 컬럼을 읽는지 고정한다. 회귀하면 1h
+    캐시-쓰기가 있는 >272K 요청이 과소청구되지만 다른 테스트는 초록으로 남는다."""
+    cost = calculate_cost(_u(inp=280_000, cw=5_000, ttl_1h=True), _cfg(tier=True))
+    # long: 280×0.0044 + cw(1h) 5×0.0066 = 1.232 + 0.033 = 1.265
+    # (5m long 0.0055 를 잘못 쓰면 5×0.0055=0.0275 → 1.2595 로 어긋난다)
+    assert cost == Decimal("1.265000"), cost
+
+
+def test_cache_write_1h_falls_back_to_short_when_long_1h_missing():
+    """⚠️ fail-safe(1h). long_cache_write_1h 만 비면 그 항만 1h short, 나머지는 long."""
+    cfg = _cfg(tier=True)
+    cfg.pricing.long_cache_write_1h_per_1k = None
+    cost = calculate_cost(_u(inp=280_000, cw=5_000, ttl_1h=True), cfg)
+    # input long 280×0.0044=1.232 ; cw(1h) SHORT 5×0.0033=0.0165 → 1.2485
+    assert cost == Decimal("1.248500"), cost
 
 
 def test_partial_long_rate_falls_back_to_short_per_bucket():

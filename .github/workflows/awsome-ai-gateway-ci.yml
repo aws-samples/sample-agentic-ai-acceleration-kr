@@ -324,13 +324,13 @@ jobs:
           tail -30 /tmp/proof3.txt
           if [ "$status" -ne 0 ]; then exit "$status"; fi
           passed=$(grep -oE "[0-9]+ passed" /tmp/proof3.txt | tail -1 | grep -oE "[0-9]+" || echo 0)
-          # 로컬 실측 기준선: 63 passed (실 DB 3 + 예약 해제 10 + 예산 정책 16 + 임계값 영속 18
-          #   + long-context 티어 16: calculate_cost/tier/감사 14 + 실 PG 마이그레이션 2).
+          # 로컬 실측 기준선: 65 passed (실 DB 3 + 예약 해제 10 + 예산 정책 16 + 임계값 영속 18
+          #   + long-context 티어 18: calculate_cost/tier/감사 16 + 실 PG 마이그레이션 2).
           # ⚠️ 예약 해제 파일은 REDIS_PROOF_URL 을 요구한다 — 환불은 incrbyfloat 로
           #    카운터를 움직이는 것이라, 가짜 Redis 로는 부호가 반대인 환불도 통과한다.
           #    두 env 중 하나라도 안 걸리면 통과 수가 떨어져 여기서 실패한다.
-          if [ "${passed:-0}" -lt 63 ]; then
-            echo "::error::통과 ${passed} 건(기대 63) — PROOF_DSN/REDIS_PROOF_URL 이 안 걸려 skip 됐다."
+          if [ "${passed:-0}" -lt 65 ]; then
+            echo "::error::통과 ${passed} 건(기대 65) — PROOF_DSN/REDIS_PROOF_URL 이 안 걸려 skip 됐다."
             exit 1
           fi
 
