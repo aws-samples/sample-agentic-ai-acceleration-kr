@@ -411,7 +411,8 @@ jobs:
             # 품질 부채가 늘어난 것이 아니다.
             #   +1  per-app 예산 행 회귀 테스트
             #   +1  재처리/고아 PEL 회귀 테스트
-            baseline: 23
+            #   +1  context_tier 영속화 회귀 테스트 (이 브랜치의 272K 티어 감사)
+            baseline: 24
           - service: notification-worker
             baseline: 93
           - service: admin-chat-agent
