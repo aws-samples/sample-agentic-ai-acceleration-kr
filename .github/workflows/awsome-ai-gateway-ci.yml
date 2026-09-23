@@ -282,15 +282,16 @@ jobs:
           set -uo pipefail
           uv run pytest -q -p no:cacheprovider \
             tests/regression/test_high_per_app_budget_rows.py \
-            tests/regression/test_high_replay_and_orphan_pel.py > /tmp/proof2.txt 2>&1
+            tests/regression/test_high_replay_and_orphan_pel.py \
+            tests/regression/test_medium_context_tier_persisted.py > /tmp/proof2.txt 2>&1
           status=$?
           tail -30 /tmp/proof2.txt
           if [ "$status" -ne 0 ]; then exit "$status"; fi
           passed=$(grep -oE "[0-9]+ passed" /tmp/proof2.txt | tail -1 | grep -oE "[0-9]+" || echo 0)
-          # 로컬 실측 기준선: 18 passed (per-app 9 + replay/PEL 9).
+          # 로컬 실측 기준선: 21 passed (per-app 9 + replay/PEL 9 + context_tier 3).
           # ⚠️ replay/PEL 파일은 PROOF_DSN **과** REDIS_PROOF_URL 을 모두 요구한다 —
           #    한쪽만 걸리면 통과 수가 떨어져 여기서 실패한다.
-          if [ "${passed:-0}" -lt 17 ]; then
+          if [ "${passed:-0}" -lt 20 ]; then
             echo "::error::통과 ${passed} 건 — PROOF_DSN 이 안 걸려 DB 테스트가 skip 됐다."
             exit 1
           fi
@@ -317,17 +318,19 @@ jobs:
             tests/regression/test_critical_model_client_scope_real_db.py \
             tests/regression/test_high_reservation_release_on_error.py \
             tests/regression/test_high_budget_fallback_policy.py \
-            tests/regression/test_medium_operator_thresholds_persist.py > /tmp/proof3.txt 2>&1
+            tests/regression/test_medium_operator_thresholds_persist.py \
+            tests/regression/test_medium_long_context_tier.py > /tmp/proof3.txt 2>&1
           status=$?
           tail -30 /tmp/proof3.txt
           if [ "$status" -ne 0 ]; then exit "$status"; fi
           passed=$(grep -oE "[0-9]+ passed" /tmp/proof3.txt | tail -1 | grep -oE "[0-9]+" || echo 0)
-          # 로컬 실측 기준선: 47 passed (실 DB 3 + 예약 해제 10 + 예산 정책 16 + 임계값 영속 18).
+          # 로컬 실측 기준선: 65 passed (실 DB 3 + 예약 해제 10 + 예산 정책 16 + 임계값 영속 18
+          #   + long-context 티어 18: calculate_cost/tier/감사 16 + 실 PG 마이그레이션 2).
           # ⚠️ 예약 해제 파일은 REDIS_PROOF_URL 을 요구한다 — 환불은 incrbyfloat 로
           #    카운터를 움직이는 것이라, 가짜 Redis 로는 부호가 반대인 환불도 통과한다.
           #    두 env 중 하나라도 안 걸리면 통과 수가 떨어져 여기서 실패한다.
-          if [ "${passed:-0}" -lt 47 ]; then
-            echo "::error::통과 ${passed} 건(기대 47) — PROOF_DSN/REDIS_PROOF_URL 이 안 걸려 skip 됐다."
+          if [ "${passed:-0}" -lt 65 ]; then
+            echo "::error::통과 ${passed} 건(기대 65) — PROOF_DSN/REDIS_PROOF_URL 이 안 걸려 skip 됐다."
             exit 1
           fi
 
@@ -408,7 +411,8 @@ jobs:
             # 품질 부채가 늘어난 것이 아니다.
             #   +1  per-app 예산 행 회귀 테스트
             #   +1  재처리/고아 PEL 회귀 테스트
-            baseline: 23
+            #   +1  context_tier 영속화 회귀 테스트 (이 브랜치의 272K 티어 감사)
+            baseline: 24
           - service: notification-worker
             baseline: 93
           - service: admin-chat-agent

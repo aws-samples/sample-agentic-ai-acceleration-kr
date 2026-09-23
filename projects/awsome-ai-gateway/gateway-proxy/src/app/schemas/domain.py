@@ -101,6 +101,20 @@ class ModelPricingSchema(BaseModel):
     cache_write_1h_per_1k: Decimal = Decimal("0")    # 1-hour TTL
     cache_read_per_1k: Decimal = Decimal("0")
 
+    # ── long-context(입력 272K 초과) 단가 티어 (마이그레이션 0038) ──────────────
+    # 전부 Optional/None 기본값이어야 한다: 이 필드를 모르는 구버전 Redis 캐시 항목
+    # (model:{alias}/model:list, TTL 300s)이 배포 직후 최대 5분간 예외 가드 없이
+    # ModelConfigSchema 로 되살려지므로, required 로 만들면 그 5분간 GET /v1/models 가 500.
+    #
+    # threshold 가 None 이면 티어 없음 → calculate_cost 가 아래 5개를 읽지 않는다(단일 요율).
+    # long 단가가 None 이면 그 항은 short 로 폴백(fail-safe, 크래시 없음).
+    long_context_threshold_tokens: int | None = None
+    long_input_per_1k: Decimal | None = None
+    long_output_per_1k: Decimal | None = None
+    long_cache_write_per_1k: Decimal | None = None      # 5-min TTL
+    long_cache_write_1h_per_1k: Decimal | None = None   # 1-hour TTL
+    long_cache_read_per_1k: Decimal | None = None
+
 
 class ModelConfigSchema(BaseModel):
     provider_model_id: str

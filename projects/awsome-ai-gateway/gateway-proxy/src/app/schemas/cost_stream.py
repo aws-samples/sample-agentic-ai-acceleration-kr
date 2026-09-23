@@ -58,6 +58,9 @@ class CostStreamEntry(BaseModel):
     sso_subject: str | None = None  # OIDC sub or stable user identifier for Bedrock metadata
     bedrock_request_id: str | None = None
     client: str | None = None  # "claude-code" | "cowork" | "other" — identification tag
+    # 청구 티어 감사 (마이그레이션 0039). "short"|"long"|None(티어 없는 모델).
+    # 게이트웨이 resolve_context_tier 가 청구와 동일 판정으로 채운다.
+    context_tier: str | None = None
 
     schema_version: int = Field(default=2)
 
@@ -89,6 +92,7 @@ class CostStreamEntry(BaseModel):
         sso_subject: str | None = None,
         bedrock_request_id: str | None = None,
         client: str | None = None,
+        context_tier: str | None = None,
     ) -> CostStreamEntry:
         now = datetime.now(tz=UTC)
         return cls(
@@ -128,4 +132,5 @@ class CostStreamEntry(BaseModel):
             sso_subject=sso_subject,
             bedrock_request_id=bedrock_request_id,
             client=client,
+            context_tier=context_tier,
         )

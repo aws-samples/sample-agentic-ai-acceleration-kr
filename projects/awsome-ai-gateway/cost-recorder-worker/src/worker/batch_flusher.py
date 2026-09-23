@@ -38,7 +38,7 @@ _INSERT_USAGE_LOGS = text(
         reasoning_tokens, web_search_count,
         cost_usd, latency_ms, ttft_ms, status, requested_at, completed_at,
         is_streaming, estimated_usage, downgraded_from, availability_fallback_from,
-        sso_subject, bedrock_request_id, client
+        sso_subject, bedrock_request_id, client, context_tier
     ) VALUES (
         gen_random_uuid(),
         :request_id,
@@ -65,7 +65,7 @@ _INSERT_USAGE_LOGS = text(
         :availability_fallback_from,
         :sso_subject,
         :bedrock_request_id,
-        :client
+        :client, :context_tier
     )
     ON CONFLICT (request_id) DO NOTHING
     """
@@ -325,6 +325,7 @@ class BatchFlusher:
                 "sso_subject": e.sso_subject,
                 "bedrock_request_id": e.bedrock_request_id,
                 "client": e.client,
+                "context_tier": e.context_tier,
             }
             for e in entries
         ]

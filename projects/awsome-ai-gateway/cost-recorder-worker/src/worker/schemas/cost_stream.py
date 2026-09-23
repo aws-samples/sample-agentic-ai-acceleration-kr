@@ -56,5 +56,7 @@ class CostStreamEntry(BaseModel):
     # dropped here (Pydantic ignored the extra field) -> NULL client logs; now carried
     # through so per-client analytics/dashboards see all three apps.
     client: str | None = None
+    # 청구 티어 감사 (마이그레이션 0039) — 게이트웨이가 채운 값을 그대로 usage_logs 에 쓴다.
+    context_tier: str | None = None
 
     schema_version: int = Field(default=2)

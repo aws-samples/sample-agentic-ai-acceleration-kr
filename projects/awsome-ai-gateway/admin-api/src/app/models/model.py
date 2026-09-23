@@ -123,6 +123,24 @@ class ModelPricing(Base):
     cache_read_price_per_1k_tokens: Mapped[Decimal] = mapped_column(
         Numeric(10, 6), nullable=False, default=Decimal("0")
     )
+    # long-context 단가 티어 (마이그레이션 0038). threshold NULL = 티어 없음. 명시 요율 컬럼
+    # (배수 아님) — AWS Price List 자동연동이 fetch 한 달러 요율을 그대로 넣기 위함.
+    long_context_threshold_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    long_context_input_price_per_1k_tokens: Mapped[Decimal | None] = mapped_column(
+        Numeric(10, 6), nullable=True
+    )
+    long_context_output_price_per_1k_tokens: Mapped[Decimal | None] = mapped_column(
+        Numeric(10, 6), nullable=True
+    )
+    long_context_cache_creation_5m_price_per_1k_tokens: Mapped[Decimal | None] = mapped_column(
+        Numeric(10, 6), nullable=True
+    )
+    long_context_cache_creation_1h_price_per_1k_tokens: Mapped[Decimal | None] = mapped_column(
+        Numeric(10, 6), nullable=True
+    )
+    long_context_cache_read_price_per_1k_tokens: Mapped[Decimal | None] = mapped_column(
+        Numeric(10, 6), nullable=True
+    )
     effective_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     effective_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("auth.users.id"), nullable=False)

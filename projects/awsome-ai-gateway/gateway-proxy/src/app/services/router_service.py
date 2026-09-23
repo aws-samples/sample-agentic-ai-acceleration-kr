@@ -120,6 +120,14 @@ def _orm_to_schema(alias_row: ModelAlias, pricing_row: Optional[ModelPricing]) -
             cache_write_per_1k=pricing_row.cache_creation_5m_price_per_1k_tokens,
             cache_write_1h_per_1k=pricing_row.cache_creation_1h_price_per_1k_tokens,
             cache_read_per_1k=pricing_row.cache_read_price_per_1k_tokens,
+            # long-context 티어(0038). short 컬럼과 같은 방식으로 직접 읽는다(전부 nullable;
+            # NULL threshold = 티어 없음). DB 컬럼명 → 스키마 필드명 매핑.
+            long_context_threshold_tokens=pricing_row.long_context_threshold_tokens,
+            long_input_per_1k=pricing_row.long_context_input_price_per_1k_tokens,
+            long_output_per_1k=pricing_row.long_context_output_price_per_1k_tokens,
+            long_cache_write_per_1k=pricing_row.long_context_cache_creation_5m_price_per_1k_tokens,
+            long_cache_write_1h_per_1k=pricing_row.long_context_cache_creation_1h_price_per_1k_tokens,
+            long_cache_read_per_1k=pricing_row.long_context_cache_read_price_per_1k_tokens,
         )
     else:
         p = ModelPricingSchema(input_per_1k=Decimal("0"), output_per_1k=Decimal("0"))
