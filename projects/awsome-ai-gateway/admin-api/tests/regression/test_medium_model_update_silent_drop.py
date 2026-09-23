@@ -92,6 +92,14 @@ class _FakePricing:
         self.cache_creation_5m_price_per_1k_tokens = Decimal("0.00375")
         self.cache_creation_1h_price_per_1k_tokens = Decimal("0.006")
         self.cache_read_price_per_1k_tokens = Decimal("0.0003")
+        # long-context 티어 (0038) — 실 ModelPricing 과 같은 모양이어야 set_pricing 의 _keep
+        # (prior 승계)과 _to_response 가 읽을 수 있다. 티어 없는 모델이라 전부 None.
+        self.long_context_threshold_tokens = None
+        self.long_context_input_price_per_1k_tokens = None
+        self.long_context_output_price_per_1k_tokens = None
+        self.long_context_cache_creation_5m_price_per_1k_tokens = None
+        self.long_context_cache_creation_1h_price_per_1k_tokens = None
+        self.long_context_cache_read_price_per_1k_tokens = None
         self.effective_from = datetime.now(timezone.utc)
         self.effective_until = None
 

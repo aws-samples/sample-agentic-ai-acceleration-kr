@@ -45,6 +45,15 @@ def _make_pricing(alias: str = "claude-sonnet") -> ModelPricing:
     p.cache_creation_5m_price_per_1k_tokens = Decimal("0.00375")
     p.cache_creation_1h_price_per_1k_tokens = Decimal("0.006")
     p.cache_read_price_per_1k_tokens = Decimal("0.0003")
+    # long-context 티어 (0038) — spec=ModelPricing 은 이 컬럼들도 노출하므로 명시하지 않으면
+    # child MagicMock 이 나와 _to_response 의 pydantic 검증이 깨진다(#93 router_service 와 동일).
+    # 티어 없는 모델이라 전부 None. set_pricing 의 _keep(prior 승계)도 이 값을 읽는다.
+    p.long_context_threshold_tokens = None
+    p.long_context_input_price_per_1k_tokens = None
+    p.long_context_output_price_per_1k_tokens = None
+    p.long_context_cache_creation_5m_price_per_1k_tokens = None
+    p.long_context_cache_creation_1h_price_per_1k_tokens = None
+    p.long_context_cache_read_price_per_1k_tokens = None
     p.effective_from = datetime.now(timezone.utc)
     p.effective_until = None
     return p
@@ -155,6 +164,8 @@ class TestSetPricing:
              patch("app.services.model_service.audit_logger") as mock_audit:
             repo = MockRepo.return_value
             repo.get_by_alias = AsyncMock(return_value=model)
+            # set_pricing 이 close 전에 prior 를 읽어 long 티어를 승계한다 — prior 없음(None).
+            repo.get_current_pricing = AsyncMock(return_value=None)
             repo.close_current_pricing = AsyncMock()
             repo.create_pricing = AsyncMock()
             mock_audit.log = AsyncMock()
@@ -182,6 +193,8 @@ class TestSetPricing:
              patch("app.services.model_service.audit_logger") as mock_audit:
             repo = MockRepo.return_value
             repo.get_by_alias = AsyncMock(return_value=model)
+            # set_pricing 이 close 전에 prior 를 읽어 long 티어를 승계한다 — prior 없음(None).
+            repo.get_current_pricing = AsyncMock(return_value=None)
             repo.close_current_pricing = AsyncMock()
             repo.create_pricing = AsyncMock()
             mock_audit.log = AsyncMock()
@@ -217,6 +230,8 @@ class TestSetPricing:
              patch("app.services.model_service.audit_logger") as mock_audit:
             repo = MockRepo.return_value
             repo.get_by_alias = AsyncMock(return_value=model)
+            # set_pricing 이 close 전에 prior 를 읽어 long 티어를 승계한다 — prior 없음(None).
+            repo.get_current_pricing = AsyncMock(return_value=None)
             repo.close_current_pricing = AsyncMock()
             repo.create_pricing = AsyncMock()
             mock_audit.log = AsyncMock()

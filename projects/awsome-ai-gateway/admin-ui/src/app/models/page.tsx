@@ -5,7 +5,7 @@ import { adminAPI } from '@/lib/api-client';
 import type { ModelListItem } from '@/types/entities';
 import { ModelsTable } from '@/components/models/ModelsTable';
 import { CreateModelButton } from '@/components/models/CreateModelButton';
-import { PriceSyncButton } from '@/components/models/PriceSyncButton';
+import { AwsPriceSyncButton } from '@/components/models/AwsPriceSyncButton';
 import { TeamModelPermissionPanel } from '@/components/models/TeamModelPermissionPanel';
 import { WebSearchTogglePanel } from '@/components/models/WebSearchTogglePanel';
 import type { RoutingProfileItem } from '@/lib/actions/routing';
@@ -81,7 +81,7 @@ export default async function ModelsPage() {
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-2xl font-bold">{t('title')}</h1>
           <div className="flex items-center gap-2">
-            <PriceSyncButton />
+            <AwsPriceSyncButton />
             <CreateModelButton />
           </div>
         </div>

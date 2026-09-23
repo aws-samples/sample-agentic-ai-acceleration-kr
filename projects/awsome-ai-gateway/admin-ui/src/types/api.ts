@@ -225,6 +225,35 @@ export const RateLimitSetSchema = z.object({
  */
 export type PagePermissionMap = Record<string, UserRole[]>;
 
+// ─── AWS Price List 자동연동 (fetch ≠ apply) ─────────────────────────────────────
+
+export interface AwsPriceChange {
+  field: string;
+  current: string | null;
+  aws: string | null;
+}
+
+export interface AwsPricePreviewItem {
+  alias: string;
+  provider_model_id: string;
+  matched: boolean;
+  aws_region_code: string | null;
+  aws_endpoint: string | null;
+  changes: AwsPriceChange[];
+  note: string;
+}
+
+export interface AwsPricePreviewResponse {
+  region_code: string;
+  items: AwsPricePreviewItem[];
+}
+
+export interface AwsPriceSyncResponse {
+  synced: string[];
+  skipped: string[];
+}
+
+
 // ─── Inferred Zod Types ───────────────────────────────────────────────────────
 
 export type BudgetSetInput = z.infer<typeof BudgetSetSchema>;

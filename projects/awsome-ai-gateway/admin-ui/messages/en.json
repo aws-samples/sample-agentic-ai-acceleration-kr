@@ -296,6 +296,26 @@
     "allocationExceeds": "Allocated total (${allocated}) exceeds the team budget (${budget})."
   },
   "models": {
+    "awsSync": {
+      "button": "Check AWS prices",
+      "title": "Sync latest AWS prices",
+      "description": "Compare current pricing against the latest AWS Price List. Select the rows to apply. Prices drive billing and enforcement, so nothing is applied automatically.",
+      "region": "Region",
+      "reload": "Reload",
+      "loading": "Fetching AWS prices…",
+      "close": "Close",
+      "cancel": "Cancel",
+      "apply": "Apply {count} selected",
+      "applying": "Applying…",
+      "syncedCount": "{count} applied",
+      "skippedCount": "{count} skipped",
+      "noDrift": "Current pricing matches AWS. Nothing to apply.",
+      "field": "Field",
+      "current": "Current",
+      "awsValue": "AWS",
+      "inSync": "{count} in sync",
+      "unmatched": "{count} with no AWS source"
+    },
     "title": "Model Management",
     "addModel": "Add Model",
     "alias": "Alias",

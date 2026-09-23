@@ -7,6 +7,7 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { adminAPI } from '@/lib/api-client';
 import { ModelCreateSchema, ModelDeactivateSchema } from '@/types/api';
+import type { AwsPricePreviewResponse, AwsPriceSyncResponse } from '@/types/api';
 import { withRetry } from '@/lib/utils/retry';
 import { APIError } from '@/lib/utils/retry';
 import type { ActionResult } from './types';
@@ -217,41 +218,17 @@ export async function listActiveModelsAction(): Promise<ActionResult<ModelListIt
   }
 }
 
-// ─── Price sync (AWS Price List API) ───────────────────────────────────────────
+// ─── AWS Price List 자동연동 (fetch ≠ apply) ─────────────────────────────────────
 
-export interface PriceSyncDiff {
-  alias: string;
-  provider_model_id: string;
-  matched: boolean;
-  note: string | null;
-  current: {
-    input_price_per_1k_tokens: string;
-    output_price_per_1k_tokens: string;
-    cache_creation_5m_price_per_1k_tokens?: string;
-    cache_creation_1h_price_per_1k_tokens?: string;
-    cache_read_price_per_1k_tokens?: string;
-  } | null;
-  proposed_input_per_1k: string | null;
-  proposed_output_per_1k: string | null;
-  proposed_cache_5m_per_1k: string | null;
-  proposed_cache_1h_per_1k: string | null;
-  proposed_cache_read_per_1k: string | null;
-  changed: boolean;
-}
-
-export interface PriceSyncPreview {
-  source: string;
-  region: string;
-  diffs: PriceSyncDiff[];
-  matched_count: number;
-  changed_count: number;
-}
-
-/** AWS Price List 단가 vs 현재가 diff 미리보기(읽기 전용). */
-export async function previewPriceSyncAction(): Promise<ActionResult<PriceSyncPreview>> {
+/** AWS Price List standard 단가 vs 현재가 필드별 drift 미리보기(읽기 전용). */
+export async function previewAwsPricingAction(
+  regionCode = 'us-east-1'
+): Promise<ActionResult<AwsPricePreviewResponse>> {
   try {
     const data = await withRetry(() =>
-      adminAPI.get<PriceSyncPreview>('/admin/models/pricing/sync-preview')
+      adminAPI.get<AwsPricePreviewResponse>(
+        `/admin/models/pricing/aws-preview?region_code=${encodeURIComponent(regionCode)}`
+      )
     );
     return { success: true, data };
   } catch (err) {
@@ -259,20 +236,20 @@ export async function previewPriceSyncAction(): Promise<ActionResult<PriceSyncPr
   }
 }
 
-/** 승인된 alias 만 AWS 단가로 적용(자동 전체적용 아님). */
-export async function applyPriceSyncAction(
-  aliases: string[]
-): Promise<ActionResult<{ applied: string[]; skipped: string[]; errors: string[] }>> {
-  if (!aliases.length) {
-    return { success: false, error: '적용할 모델을 선택하세요' };
-  }
+/** 승인된 alias 만 AWS 단가로 반영(자동 전체적용 아님). */
+export async function syncAwsPricingAction(
+  aliases: string[],
+  regionCode = 'us-east-1'
+): Promise<ActionResult<AwsPriceSyncResponse>> {
   try {
     const data = await withRetry(() =>
-      adminAPI.post<{ applied: string[]; skipped: string[]; errors: string[] }>(
-        '/admin/models/pricing/sync-apply',
-        { aliases }
-      )
+      adminAPI.post<AwsPriceSyncResponse>('/admin/models/pricing/aws-sync', {
+        aliases,
+        region_code: regionCode,
+      })
     );
+    // 반영된 단가는 model:list/model:{alias} 캐시 무효화까지 admin-api 가 하지만, 콘솔의
+    // 서버 컴포넌트 목록도 새로 받도록 재검증한다.
     revalidatePath('/models');
     return { success: true, data };
   } catch (err) {

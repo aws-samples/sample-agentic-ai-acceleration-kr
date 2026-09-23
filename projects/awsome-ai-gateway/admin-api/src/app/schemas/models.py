@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.clients import validate_clients
 from app.schemas.common import ApiFormatEnum, ProviderEnum
@@ -22,6 +22,68 @@ from app.schemas.common import ApiFormatEnum, ProviderEnum
 #    le 를 쓴다: pyproject 가 pydantic>=2.0.0 만 요구하므로 그 파생 규칙에 기대지 않고
 #    DB 최대값을 그대로 적는 편이 버전에 무관하고 에러 메시지도 사람이 읽을 수 있다.
 MAX_PRICE_PER_1K = Decimal("9999.999999")
+
+
+def _validate_long_context_consistency(obj):
+    """long-context 티어 설정의 반쪽 상태를 막는다 (마이그레이션 0038).
+
+    calculate_cost 는 threshold 만 있고 long 단가가 없으면 short 로 폴백한다(fail-safe).
+    그 폴백은 크래시는 막지만, 운영자가 "272K 티어를 켰다" 고 믿는데 실제로는 short 로 청구되는
+    **조용한 무과금 티어**를 만든다. 그래서 입력 계층에서 반쪽 설정을 거부한다:
+      · threshold 설정 → long input·output 단가 필수(요청마다 항상 있는 두 축).
+      · ★ threshold 설정 + 어떤 캐시 버킷의 **short 단가가 0 보다 크면**(= 그 모델이 실제로
+        캐시 과금을 한다) → 그 버킷의 long 단가도 필수. 안 그러면 272K 초과 캐시 토큰이
+        _rate() 의 short 폴백으로 1배(=short) 청구되어 캐시 슬라이스만 조용히 과소청구된다.
+        short 캐시 단가가 0 인 캐시-없는 모델은 long 캐시가 여전히 선택이다 — 그 버킷은
+        어차피 0 이라 폴백해도 무해하기 때문.
+      · long 단가만 있고 threshold 없음 → 절대 안 쓰이는 죽은 값 → 거부.
+    ModelCreateRequest·PricingRequest 두 곳에서 공유한다.
+    """
+    thr = obj.long_context_threshold_tokens
+    long_prices = {
+        "long_context_input_price_per_1k_tokens": obj.long_context_input_price_per_1k_tokens,
+        "long_context_output_price_per_1k_tokens": obj.long_context_output_price_per_1k_tokens,
+        "long_context_cache_creation_5m_price_per_1k_tokens": obj.long_context_cache_creation_5m_price_per_1k_tokens,
+        "long_context_cache_creation_1h_price_per_1k_tokens": obj.long_context_cache_creation_1h_price_per_1k_tokens,
+        "long_context_cache_read_price_per_1k_tokens": obj.long_context_cache_read_price_per_1k_tokens,
+    }
+    any_long = any(v is not None for v in long_prices.values())
+    if thr is not None:
+        missing = [
+            k for k in (
+                "long_context_input_price_per_1k_tokens",
+                "long_context_output_price_per_1k_tokens",
+            )
+            if long_prices[k] is None
+        ]
+        # 캐시 버킷: short 단가가 0 보다 크면 long 단가도 요구한다(0 이면 폴백 무해 → 선택).
+        for short_f, long_f in (
+            ("cache_read_price_per_1k_tokens", "long_context_cache_read_price_per_1k_tokens"),
+            ("cache_creation_5m_price_per_1k_tokens", "long_context_cache_creation_5m_price_per_1k_tokens"),
+            ("cache_creation_1h_price_per_1k_tokens", "long_context_cache_creation_1h_price_per_1k_tokens"),
+        ):
+            short_rate = getattr(obj, short_f, None)
+            if short_rate is not None and short_rate > 0 and long_prices[long_f] is None:
+                missing.append(long_f)
+        if missing:
+            raise ValueError(
+                "long_context_threshold_tokens 를 설정하면 long input·output 단가가 필수이고, "
+                "short 단가가 0 보다 큰 캐시 버킷은 그 long 단가도 필수입니다 "
+                f"(누락: {missing}). 없으면 272K 초과가 조용히 short 요율로 청구됩니다."
+            )
+    elif any_long:
+        raise ValueError(
+            "long-context 단가를 설정하려면 long_context_threshold_tokens 도 설정해야 합니다 "
+            "(threshold 없이는 그 단가가 절대 적용되지 않습니다)."
+        )
+    return obj
+
+
+# ── long-context 티어 단가 필드 (마이그레이션 0038) ──
+# ModelCreateRequest·PricingRequest 가 공유하는 6개 필드. web_search 와 달리 기본값이 None
+# 이다 — long 티어는 모델별이라 보편 기본값이 없고, None = "티어 없음"(단일 요율)이 안전한
+# 기본이다. GPT-5.6 처럼 티어가 있는 모델에만 채운다. le=MAX_PRICE_PER_1K 는 short 필드와
+# 같은 이유(NUMERIC(10,6) 오버플로 → 500).
 
 
 # ── Requests ──
@@ -55,6 +117,24 @@ class ModelCreateRequest(BaseModel):
         default=Decimal("0"), ge=0, le=MAX_PRICE_PER_1K, decimal_places=6
     )
 
+    # long-context 티어 (0038) — 등록 시 바로 티어 있는 모델을 만들 수 있게 parity 로 둔다.
+    long_context_threshold_tokens: int | None = Field(default=None, ge=1)
+    long_context_input_price_per_1k_tokens: Decimal | None = Field(
+        default=None, ge=0, le=MAX_PRICE_PER_1K, decimal_places=6
+    )
+    long_context_output_price_per_1k_tokens: Decimal | None = Field(
+        default=None, ge=0, le=MAX_PRICE_PER_1K, decimal_places=6
+    )
+    long_context_cache_creation_5m_price_per_1k_tokens: Decimal | None = Field(
+        default=None, ge=0, le=MAX_PRICE_PER_1K, decimal_places=6
+    )
+    long_context_cache_creation_1h_price_per_1k_tokens: Decimal | None = Field(
+        default=None, ge=0, le=MAX_PRICE_PER_1K, decimal_places=6
+    )
+    long_context_cache_read_price_per_1k_tokens: Decimal | None = Field(
+        default=None, ge=0, le=MAX_PRICE_PER_1K, decimal_places=6
+    )
+
     #: 이 모델을 쓸 수 있는 앱 허용목록. **3-상태**(models/model.py 주석 참조):
     #:   생략/``null``  제한 없음
     #:   ``[]``         명시적으로 빈 허용목록 = 어떤 앱도 허용되지 않음
@@ -67,6 +147,10 @@ class ModelCreateRequest(BaseModel):
         # ⚠️ None 을 그대로 통과시켜야 한다 — [] 로 정규화하면 "제한 없음" 이
         #    "전면 거부" 로 바뀐다(정확히 반대 방향의 사고).
         return validate_clients(v)
+
+    @model_validator(mode="after")
+    def _validate_long_context(self):
+        return _validate_long_context_consistency(self)
 
 
 class ModelUpdateRequest(BaseModel):
@@ -119,9 +203,9 @@ class PricingRequest(BaseModel):
     #    ⇒ "extra 키는 무해한 오타" 라는 이전 판단은 이 스키마에서 반증됐다.
     #
     # le=MAX_PRICE_PER_1K: ModelCreateRequest 와 같은 이유(NUMERIC(10,6) 오버플로 → 500).
-    # ⚠️ 이 스키마는 사용자 입력 외에 model_service.apply_price_sync 도 만들어 쓴다.
+    # ⚠️ 이 스키마는 사용자 입력 외에 model_service.sync_aws_pricing 도 만들어 쓴다.
     #    AWS Price List 값이 비정상이면 DB 쓰기 전에 여기서 걸린다(더 이른 실패가 낫다).
-    #    apply_price_sync 는 선언된 필드만 kwargs 로 넘기므로 forbid 의 영향을 받지 않는다.
+    #    sync 는 선언된 필드만 kwargs 로 넘기므로 forbid 의 영향을 받지 않는다.
     model_config = ConfigDict(extra="forbid")
 
     input_price_per_1k_tokens: Decimal = Field(ge=0, le=MAX_PRICE_PER_1K, decimal_places=6)
@@ -135,7 +219,30 @@ class PricingRequest(BaseModel):
     cache_read_price_per_1k_tokens: Decimal = Field(
         default=Decimal("0"), ge=0, le=MAX_PRICE_PER_1K, decimal_places=6
     )
+    # long-context 티어 (0038). set_pricing 은 **생략(model_fields_set 에 없음)** 을 "이전 행
+    # 승계", **명시적 None** 을 "티어 제거" 로 구별한다 — short 단가만 고치는 PUT 이 272K
+    # 티어를 조용히 지우지 않게 한다(model_service.py set_pricing 의 _keep).
+    long_context_threshold_tokens: int | None = Field(default=None, ge=1)
+    long_context_input_price_per_1k_tokens: Decimal | None = Field(
+        default=None, ge=0, le=MAX_PRICE_PER_1K, decimal_places=6
+    )
+    long_context_output_price_per_1k_tokens: Decimal | None = Field(
+        default=None, ge=0, le=MAX_PRICE_PER_1K, decimal_places=6
+    )
+    long_context_cache_creation_5m_price_per_1k_tokens: Decimal | None = Field(
+        default=None, ge=0, le=MAX_PRICE_PER_1K, decimal_places=6
+    )
+    long_context_cache_creation_1h_price_per_1k_tokens: Decimal | None = Field(
+        default=None, ge=0, le=MAX_PRICE_PER_1K, decimal_places=6
+    )
+    long_context_cache_read_price_per_1k_tokens: Decimal | None = Field(
+        default=None, ge=0, le=MAX_PRICE_PER_1K, decimal_places=6
+    )
     effective_from: datetime
+
+    @model_validator(mode="after")
+    def _validate_long_context(self):
+        return _validate_long_context_consistency(self)
 
 
 class StatusPatchRequest(BaseModel):
@@ -151,6 +258,14 @@ class ModelPricingResponse(BaseModel):
     cache_creation_5m_price_per_1k_tokens: Decimal = Decimal("0")
     cache_creation_1h_price_per_1k_tokens: Decimal = Decimal("0")
     cache_read_price_per_1k_tokens: Decimal = Decimal("0")
+    # long-context 티어 (0038) — 티어 없는 모델은 전부 None. 화면/미리보기가 현재 티어를
+    # 표시할 수 있도록 노출한다.
+    long_context_threshold_tokens: int | None = None
+    long_context_input_price_per_1k_tokens: Decimal | None = None
+    long_context_output_price_per_1k_tokens: Decimal | None = None
+    long_context_cache_creation_5m_price_per_1k_tokens: Decimal | None = None
+    long_context_cache_creation_1h_price_per_1k_tokens: Decimal | None = None
+    long_context_cache_read_price_per_1k_tokens: Decimal | None = None
     effective_from: datetime
     effective_until: datetime | None = None
 
@@ -177,44 +292,51 @@ class ModelListResponse(BaseModel):
     items: list[ModelResponse]
 
 
-# ── Price sync (AWS Price List API 동기화) ──
+# ── AWS Price List 자동연동 (fetch ≠ apply) ──
+# 이전 설계(PriceSyncService + PriceSync* 스키마)는 지웠다. 그 fetch 층이 regionCode 필터
+# 없이 모든 SKU 를 substring 분류 + last-write-wins 로 누적해 다른 리전/티어 SKU 가 정상
+# 요율을 덮었고(비결정적), apply 는 set_pricing 을 short 5필드로만 호출해 0038 의 long 컬럼을
+# 매 적용마다 NULL 로 지웠다. 아래 Aws* 계약은 리전을 명시받고, 필드별 changes 를 그대로
+# 노출하며(캐시·long 포함), 반영은 long 승계가 붙은 set_pricing 을 그대로 탄다.
 
 
-class PriceSyncDiff(BaseModel):
-    """모델 1개의 현재 단가 vs AWS 공식 단가 diff(미리보기 전용, 쓰기 없음)."""
+class AwsPriceSyncRequest(BaseModel):
+    # 운영자가 preview 에서 고른 alias 부분집합만 반영한다. 빈 목록은 no-op.
+    aliases: list[str]
+    # 대조·반영에 쓸 단가 리전. Price List API 엔드포인트(us-east-1)와는 별개다.
+    # ⚠️ pub alias 는 In-Region(Geo CRIS)으로 시드됐다 — 기본값(us-east-1)을 그대로 두면
+    #    비-US alias 에 US 요율이 써진다. 운영자는 alias 의 실제 서빙 리전을 넘겨야 한다.
+    region_code: str = "us-east-1"
 
+
+class AwsPriceChange(BaseModel):
+    """한 단가 필드의 현재 DB 값 vs AWS 값. 둘 다 문자열(Decimal 직렬화) 또는 None."""
+
+    field: str
+    current: str | None = None
+    aws: str | None = None
+
+
+class AwsPricePreviewItem(BaseModel):
     alias: str
     provider_model_id: str
-    matched: bool  # AWS Price List 에서 단가를 찾았나
-    note: str | None = None  # 미매칭/주의 사유
-    current: ModelPricingResponse | None = None  # DB 현재가(없을 수 있음)
-    # AWS 에서 가져와 per-1k 정규화한 제안 단가(매칭 시)
-    proposed_input_per_1k: Decimal | None = None
-    proposed_output_per_1k: Decimal | None = None
-    proposed_cache_5m_per_1k: Decimal | None = None
-    proposed_cache_1h_per_1k: Decimal | None = None
-    proposed_cache_read_per_1k: Decimal | None = None
-    changed: bool = False  # 현재가와 제안가가 다른가
+    # matched=False = Price List 에 이 pmid 의 standard 단가가 없다 = 자동연동 대상 아님.
+    matched: bool
+    aws_region_code: str | None = None
+    aws_endpoint: str | None = None
+    changes: list[AwsPriceChange] = Field(default_factory=list)
+    note: str = ""
 
 
-class PriceSyncPreviewResponse(BaseModel):
-    source: str = "aws_price_list_api"  # 출처 명시(IT 아님)
-    region: str
-    diffs: list[PriceSyncDiff]
-    matched_count: int
-    changed_count: int
+class AwsPricePreviewResponse(BaseModel):
+    region_code: str
+    items: list[AwsPricePreviewItem]
 
 
-class PriceSyncApplyRequest(BaseModel):
-    """승인 후 적용할 alias 목록(명시 선택 — 자동 전체적용 금지)."""
-
-    aliases: list[str] = Field(min_length=1)
-
-
-class PriceSyncApplyResponse(BaseModel):
-    applied: list[str]
+class AwsPriceSyncResponse(BaseModel):
+    synced: list[str]
+    # 매칭 안 되거나 존재하지 않는 alias — 조용히 넘기지 않고 되돌려준다.
     skipped: list[str]
-    errors: list[str] = Field(default_factory=list)
 
 
 # ── Team Allowed Models ──
