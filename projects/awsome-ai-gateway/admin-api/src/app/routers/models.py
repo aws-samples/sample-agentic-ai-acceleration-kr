@@ -6,39 +6,20 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import CurrentUser, require_admin
-from app.core.config import get_settings
 from app.core.db import get_db_session
 from app.schemas.models import (
+    AwsPricePreviewResponse,
+    AwsPriceSyncRequest,
+    AwsPriceSyncResponse,
     ModelCreateRequest,
     ModelListResponse,
     ModelResponse,
     ModelUpdateRequest,
-    PriceSyncApplyRequest,
-    PriceSyncApplyResponse,
-    PriceSyncPreviewResponse,
     PricingRequest,
     StatusPatchRequest,
 )
 
 router = APIRouter(prefix="/admin/models", tags=["Model Management"])
-
-
-def _build_pricing_sync_service():
-    """AWS Price List API(boto3 pricing client, us-east-1) 기반 동기화 서비스 생성.
-
-    가격 동기화 소스는 AWS Price List API 이며 AgentCore Gateway/Inference Targets 아님
-    (IT 는 단가를 노출하지 않음). region 은 Price List 전용 엔드포인트(us-east-1 등).
-    """
-    import boto3
-
-    from app.services.pricing_sync_service import PricingSyncService
-
-    settings = get_settings()
-    region = settings.PRICING_API_REGION
-    client = boto3.client("pricing", region_name=region)
-    svc = PricingSyncService(client)
-    svc.region = region  # preview 응답에 표시
-    return svc
 
 
 @router.get("", response_model=ModelListResponse)
@@ -109,39 +90,39 @@ async def set_pricing(
     )
 
 
-@router.get("/pricing/sync-preview", response_model=PriceSyncPreviewResponse)
-async def price_sync_preview(
+@router.get("/pricing/aws-preview", response_model=AwsPricePreviewResponse)
+async def aws_price_preview(
     request: Request,
+    region_code: str = "us-east-1",
     admin: CurrentUser = Depends(require_admin),
     session: AsyncSession = Depends(get_db_session),
 ):
-    """AWS Price List 단가 vs DB 현재가 diff 미리보기(읽기 전용, 쓰기 없음).
+    """AWS Price List standard 단가 vs DB 현재가 필드별 drift 미리보기(읽기 전용, 쓰기 없음).
 
-    운영자가 이 diff 를 확인한 뒤 sync-apply 로 명시 적용. 자동 적용 없음.
+    운영자가 이 diff 를 확인한 뒤 aws-sync 로 명시 적용. 자동 적용 없음. region_code 는 대조할
+    단가 리전(Price List API 엔드포인트 us-east-1 과는 별개) — alias 의 실제 서빙 리전을 넘긴다.
     """
     from app.services.model_service import ModelService
 
     svc: ModelService = request.app.state.model_service
-    pricing_sync = _build_pricing_sync_service()
-    return await svc.preview_price_sync(session, pricing_sync_service=pricing_sync)
+    return await svc.preview_aws_pricing(session, region_code=region_code)
 
 
-@router.post("/pricing/sync-apply", response_model=PriceSyncApplyResponse)
-async def price_sync_apply(
+@router.post("/pricing/aws-sync", response_model=AwsPriceSyncResponse)
+async def aws_price_sync(
     request: Request,
-    body: PriceSyncApplyRequest,
+    body: AwsPriceSyncRequest,
     admin: CurrentUser = Depends(require_admin),
     session: AsyncSession = Depends(get_db_session),
 ):
-    """승인된 alias 목록만 AWS 단가로 적용(기존 set_pricing 재사용 — 시계열·감사·캐시)."""
+    """승인된 alias 목록만 AWS 단가로 반영(기존 set_pricing 재사용 — 시계열·감사·캐시·long 승계)."""
     from app.services.model_service import ModelService
 
     svc: ModelService = request.app.state.model_service
-    pricing_sync = _build_pricing_sync_service()
-    return await svc.apply_price_sync(
+    return await svc.sync_aws_pricing(
         session,
-        pricing_sync_service=pricing_sync,
         aliases=body.aliases,
+        region_code=body.region_code,
         actor=admin,
         ip_address=request.client.host if request.client else "0.0.0.0",
         request_id=request.headers.get("x-request-id", ""),

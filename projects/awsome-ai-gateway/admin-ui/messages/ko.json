@@ -296,6 +296,26 @@
     "allocationExceeds": "배분 금액의 합계(${allocated})가 팀 예산(${budget})을 초과합니다."
   },
   "models": {
+    "awsSync": {
+      "button": "AWS 단가 확인",
+      "title": "AWS 최신 단가 연동",
+      "description": "AWS Price List 의 최신 단가와 현재 등록 단가를 비교합니다. 반영할 항목을 선택하세요. 가격은 과금·차단에 쓰이므로 자동 반영되지 않습니다.",
+      "region": "리전",
+      "reload": "다시 조회",
+      "loading": "AWS 단가를 가져오는 중…",
+      "close": "닫기",
+      "cancel": "취소",
+      "apply": "선택 {count}건 반영",
+      "applying": "반영 중…",
+      "syncedCount": "{count}건 반영됨",
+      "skippedCount": "건너뜀 {count}건",
+      "noDrift": "현재 단가가 AWS 와 일치합니다. 반영할 변경 없음.",
+      "field": "항목",
+      "current": "현재",
+      "awsValue": "AWS",
+      "inSync": "일치 {count}건",
+      "unmatched": "AWS 소스 없음 {count}건"
+    },
     "title": "모델 관리",
     "addModel": "모델 추가",
     "alias": "별칭",

@@ -254,6 +254,7 @@ jobs:
             tests/regression/test_high_productivity_idempotency.py \
             tests/regression/test_high_budget_redis_clobber.py \
             tests/regression/test_high_init_sql_matches_orm.py \
+            tests/regression/test_high_aws_price_sync_real_db.py \
             > /tmp/proof.txt 2>&1
           status=$?
           tail -40 /tmp/proof.txt
@@ -261,12 +262,12 @@ jobs:
           # 통과했더라도 실질 실행이 0건이면 실패다 — 그게 이 잡을 만든 이유다.
           # ⚠️ 하한만 본다. 정확한 통과 수는 DB 에 쌓인 데이터에 따라 달라진다 — 일부
           #    테스트는 대상 테이블이 비어 있으면 스스로 skip 한다(플랜 어서션 등). 로컬
-          #    실측은 134 passed / 2 skipped 였다. 하한의 목적은 "PROOF_DSN 이 안 걸려
-          #    대부분 skip 된" 상태를 잡는 것이다(그 경우 20건 미만으로 떨어진다).
+          #    실측은 136 passed / 2 skipped 였다(AWS 자동연동 real-PG 2건 포함). 하한의
+          #    목적은 "PROOF_DSN 이 안 걸려 대부분 skip 된" 상태를 잡는 것이다.
           passed=$(grep -oE "[0-9]+ passed" /tmp/proof.txt | tail -1 | grep -oE "[0-9]+" || echo 0)
           echo "passed=${passed}"
-          if [ "${passed:-0}" -lt 93 ]; then
-            echo "::error::통과 수가 ${passed} 건뿐이다(하한 93). PROOF_DSN/REDIS_PROOF_URL 이 안 걸려 대부분 skip 된 것으로 보인다."
+          if [ "${passed:-0}" -lt 95 ]; then
+            echo "::error::통과 수가 ${passed} 건뿐이다(하한 95). PROOF_DSN/REDIS_PROOF_URL 이 안 걸려 대부분 skip 된 것으로 보인다."
             exit 1
           fi
 

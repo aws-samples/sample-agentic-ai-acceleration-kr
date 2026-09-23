@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 
 import structlog
+from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import audit_logger
@@ -16,12 +18,23 @@ from app.core.exceptions import ConflictError, NotFoundError
 from app.models.model import ApiFormat, ModelAlias, ModelPricing, ModelStatus, Provider
 from app.repositories.model_repository import ModelRepository
 from app.schemas.models import (
+    AwsPriceChange,
+    AwsPricePreviewItem,
+    AwsPricePreviewResponse,
+    AwsPriceSyncResponse,
     ModelCreateRequest,
     ModelPricingResponse,
     ModelResponse,
     ModelUpdateRequest,
     PricingRequest,
     StatusPatchRequest,
+)
+from app.services.aws_price_list import (
+    LONG_CONTEXT_THRESHOLD_TOKENS,
+    AwsModelPrice,
+    fetch_bedrock_prices,
+    long_tier_enabled,
+    normalize_pmid,
 )
 
 logger = structlog.get_logger()
@@ -79,6 +92,14 @@ class ModelService:
             cache_creation_5m_price_per_1k_tokens=data.cache_creation_5m_price_per_1k_tokens,
             cache_creation_1h_price_per_1k_tokens=data.cache_creation_1h_price_per_1k_tokens,
             cache_read_price_per_1k_tokens=data.cache_read_price_per_1k_tokens,
+            # long-context 티어 (0038) — 등록 시 바로 티어를 켤 수 있게 data 에서 그대로 받는다
+            # (신규 행이라 승계 대상 없음; 티어 없는 모델은 스키마 기본값 None).
+            long_context_threshold_tokens=data.long_context_threshold_tokens,
+            long_context_input_price_per_1k_tokens=data.long_context_input_price_per_1k_tokens,
+            long_context_output_price_per_1k_tokens=data.long_context_output_price_per_1k_tokens,
+            long_context_cache_creation_5m_price_per_1k_tokens=data.long_context_cache_creation_5m_price_per_1k_tokens,
+            long_context_cache_creation_1h_price_per_1k_tokens=data.long_context_cache_creation_1h_price_per_1k_tokens,
+            long_context_cache_read_price_per_1k_tokens=data.long_context_cache_read_price_per_1k_tokens,
             effective_from=datetime.now(timezone.utc),
             created_by=actor.user_id,
         )
@@ -177,6 +198,23 @@ class ModelService:
         if model is None:
             raise NotFoundError("ModelAlias", alias)
 
+        # long-context 단가 승계 (0038): close_current_pricing 이 이전 활성 행을 닫기 **전에**
+        # 그 행을 읽어 둔다. long 필드는 요청에서 생략되면 이전 행의 값을 이어받는다. 이 승계가
+        # 없으면 운영자가 short 단가만 수정해도(또는 자동연동이 short 만 갱신해도) 새 행의 long
+        # 컬럼이 NULL 로 리셋되어 272K 티어링이 조용히 꺼진다 — 삭제된 옛 sync 의 실제 회귀였다.
+        prior = await repo.get_current_pricing(alias)
+
+        def _keep(field_name):
+            # ★ 생략(omit) 과 명시적 null 을 구별한다.
+            #   · 필드가 요청에 **명시**됐으면(model_fields_set 에 있음) — 값이 None 이어도 —
+            #     운영자/sync 의 의도이므로 그대로 쓴다. 이로써 "티어 제거"(long 필드를 null 로
+            #     명시)가 실제로 반영된다.
+            #   · 필드를 **생략**했으면(단가만 고치는 PUT) 이전 활성 행의 값을 승계한다 —
+            #     short 단가만 수정해도 272K 티어링이 꺼지지 않게.
+            if field_name in data.model_fields_set:
+                return getattr(data, field_name)
+            return getattr(prior, field_name) if prior else None
+
         # BR-MOD-02: Close current pricing, preserve history
         await repo.close_current_pricing(alias, data.effective_from)
 
@@ -188,12 +226,21 @@ class ModelService:
             cache_creation_5m_price_per_1k_tokens=data.cache_creation_5m_price_per_1k_tokens,
             cache_creation_1h_price_per_1k_tokens=data.cache_creation_1h_price_per_1k_tokens,
             cache_read_price_per_1k_tokens=data.cache_read_price_per_1k_tokens,
+            # long-context 티어 (0038) — 생략 시 이전 행 승계, 명시 시 그 값(=제거 가능).
+            long_context_threshold_tokens=_keep("long_context_threshold_tokens"),
+            long_context_input_price_per_1k_tokens=_keep("long_context_input_price_per_1k_tokens"),
+            long_context_output_price_per_1k_tokens=_keep("long_context_output_price_per_1k_tokens"),
+            long_context_cache_creation_5m_price_per_1k_tokens=_keep("long_context_cache_creation_5m_price_per_1k_tokens"),
+            long_context_cache_creation_1h_price_per_1k_tokens=_keep("long_context_cache_creation_1h_price_per_1k_tokens"),
+            long_context_cache_read_price_per_1k_tokens=_keep("long_context_cache_read_price_per_1k_tokens"),
             effective_from=data.effective_from,
             created_by=actor.user_id,
         )
         await repo.create_pricing(pricing)
 
-        await self._cache_mgr.invalidate([f"model:{alias}"], session=session)
+        # model:list 도 무효화한다 — list 엔드포인트가 _orm_to_schema 로 pricing 을 함께 실어
+        # 보내므로, 여기서 안 지우면 요율 변경 뒤 MODEL_LIST_CACHE_TTL 동안 옛 단가를 응답한다.
+        await self._cache_mgr.invalidate([f"model:{alias}", "model:list"], session=session)
 
         await audit_logger.log(
             session,
@@ -215,134 +262,162 @@ class ModelService:
 
         return self._to_response(model, pricing)
 
-    async def preview_price_sync(
-        self,
-        session: AsyncSession,
-        *,
-        pricing_sync_service,
-        quantize: Decimal = Decimal("0.000001"),
-    ):
-        """AWS Price List 단가 vs DB 현재가 diff 미리보기(쓰기 없음, deepdive 가격동기화).
+    # ── AWS Price List 자동연동 (fetch ≠ apply) ──────────────────────────────────────
+    # preview 는 DB 를 건드리지 않고 필드별 drift 만 계산한다. sync 는 운영자가 승인한 alias 만
+    # 기존 set_pricing 경로로 반영한다 — 그래야 감사·캐시무효화·long-context 승계가 그대로
+    # 적용되고 "가격 = 과금·차단" 을 사람 게이트 뒤에 둔다. fetch 는 aws_price_list 가 regionCode
+    # 로 필터해 정확한 SKU 만 파싱하므로(옛 PriceSyncService 의 무필터+substring+last-write-wins
+    # 회귀 없음), 여기서는 대조·반영만 한다.
+    #
+    # AWS 가 SKU 로 노출하지 않는 필드 — 대조/반영에서 제외하고 현재 값을 보존한다.
+    #   short cache_creation_1h: AWS GPT 는 30m 캐시만 있다(우리 5m 컬럼에 대응). 게다가 이
+    #     모델들의 1h 컬럼은 청구 경로에서 도달 불가(0032 주석)라 보존이 안전하다.
 
-        BEDROCK provider 모델만 대상. AWS 에서 못 찾으면 matched=False 로 표시(스킵 후보).
-        """
-        from app.schemas.models import (
-            PriceSyncDiff,
-            PriceSyncPreviewResponse,
+    @staticmethod
+    def _dec(v) -> str | None:
+        return None if v is None else str(v)
+
+    def _diff_against_aws(
+        self, model: ModelAlias, pricing: ModelPricing | None, aws: dict[str, AwsModelPrice]
+    ) -> AwsPricePreviewItem:
+        entry = aws.get(normalize_pmid(model.provider_model_id))
+        if entry is None or "input" not in entry.short:
+            return AwsPricePreviewItem(
+                alias=model.alias,
+                provider_model_id=model.provider_model_id,
+                matched=False,
+                note="AWS Price List 에 이 provider_model_id 의 standard 단가가 없다 — 자동연동 대상 아님.",
+            )
+
+        cur = pricing
+        # preview 와 sync 는 동일 술어를 써야 한다 — 안 그러면 preview 가 켠다고 보여준 티어를
+        # sync 가 조용히 건너뛴다.
+        long_thr = LONG_CONTEXT_THRESHOLD_TOKENS if long_tier_enabled(entry) else None
+        pairs: list[tuple[str, object, object]] = [
+            ("input_price_per_1k_tokens", getattr(cur, "input_price_per_1k_tokens", None), entry.short.get("input")),
+            ("output_price_per_1k_tokens", getattr(cur, "output_price_per_1k_tokens", None), entry.short.get("output")),
+            ("cache_creation_5m_price_per_1k_tokens", getattr(cur, "cache_creation_5m_price_per_1k_tokens", None), entry.short.get("cache_write")),
+            ("cache_read_price_per_1k_tokens", getattr(cur, "cache_read_price_per_1k_tokens", None), entry.short.get("cache_read")),
+            ("long_context_threshold_tokens", getattr(cur, "long_context_threshold_tokens", None), long_thr),
+            ("long_context_input_price_per_1k_tokens", getattr(cur, "long_context_input_price_per_1k_tokens", None), entry.long.get("input")),
+            ("long_context_output_price_per_1k_tokens", getattr(cur, "long_context_output_price_per_1k_tokens", None), entry.long.get("output")),
+            ("long_context_cache_creation_5m_price_per_1k_tokens", getattr(cur, "long_context_cache_creation_5m_price_per_1k_tokens", None), entry.long.get("cache_write")),
+            ("long_context_cache_read_price_per_1k_tokens", getattr(cur, "long_context_cache_read_price_per_1k_tokens", None), entry.long.get("cache_read")),
+        ]
+        changes: list[AwsPriceChange] = []
+        for fieldname, current_val, aws_val in pairs:
+            # threshold 는 int, 나머지는 Decimal. 값 동등성으로 비교(스케일 무시).
+            same = current_val is not None and aws_val is not None and (
+                current_val == aws_val
+                if fieldname == "long_context_threshold_tokens"
+                else Decimal(current_val) == Decimal(aws_val)
+            )
+            if not same:
+                changes.append(
+                    AwsPriceChange(field=fieldname, current=self._dec(current_val), aws=self._dec(aws_val))
+                )
+
+        note = ""
+        # CRIS(runtime) alias(global./us./in. 접두사)를 mantle SKU 단가에 맞춘 경우 경고한다.
+        # Price List 가 이 계정에서 mantle SKU 만 노출하므로 매칭은 되지만, runtime track 의
+        # 실제 단가(Geo/Global CRIS)는 mantle 과 다를 수 있어 운영자 확인이 필요하다.
+        is_cris_alias = model.provider_model_id.startswith(("global.", "us.", "in."))
+        if is_cris_alias and entry.endpoint == "mantle":
+            note = f"AWS 소스는 {entry.endpoint} SKU 이고 이 alias 는 CRIS(runtime) track 이다 — 반영 전 확인 권장."
+        return AwsPricePreviewItem(
+            alias=model.alias,
+            provider_model_id=model.provider_model_id,
+            matched=True,
+            aws_region_code=entry.region_code,
+            aws_endpoint=entry.endpoint,
+            changes=changes,
+            note=note,
         )
 
+    async def preview_aws_pricing(
+        self, session: AsyncSession, *, region_code: str = "us-east-1"
+    ) -> AwsPricePreviewResponse:
+        """읽기 전용 drift 조회 — 각 활성 모델의 현재 단가 vs AWS Price List standard 단가."""
         repo = ModelRepository(session)
+        # boto3 는 블로킹 — 이벤트 루프를 막지 않도록 스레드로 뺀다.
+        aws = await asyncio.to_thread(fetch_bedrock_prices, region_code)
         models = await repo.list_all()
-        fetched = await pricing_sync_service.fetch_bedrock_prices()
+        items = []
+        for model in models:
+            pricing = await repo.get_current_pricing(model.alias)
+            items.append(self._diff_against_aws(model, pricing, aws))
+        return AwsPricePreviewResponse(region_code=region_code, items=items)
 
-        diffs: list[PriceSyncDiff] = []
-        matched = 0
-        changed = 0
-        for m in models:
-            if m.provider != Provider.BEDROCK:
-                continue  # OpenModel/vLLM 은 AWS 단가 없음
-            cur = await repo.get_current_pricing(m.alias)
-            cur_resp = self._to_response(m, cur).current_pricing
-            np = fetched.prices.get(m.provider_model_id.lower())
-            if np is None:
-                diffs.append(PriceSyncDiff(
-                    alias=m.alias,
-                    provider_model_id=m.provider_model_id,
-                    matched=False,
-                    note="AWS Price List 에서 단가 미발견(모델ID 매칭 실패 또는 미게시)",
-                    current=cur_resp,
-                ))
-                continue
-            matched += 1
-            p_in = np.input_per_1k.quantize(quantize)
-            p_out = np.output_per_1k.quantize(quantize)
-            p_5m = np.cache_5m_per_1k.quantize(quantize)
-            p_1h = np.cache_1h_per_1k.quantize(quantize)
-            p_rd = np.cache_read_per_1k.quantize(quantize)
-            is_changed = cur is None or any([
-                cur.input_price_per_1k_tokens != p_in,
-                cur.output_price_per_1k_tokens != p_out,
-                cur.cache_creation_5m_price_per_1k_tokens != p_5m,
-                cur.cache_creation_1h_price_per_1k_tokens != p_1h,
-                cur.cache_read_price_per_1k_tokens != p_rd,
-            ])
-            if is_changed:
-                changed += 1
-            note = "캐시 단가 일부 파생(AWS 미게시 → input 기반 추정)" if np.cache_derived else None
-            diffs.append(PriceSyncDiff(
-                alias=m.alias,
-                provider_model_id=m.provider_model_id,
-                matched=True,
-                note=note,
-                current=cur_resp,
-                proposed_input_per_1k=p_in,
-                proposed_output_per_1k=p_out,
-                proposed_cache_5m_per_1k=p_5m,
-                proposed_cache_1h_per_1k=p_1h,
-                proposed_cache_read_per_1k=p_rd,
-                changed=is_changed,
-            ))
-
-        return PriceSyncPreviewResponse(
-            region=getattr(pricing_sync_service, "region", "us-east-1"),
-            diffs=diffs,
-            matched_count=matched,
-            changed_count=changed,
-        )
-
-    async def apply_price_sync(
+    async def sync_aws_pricing(
         self,
         session: AsyncSession,
         *,
-        pricing_sync_service,
         aliases: list[str],
+        region_code: str,
         actor: CurrentUser,
         ip_address: str = "0.0.0.0",
         request_id: str = "",
-        quantize: Decimal = Decimal("0.000001"),
-    ):
-        """승인된 alias 목록만 AWS 단가로 적용 — 기존 set_pricing 재사용(시계열·감사·캐시).
-
-        자동 전체적용 금지: 호출자가 preview 후 명시 선택한 aliases 만.
+    ) -> AwsPriceSyncResponse:
+        """운영자가 승인한 alias 만 AWS 단가로 반영. 각 alias 는 기존 set_pricing 경로로 나가므로
+        감사·캐시무효화·long 승계가 그대로 적용된다. AWS 가 안 주는 항(short cache_1h)은 현재
+        행에서 보존해 full-replace clobber 를 막는다.
         """
-        from app.schemas.models import PriceSyncApplyResponse, PricingRequest
-
         repo = ModelRepository(session)
-        fetched = await pricing_sync_service.fetch_bedrock_prices()
-        now = datetime.now(timezone.utc)
-
-        applied: list[str] = []
+        aws = await asyncio.to_thread(fetch_bedrock_prices, region_code)
+        synced: list[str] = []
         skipped: list[str] = []
-        errors: list[str] = list(fetched.errors)
 
         for alias in aliases:
             model = await repo.get_by_alias(alias)
             if model is None:
-                errors.append(f"{alias}: 모델 없음")
-                continue
-            if model.provider != Provider.BEDROCK:
                 skipped.append(alias)
                 continue
-            np = fetched.prices.get(model.provider_model_id.lower())
-            if np is None:
-                skipped.append(alias)  # AWS 단가 미발견 → 적용 안 함
+            entry = aws.get(normalize_pmid(model.provider_model_id))
+            if entry is None or "input" not in entry.short or "output" not in entry.short:
+                skipped.append(alias)
                 continue
-            req = PricingRequest(
-                input_price_per_1k_tokens=np.input_per_1k.quantize(quantize),
-                output_price_per_1k_tokens=np.output_per_1k.quantize(quantize),
-                cache_creation_5m_price_per_1k_tokens=np.cache_5m_per_1k.quantize(quantize),
-                cache_creation_1h_price_per_1k_tokens=np.cache_1h_per_1k.quantize(quantize),
-                cache_read_price_per_1k_tokens=np.cache_read_per_1k.quantize(quantize),
-                effective_from=now,
-            )
-            # 기존 set_pricing 재사용 → close_current_pricing + 새 행 + 캐시무효화 + SET_PRICING 감사
-            await self.set_pricing(
-                session, alias=alias, data=req, actor=actor,
-                ip_address=ip_address, request_id=request_id,
-            )
-            applied.append(alias)
 
-        return PriceSyncApplyResponse(applied=applied, skipped=skipped, errors=errors)
+            current = await repo.get_current_pricing(alias)
+            # 보존 항: AWS 에 SKU 가 없는 short 1h 캐시는 현재 값을 이어 쓴다(없으면 안전한 0).
+            keep_1h = (
+                current.cache_creation_1h_price_per_1k_tokens
+                if current is not None
+                else Decimal("0")
+            )
+            # preview(_diff_against_aws)와 **같은 술어**. 부분 AWS 데이터로 threshold 만 켜면
+            # 반쪽-설정 검증이 422 를 내고, 설령 통과해도 그 축이 short 로 조용히 청구된다.
+            has_long = long_tier_enabled(entry)
+            try:
+                data = PricingRequest(
+                    input_price_per_1k_tokens=entry.short["input"],
+                    output_price_per_1k_tokens=entry.short["output"],
+                    cache_creation_5m_price_per_1k_tokens=entry.short.get("cache_write", Decimal("0")),
+                    cache_creation_1h_price_per_1k_tokens=keep_1h,
+                    cache_read_price_per_1k_tokens=entry.short.get("cache_read", Decimal("0")),
+                    long_context_threshold_tokens=LONG_CONTEXT_THRESHOLD_TOKENS if has_long else None,
+                    long_context_input_price_per_1k_tokens=entry.long.get("input") if has_long else None,
+                    long_context_output_price_per_1k_tokens=entry.long.get("output") if has_long else None,
+                    long_context_cache_creation_5m_price_per_1k_tokens=entry.long.get("cache_write") if has_long else None,
+                    # AWS 는 캐시 쓰기 단가를 하나(30m)만 노출한다 → long 5m·1h 에 같은 값을 넣는다
+                    # (0032/0038 seed 관례와 동일). 별도 AWS 소스가 없으므로 clobber 가 아니라 정본.
+                    long_context_cache_creation_1h_price_per_1k_tokens=entry.long.get("cache_write") if has_long else None,
+                    long_context_cache_read_price_per_1k_tokens=entry.long.get("cache_read") if has_long else None,
+                    effective_from=datetime.now(timezone.utc),
+                )
+                await self.set_pricing(
+                    session, alias=alias, data=data, actor=actor,
+                    ip_address=ip_address, request_id=request_id,
+                )
+            except PydanticValidationError:
+                # AWS 가 long input·output 은 주지만 캐시 long 을 안 주는 부분 데이터에서, 그 모델의
+                # short 캐시 단가가 0 보다 크면 반쪽-설정 검증이 막는다. 한 alias 때문에 전체 sync
+                # POST 를 500 으로 죽이지 않고 그 alias 만 건너뛴다(관측 가능하게 skipped).
+                logger.warning("aws_sync_alias_rejected", alias=alias)
+                skipped.append(alias)
+                continue
+            synced.append(alias)
+
+        return AwsPriceSyncResponse(synced=synced, skipped=skipped)
 
     async def patch_status(
         self,
@@ -389,6 +464,12 @@ class ModelService:
                 cache_creation_5m_price_per_1k_tokens=pricing.cache_creation_5m_price_per_1k_tokens,
                 cache_creation_1h_price_per_1k_tokens=pricing.cache_creation_1h_price_per_1k_tokens,
                 cache_read_price_per_1k_tokens=pricing.cache_read_price_per_1k_tokens,
+                long_context_threshold_tokens=pricing.long_context_threshold_tokens,
+                long_context_input_price_per_1k_tokens=pricing.long_context_input_price_per_1k_tokens,
+                long_context_output_price_per_1k_tokens=pricing.long_context_output_price_per_1k_tokens,
+                long_context_cache_creation_5m_price_per_1k_tokens=pricing.long_context_cache_creation_5m_price_per_1k_tokens,
+                long_context_cache_creation_1h_price_per_1k_tokens=pricing.long_context_cache_creation_1h_price_per_1k_tokens,
+                long_context_cache_read_price_per_1k_tokens=pricing.long_context_cache_read_price_per_1k_tokens,
                 effective_from=pricing.effective_from,
                 effective_until=pricing.effective_until,
             )

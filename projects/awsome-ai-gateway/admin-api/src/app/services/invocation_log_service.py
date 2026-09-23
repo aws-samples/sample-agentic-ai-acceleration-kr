@@ -24,7 +24,7 @@ Mantle plane 행의 `bedrock_request_id IS NULL` 은 결함이 아니라 문서�
 
 **설계 원칙**
 
-- boto3 `logs` 클라이언트를 **주입** 받는다(PricingSyncService 와 동일) — AWS 없이 단위테스트 가능.
+- boto3 `logs` 클라이언트를 **주입** 받는다 — AWS 없이 단위테스트 가능.
 - 판정 로직(`classify_null_request_id`, `reconcile`)은 **순수 함수** 로 두고 AWS I/O 와 분리한다.
 - **조용한 truncation 금지.** Logs Insights 는 한 쿼리 상한이 10 000 건이다. 잘렸으면
   `truncated=True` 와 실제 매칭 건수를 보고한다(부분결과를 전수처럼 보이게 하지 않는다).
