@@ -28,6 +28,21 @@ DEFAULT_THROTTLE_RPM_PCT = 50
 DEFAULT_THRESHOLDS = [80, 90, 100]
 
 
+def _row_thresholds(config) -> list[int]:
+    """``BudgetConfig`` 행의 알림 임계값 — DB 가 진실의 원천이다(migration 0037).
+
+    ⚠️ 빈 배열은 **유효한 설정**이고 "이 예산에는 임계값 알림을 보내지 않는다" 를 뜻한다.
+       그래서 ``or DEFAULT_THRESHOLDS`` 로 채우지 않는다 — 그러면 운영자가 의도적으로 비운
+       설정을 재수화가 되살린다.
+
+    컬럼이 없는 구 스키마(0037 미적용)에서는 속성 자체가 없으므로 그때만 기본값을 쓴다.
+    """
+    raw = getattr(config, "alert_thresholds", None)
+    if raw is None:
+        return list(DEFAULT_THRESHOLDS)
+    return sorted({int(v) for v in raw})
+
+
 def _policy_to_lua_value(policy: BudgetPolicy | str) -> str:
     """Python BudgetPolicy(lowercase value) → Lua/Redis 내부 표현(lowercase)."""
     return policy.value if isinstance(policy, BudgetPolicy) else str(policy).lower()
@@ -329,8 +344,8 @@ class BudgetService:
         """DB SELECT 기반 예산 확인 (Redis fallback 경로).
 
         DB 컬럼: scope / scope_id / max_budget_usd (KI-09 수정 반영).
-        soft_limit_pct, throttle_rpm_pct, thresholds는 현재 DB 스키마에 없으므로
-        Python 기본값 사용.
+        soft_limit_pct, throttle_rpm_pct 는 현재 DB 스키마에 없으므로 Python 기본값 사용.
+        thresholds 는 migration 0037 이후 DB 컬럼(``alert_thresholds``)이 원천이다.
         client 가 설정된 경우 앱별 BudgetConfig/BudgetUsage 도 확인한다.
         앱 예산 미설정(config=None) → pass-through.
         """
@@ -439,7 +454,12 @@ class BudgetService:
             soft_limit_pct=DEFAULT_SOFT_LIMIT_PCT,
             throttle_rpm_pct=DEFAULT_THROTTLE_RPM_PCT,
             threshold_pct=threshold_pct,
-            thresholds=list(DEFAULT_THRESHOLDS),
+            # Redis degrade 중에도 임계값은 DB 행의 값이어야 한다 — 여기서 기본값을 쓰면
+            # degrade 동안만 알림 기준이 달라진다.
+            # ⚠️ 이 반환은 **팀** 예산을 서술한다(위 max_budget/policy 가 team_config 에서
+            #    온다). 처음에 `config` 라고 썼는데 이 스코프에는 그 이름이 없어서 Redis
+            #    degrade 경로에서만 NameError 가 되는 잠재 결함이었다 — import 는 통과한다.
+            thresholds=_row_thresholds(team_config),
             throttle_active=throttle_active,
             soft_warning=soft_warning,
         )
@@ -453,8 +473,10 @@ class BudgetService:
         """예산 설정이 Redis에 없으면 DB에서 조회하여 캐시.
 
         Lua 스크립트는 lowercase policy 값('hard_block' 등)을 기대하므로
-        DB UPPERCASE enum을 변환해서 저장. 정책 파라미터(soft/throttle/thresholds)는
-        Python 기본값 사용 (DB 스키마에 없음).
+        DB UPPERCASE enum을 변환해서 저장. soft/throttle 파라미터는 DB 스키마에 없어
+        Python 기본값을 쓰지만, thresholds 는 migration 0037 이후 DB 컬럼
+        (``alert_thresholds``)이 원천이다 — 예전에 여기서 기본값을 쓴 것이 운영자 설정을
+        캐시 TTL(300초)마다 되돌린 원인이었다.
         """
         config_key = f"budget:config:user:{{{user_id}}}"
         if redis is None:
@@ -489,7 +511,11 @@ class BudgetService:
                 "policy": _policy_to_lua_value(_db_policy_to_domain(config.policy)),
                 "soft_limit_pct": DEFAULT_SOFT_LIMIT_PCT,
                 "throttle_rpm_pct": DEFAULT_THROTTLE_RPM_PCT,
-                "thresholds": list(DEFAULT_THRESHOLDS),
+                # ⚠️ 여기가 운영자 설정이 되돌아간 지점이다. 이 재수화는 Redis 설정 키가
+                #    만료(ex=300)될 때마다 돌고, 예전에는 DB 에 저장된 값이 없어서
+                #    DEFAULT_THRESHOLDS 를 써 넣었다 — admin-api 가 방금 써 둔 운영자
+                #    임계값을 5분마다 조용히 덮었다. migration 0037 이후 DB 가 원천이다.
+                "thresholds": _row_thresholds(config),
                 "app_clients": app_clients,
             }
             # TTL 300s to match team/client hydrate + admin warmers. Without it a
@@ -525,7 +551,7 @@ class BudgetService:
             config_data = {
                 "limit_usd": str(config.max_budget_usd),
                 "policy": _policy_to_lua_value(_db_policy_to_domain(config.policy)),
-                "thresholds": list(DEFAULT_THRESHOLDS),
+                "thresholds": _row_thresholds(config),
             }
             config_key = f"budget:config:team:{{{team_id}}}"
             # TTL은 admin-api BUDGET_CONFIG_CACHE_TTL 과 일치 (5분)
@@ -570,7 +596,7 @@ class BudgetService:
             config_data = {
                 "limit_usd": str(config.max_budget_usd),
                 "policy": _policy_to_lua_value(_db_policy_to_domain(config.policy)),
-                "thresholds": list(DEFAULT_THRESHOLDS),
+                "thresholds": _row_thresholds(config),
             }
             config_key = f"budget:config:user:{{{user_id}}}:{client}"
             await redis.set(config_key, json.dumps(config_data), ex=300)

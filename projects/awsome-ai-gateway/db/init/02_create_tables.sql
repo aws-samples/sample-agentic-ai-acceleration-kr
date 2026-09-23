@@ -633,3 +633,25 @@ CREATE TABLE IF NOT EXISTS public.system_settings (
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_by  UUID        REFERENCES auth.users(id)
 );
+
+-- migration 0037: 운영자가 설정한 예산 알림 임계값. UI/API/Lua 는 이미 이 값을 다루는데
+-- 저장할 컬럼이 없어서, Redis 설정 키(ex=300)가 만료되면 gateway-proxy 의 재수화가
+-- 기본값으로 되돌려 놓았다 — 운영자 설정이 5분만 살아 있었다.
+--
+-- ⚠️ NOT NULL DEFAULT '{80,90,100}' 은 기존 행에 지금 코드가 쓰는 값과 같은 값을 채운다.
+--    NULL 을 허용하면 읽는 쪽마다 "NULL=기본값" 을 구현해야 하고, 한 곳이 빠지면 임계값이
+--    빈 목록으로 읽혀 알림이 조용히 사라진다.
+-- 1..100 은 UI/API 를 거치지 않는 경로(직접 SQL, 시드)도 막아야 한다. 넣힌 0 은
+-- "매 첫 요청마다 알림"(old_pct=0 이고 new_pct>=0), 150 은 "절대 발동 안 함" 이 되고
+-- 둘 다 조용하다.
+-- 1..100 을 도메인으로 강제한다. CHECK 절에는 서브쿼리를 쓸 수 없어서
+-- ``<@ ARRAY(SELECT generate_series(1,100))`` 는 문법 오류이고(실측: ON_ERROR_STOP 로 파일
+-- 나머지가 버려진다), PostgreSQL 은 **도메인 제약을 배열 원소마다** 적용한다(실측: '{150}'
+-- 과 '{0,80}' 거부, '{}' 와 기본값 허용).
+DO $$ BEGIN
+    CREATE DOMAIN budget.alert_pct AS INTEGER CHECK (VALUE BETWEEN 1 AND 100);
+EXCEPTION WHEN duplicate_object THEN null; END $$;
+ALTER TABLE budget.budget_configs
+    ADD COLUMN IF NOT EXISTS alert_thresholds budget.alert_pct[]
+    NOT NULL DEFAULT '{80,90,100}';
+

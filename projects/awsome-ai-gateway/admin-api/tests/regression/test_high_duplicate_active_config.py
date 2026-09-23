@@ -304,6 +304,9 @@ _BASE_DDL = [
     "CREATE TYPE budget.budget_scope  AS ENUM ('TEAM', 'USER')",
     "CREATE TYPE budget.period_type   AS ENUM ('MONTHLY')",
     "CREATE TYPE budget.budget_policy AS ENUM ('HARD_BLOCK', 'SOFT_WARNING', 'THROTTLE')",
+    # 0037 이 도메인으로 alert_thresholds 원소를 1~100 으로 제약한다. 이 스크래치 DDL 이
+    # 도메인·컬럼을 빠뜨리면 BudgetConfig INSERT 가 실 PG 에서 UndefinedColumn 으로 깨진다.
+    "CREATE DOMAIN budget.alert_pct AS INTEGER CHECK (VALUE BETWEEN 1 AND 100)",
     "CREATE TYPE model.rate_limit_scope AS ENUM ('USER', 'TEAM', 'GLOBAL')",
     """
     CREATE TABLE budget.budget_configs (
@@ -318,6 +321,7 @@ _BASE_DDL = [
         effective_from  DATE                 NOT NULL,
         is_active       BOOLEAN              NOT NULL DEFAULT true,
         created_at      TIMESTAMPTZ          NOT NULL DEFAULT now(),
+        alert_thresholds budget.alert_pct[]  NOT NULL DEFAULT '{80,90,100}',
         CONSTRAINT ck_budget_configs_client
             CHECK (client IS NULL OR client IN ('claude-code','cowork','codex'))
     )
