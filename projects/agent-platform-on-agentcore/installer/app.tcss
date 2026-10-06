@@ -1,0 +1,49 @@
+Screen {
+    layers: base overlay;
+}
+
+#steps {
+    height: 1fr;
+    border: round $primary;
+}
+
+#detail {
+    height: auto;
+    max-height: 12;
+    border: round $secondary;
+    padding: 0 1;
+}
+
+.state-done   { color: $success; }
+.state-pending { color: $warning; }
+.state-unknown { color: $error; }
+.state-running { color: $accent; }
+
+#warning {
+    background: $warning 20%;
+    padding: 0 1;
+}
+
+#confirm-box {
+    width: 70;
+    height: auto;
+    border: thick $error;
+    background: $surface;
+    padding: 1 2;
+}
+
+#ops-output {
+    height: 1fr;
+}
+
+/* Settings: keep the save status and button on screen. Without a bounded
+   height the tab panes grow to their content and push both below the fold. */
+Settings TabbedContent {
+    height: 1fr;
+}
+
+#save-status {
+    height: auto;
+    max-height: 4;
+    padding: 0 1;
+}

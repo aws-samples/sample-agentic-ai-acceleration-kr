@@ -1,0 +1,105 @@
+[
+  {
+    "name": "current_time",
+    "description": "Get the current date and time, optionally in a specific IANA timezone.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "timezone": {
+          "type": "string",
+          "description": "IANA timezone name, e.g. Asia/Seoul or UTC. Defaults to UTC."
+        }
+      }
+    }
+  },
+  {
+    "name": "calculate",
+    "description": "Perform an arithmetic operation on two numbers.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "a": { "type": "number", "description": "Left operand." },
+        "b": { "type": "number", "description": "Right operand." },
+        "operation": {
+          "type": "string",
+          "description": "One of: add, subtract, multiply, divide."
+        }
+      },
+      "required": ["a", "b", "operation"]
+    }
+  },
+  {
+    "name": "fetch_url",
+    "description": "Fetch a web page and return its visible text, with HTML markup stripped. Long pages are truncated.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "Absolute http(s) URL of the page to read."
+        }
+      },
+      "required": ["url"]
+    }
+  },
+  {
+    "name": "create_artifact",
+    "description": "Create a standalone artifact shown in a panel next to the chat. Call this — do not write the content in your reply — whenever you produce a substantial self-contained document: a full source file, code longer than ~15 lines, a report or spec, a diagram, an HTML page, a dataset. If the user asked for an 'artifact', calling this tool is mandatory.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "artifact_id": {
+          "type": "string",
+          "description": "A short kebab-case id you invent for this artifact, e.g. 'q3-revenue-report' or 'fib-py'. Reuse it with update_artifact."
+        },
+        "title": {
+          "type": "string",
+          "description": "Short human-readable title, e.g. 'Q3 Revenue Report'."
+        },
+        "kind": {
+          "type": "string",
+          "description": "One of markdown, code, html, svg, mermaid, csv, json, text. Use 'mermaid' for any diagram — the panel renders it as a picture."
+        },
+        "content": {
+          "type": "string",
+          "description": "The full artifact body. Do not truncate or summarize it."
+        },
+        "language": {
+          "type": "string",
+          "description": "For kind='code', the programming language, e.g. 'python'."
+        }
+      },
+      "required": ["artifact_id", "title", "kind", "content"]
+    }
+  },
+  {
+    "name": "update_artifact",
+    "description": "Save a new version of an existing artifact. Use this when the user asks for changes to an artifact you already created, so the panel keeps a version history instead of showing a duplicate.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "artifact_id": {
+          "type": "string",
+          "description": "The id you passed to create_artifact."
+        },
+        "title": {
+          "type": "string",
+          "description": "Title for this version (may be unchanged)."
+        },
+        "kind": {
+          "type": "string",
+          "description": "One of markdown, code, html, svg, mermaid, csv, json, text. Use 'mermaid' for any diagram — the panel renders it as a picture."
+        },
+        "content": {
+          "type": "string",
+          "description": "The complete revised body. Always send the whole document, never a diff or a fragment."
+        },
+        "language": {
+          "type": "string",
+          "description": "For kind='code', the programming language, e.g. 'python'."
+        }
+      },
+      "required": ["artifact_id", "title", "kind", "content"]
+    }
+  }
+]

@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+
+# Run logs: terraform output is captured verbatim, and it carries tfvars values
+# (passwords among them). Never committed.
+.logs/
+
+# Dependencies are isolated here rather than in system Python.
+.venv/
