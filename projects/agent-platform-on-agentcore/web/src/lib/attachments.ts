@@ -111,6 +111,37 @@ export function attachmentUrl(threadId: string, attachmentId: string): string {
   )}/attachments/${encodeURIComponent(attachmentId)}`;
 }
 
+/**
+ * The attachment's bytes as an object URL an `<img>` or a download link can use,
+ * or null when it cannot be read.
+ *
+ * Not `attachmentUrl` straight into `<img src>` / `<a href>`, which is what the
+ * message strip did first and which only appears to work: the route is gated on
+ * `current_user`, and an `<img>` or a plain link sends no Authorization header,
+ * so with AUTH_ENFORCED on (the default) every thumbnail 401s and every link
+ * opens an error page — found in review, and the same flaw browserScreenshots.ts
+ * had already run into. The bytes are fetched with the session's token instead
+ * and handed to the element as an object URL.
+ *
+ * Null rather than throwing: a missing attachment, a server without the bucket
+ * configured, and a dropped connection all leave the strip showing the filename
+ * without a preview, which is the right answer for each.
+ *
+ * The caller owns the returned URL and must `URL.revokeObjectURL` it.
+ */
+export async function fetchAttachment(
+  threadId: string,
+  attachmentId: string
+): Promise<string | null> {
+  try {
+    const response = await authedFetch(attachmentUrl(threadId, attachmentId));
+    if (!response.ok) return null;
+    return URL.createObjectURL(await response.blob());
+  } catch {
+    return null;
+  }
+}
+
 export function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;

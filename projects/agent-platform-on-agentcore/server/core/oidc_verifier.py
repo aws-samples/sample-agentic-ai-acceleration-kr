@@ -45,9 +45,17 @@ class OIDCVerifier:
     ) -> None:
         if not issuer_url:
             raise ValueError("issuer_url required")
-        # `iss` is always compared against issuer_url exactly; only the JWKS
-        # fetch can be redirected (private discovery mirrors, tests).
+        # The slash-stripped form is the cache key and what the discovery
+        # document is checked against. It must NOT be what `iss` is compared to:
+        # PyJWT compares `iss` for exact equality, and Auth0 and Entra v1
+        # (`https://sts.windows.net/<tid>/`) end theirs with a slash, so the
+        # stripped form rejected every one of their tokens as "Invalid issuer"
+        # with a valid signature (found in review). The claim is accepted with
+        # or without the trailing slash — the same authority either way — and
+        # nothing else. Only the JWKS fetch can be redirected (private discovery
+        # mirrors, tests).
         self._issuer_url = issuer_url.rstrip("/")
+        self._accepted_issuers = (self._issuer_url, self._issuer_url + "/")
         self._discovery_base = (discovery_url_override or issuer_url).rstrip("/")
         # An empty audience skips the `aud` check. Entra id_tokens always carry
         # the client id, so deployments fill it.
@@ -121,7 +129,7 @@ class OIDCVerifier:
                 token,
                 signing_key.key,
                 algorithms=list(_ALLOWED_ALGS),
-                issuer=self._issuer_url,
+                issuer=self._accepted_issuers,
                 audience=self._audience,
                 options={
                     "verify_signature": True,

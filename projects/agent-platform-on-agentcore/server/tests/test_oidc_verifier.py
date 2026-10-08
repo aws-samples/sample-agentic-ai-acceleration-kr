@@ -83,6 +83,36 @@ def test_wrong_issuer_is_rejected(signing, monkeypatch):
         v.verify(_token(pk, iss="https://evil.example/"))
 
 
+def test_issuer_with_trailing_slash_is_accepted(signing, monkeypatch):
+    """Auth0 and Entra v1 end `iss` with a slash. PyJWT compares `iss` exactly,
+    so the slash-stripped issuer the verifier keeps for cache and discovery must
+    not be the one it hands to jwt.decode — that rejected every such token."""
+    private_key, jwk_client = signing
+    slashed = "https://tenant.auth0.example/"
+    for configured in (slashed, slashed.rstrip("/")):
+        v = ov.OIDCVerifier(issuer_url=configured, audience=AUDIENCE)
+        monkeypatch.setattr(v, "_jwks_uri", "https://example.invalid/jwks")
+        monkeypatch.setattr(v, "_jwks_client", jwk_client)
+        claims = v.verify(_token(private_key, iss=slashed))
+        assert claims["iss"] == slashed, configured
+
+
+def test_issuer_without_trailing_slash_still_accepted_when_configured_with_one(signing, monkeypatch):
+    private_key, jwk_client = signing
+    v = ov.OIDCVerifier(issuer_url=ISSUER + "/", audience=AUDIENCE)
+    monkeypatch.setattr(v, "_jwks_uri", "https://example.invalid/jwks")
+    monkeypatch.setattr(v, "_jwks_client", jwk_client)
+    assert v.verify(_token(private_key, iss=ISSUER))["sub"] == "user-1"
+
+
+def test_issuer_differing_beyond_the_slash_is_rejected(signing, monkeypatch):
+    """Tolerance is the trailing slash only, not a prefix or a sibling path."""
+    v, pk = _make(signing, monkeypatch)
+    for iss in (ISSUER + "/extra", ISSUER[:-1], ISSUER.replace("v2.0", "v1.0")):
+        with pytest.raises(ov.OIDCVerifyError):
+            v.verify(_token(pk, iss=iss))
+
+
 def test_wrong_audience_is_rejected(signing, monkeypatch):
     v, pk = _make(signing, monkeypatch)
     with pytest.raises(ov.OIDCVerifyError):

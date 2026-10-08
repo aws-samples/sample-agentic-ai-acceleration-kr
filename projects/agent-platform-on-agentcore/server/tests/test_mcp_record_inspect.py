@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import core.auth as auth  # noqa: E402
+import core.config as config  # noqa: E402
 import routes.mcp as mcp_routes  # noqa: E402
 
 ADMIN = auth.AuthUser(sub="u-admin", username="alice", groups=["admin"])
@@ -321,8 +322,14 @@ def test_call_failure_is_a_result_not_a_page_error(client):
     assert "tool blew up" in body["error"]
 
 
-def test_routes_require_admin():
-    """의존성 오버라이드 없이는 통과해선 안 된다."""
+def test_routes_require_admin(monkeypatch):
+    """의존성 오버라이드 없이는 통과해선 안 된다.
+
+    IdP 를 하나 설정해 두고 검사한다. 없으면 current_user 가 토큰을 보기 전에
+    503 으로 fail-closed 하므로, 이 단언은 .env 에 풀 ID 가 있는 머신에서만 성립했다.
+    """
+    monkeypatch.setattr(config, "AUTH_ENFORCED", True, raising=False)
+    monkeypatch.setattr(config, "COGNITO_USER_POOL_ID", "ap-northeast-1_TestPool", raising=False)
     app = FastAPI()
     app.include_router(mcp_routes.router)
 

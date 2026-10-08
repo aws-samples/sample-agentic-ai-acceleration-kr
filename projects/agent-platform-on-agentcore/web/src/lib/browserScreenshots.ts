@@ -10,10 +10,8 @@
  * against the deployed stack — locally it appears to work only because
  * AUTH_ENFORCED is false there, which is exactly the kind of difference a local
  * check hides. So the image is fetched through `authedFetch` and handed to the
- * `<img>` as an object URL instead.
- *
- * (The attachment thumbnails in ChatMessage.tsx have the same flaw for the same
- * reason and are not fixed here.)
+ * `<img>` as an object URL instead. The attachment thumbnails in
+ * MessageAttachment.tsx go through fetchAttachment for the same reason.
  */
 
 import { authedFetch } from "@/lib/http";

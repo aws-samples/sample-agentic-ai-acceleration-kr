@@ -1,13 +1,13 @@
 "use client";
 
 import React, { useMemo, useState, useCallback } from "react";
-import { FileText } from "lucide-react";
 import { useQueryState } from "nuqs";
 import { SubAgentIndicator } from "@/app/components/SubAgentIndicator";
 import { ToolCallBox } from "@/app/components/ToolCallBox";
 import { MarkdownContent } from "@/app/components/MarkdownContent";
 import { McpAppView } from "@/app/components/McpAppView";
 import { ArtifactCard } from "@/app/components/ArtifactCard";
+import { MessageAttachment } from "@/app/components/MessageAttachment";
 import { ChartRenderer } from "@/app/components/ChartRenderer";
 import { VerificationNote } from "@/app/components/VerificationNote";
 import type { ArtifactEvent } from "@/lib/artifacts";
@@ -25,7 +25,7 @@ import {
   getInterruptTitle,
 } from "@/app/utils/utils";
 import { cn } from "@/lib/utils";
-import { attachmentUrl, isImage, type AttachmentRef } from "@/lib/attachments";
+import type { AttachmentRef } from "@/lib/attachments";
 
 interface ChatMessageProps {
   message: Message;
@@ -171,35 +171,13 @@ export const ChatMessage = React.memo<ChatMessageProps>(
                 isUser && "justify-end"
               )}
             >
-              {attachmentRefs.map((ref) => {
-                const href = attachmentUrl(threadIdParam, ref.attachment_id);
-                return isImage(ref.filename) ? (
-                  <a
-                    key={ref.attachment_id}
-                    href={href}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="block"
-                  >
-                    <img
-                      src={href}
-                      alt={ref.filename}
-                      className="max-h-40 rounded-lg border border-border object-cover"
-                    />
-                  </a>
-                ) : (
-                  <a
-                    key={ref.attachment_id}
-                    href={href}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="flex items-center gap-2 rounded-md border border-border bg-card px-2 py-1.5 text-xs hover:bg-accent"
-                  >
-                    <FileText className="h-4 w-4 flex-shrink-0" />
-                    <span className="max-w-[200px] truncate">{ref.filename}</span>
-                  </a>
-                );
-              })}
+              {attachmentRefs.map((ref) => (
+                <MessageAttachment
+                  key={ref.attachment_id}
+                  threadId={threadIdParam}
+                  attachment={ref}
+                />
+              ))}
             </div>
           )}
           {hasReasoning && isAIMessage && (

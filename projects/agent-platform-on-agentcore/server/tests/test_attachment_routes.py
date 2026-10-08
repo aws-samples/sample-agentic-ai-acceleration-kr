@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import core.auth as auth  # noqa: E402
+import core.config as config  # noqa: E402
 import routes.threads as thread_routes  # noqa: E402
 from models.attachment import Attachment, UnsupportedAttachment  # noqa: E402
 from models.thread import Thread  # noqa: E402
@@ -143,8 +144,15 @@ def test_a_missing_attachment_is_a_404():
     assert response.status_code == 404
 
 
-def test_upload_requires_authentication():
-    """No dependency override: the route must reject an anonymous caller."""
+def test_upload_requires_authentication(monkeypatch):
+    """No dependency override: the route must reject an anonymous caller.
+
+    An IdP is configured for the check: without one `current_user` fails
+    closed with 503 before it ever looks for a token, so the assertion only
+    held on machines whose .env happened to name a pool.
+    """
+    monkeypatch.setattr(config, "AUTH_ENFORCED", True, raising=False)
+    monkeypatch.setattr(config, "COGNITO_USER_POOL_ID", "ap-northeast-1_TestPool", raising=False)
     app = FastAPI()
     app.include_router(thread_routes.router)
     thread_routes.attachment_service = StubService()
