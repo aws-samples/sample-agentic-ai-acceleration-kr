@@ -1,0 +1,3 @@
+# Lambda zip built by archive_file at plan time.
+.build/
+__pycache__/

@@ -1,0 +1,293 @@
+[
+  {
+    "name": "execute_code",
+    "description": "Run Python, JavaScript or TypeScript in a sandboxed AgentCore Code Interpreter session. State persists across calls, so variables and imports from earlier calls stay available. Each user gets their own isolated sandbox automatically. Returns stdout, stderr and the exit code.",
+    "inputSchema": {
+      "type": "object",
+      "description": "Code execution request.",
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "Source code to run."
+        },
+        "language": {
+          "type": "string",
+          "description": "One of: python, javascript, typescript. Defaults to python."
+        },
+        "clear_context": {
+          "type": "boolean",
+          "description": "Set true to discard variables from earlier calls before running."
+        }
+      },
+      "required": [
+        "code"
+      ]
+    }
+  },
+  {
+    "name": "execute_command",
+    "description": "Run a shell command inside the sandboxed Code Interpreter session, for example 'pip install pandas' or 'ls -la'. Shares its filesystem with execute_code in the same session.",
+    "inputSchema": {
+      "type": "object",
+      "description": "Shell command request.",
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "The shell command to run."
+        }
+      },
+      "required": [
+        "command"
+      ]
+    }
+  },
+  {
+    "name": "write_files",
+    "description": "Create or overwrite text files in the Code Interpreter sandbox filesystem, so later execute_code or execute_command calls in the same session can read them.",
+    "inputSchema": {
+      "type": "object",
+      "description": "Files to write.",
+      "properties": {
+        "files": {
+          "type": "array",
+          "description": "The files to write.",
+          "items": {
+            "type": "object",
+            "description": "A single file.",
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "Destination path, e.g. data.csv"
+              },
+              "text": {
+                "type": "string",
+                "description": "File contents."
+              }
+            },
+            "required": [
+              "path"
+            ]
+          }
+        }
+      },
+      "required": [
+        "files"
+      ]
+    }
+  },
+  {
+    "name": "read_files",
+    "description": "Read files back from the Code Interpreter sandbox filesystem, for example an output file a script just produced.",
+    "inputSchema": {
+      "type": "object",
+      "description": "Files to read.",
+      "properties": {
+        "paths": {
+          "type": "array",
+          "description": "Paths to read.",
+          "items": {
+            "type": "string",
+            "description": "A file path."
+          }
+        }
+      },
+      "required": [
+        "paths"
+      ]
+    }
+  },
+  {
+    "name": "list_files",
+    "description": "List the contents of a directory in the Code Interpreter sandbox filesystem.",
+    "inputSchema": {
+      "type": "object",
+      "description": "Directory listing request.",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Directory to list. Defaults to the working directory."
+        }
+      }
+    }
+  },
+  {
+    "name": "remove_files",
+    "description": "Delete files from the Code Interpreter sandbox filesystem.",
+    "inputSchema": {
+      "type": "object",
+      "description": "Files to delete.",
+      "properties": {
+        "paths": {
+          "type": "array",
+          "description": "Paths to delete.",
+          "items": {
+            "type": "string",
+            "description": "A file path."
+          }
+        }
+      },
+      "required": [
+        "paths"
+      ]
+    }
+  },
+  {
+    "name": "stop_code_session",
+    "description": "Shut down your Code Interpreter session and discard its state. Sessions also expire on their own, so this is only needed to free one early or to start from a clean slate.",
+    "inputSchema": {
+      "type": "object",
+      "description": "No arguments; your own session is used.",
+      "properties": {}
+    }
+  },
+  {
+    "name": "browser_navigate",
+    "description": "Open a URL in a managed AgentCore Browser session. Call browser_screenshot afterwards to see the rendered page. The browser keeps its page, cookies and history across calls with the same 'session'.",
+    "inputSchema": {
+      "type": "object",
+      "description": "Navigation request.",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "Absolute http(s) URL to open."
+        }
+      },
+      "required": [
+        "url"
+      ]
+    }
+  },
+  {
+    "name": "browser_screenshot",
+    "description": "Capture what the browser session currently shows. Returns a temporary https URL to a PNG image; fetch or view that URL to read the page. Use this after navigating, clicking or typing to see the result.",
+    "inputSchema": {
+      "type": "object",
+      "description": "Screenshot request.",
+      "properties": {}
+    }
+  },
+  {
+    "name": "browser_click",
+    "description": "Click at pixel coordinates in the browser session. Take a screenshot first to find what to click.",
+    "inputSchema": {
+      "type": "object",
+      "description": "Click request.",
+      "properties": {
+        "x": {
+          "type": "integer",
+          "description": "Horizontal pixel position."
+        },
+        "y": {
+          "type": "integer",
+          "description": "Vertical pixel position."
+        },
+        "button": {
+          "type": "string",
+          "description": "LEFT, RIGHT or MIDDLE. Defaults to LEFT."
+        },
+        "click_count": {
+          "type": "integer",
+          "description": "Number of clicks, 1-10. Use 2 to double-click. Defaults to 1."
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ]
+    }
+  },
+  {
+    "name": "browser_type",
+    "description": "Type ASCII text into whatever is focused in the browser session, for example a form field that was just clicked.",
+    "inputSchema": {
+      "type": "object",
+      "description": "Typing request.",
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "The text to type."
+        }
+      },
+      "required": [
+        "text"
+      ]
+    }
+  },
+  {
+    "name": "browser_press",
+    "description": "Press a single key in the browser session, such as enter, tab, escape, backspace or an arrow key.",
+    "inputSchema": {
+      "type": "object",
+      "description": "Key press request.",
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "Lowercase key name, e.g. enter, tab, escape, space, backspace, delete."
+        },
+        "presses": {
+          "type": "integer",
+          "description": "How many times to press it, 1-100. Defaults to 1."
+        }
+      },
+      "required": [
+        "key"
+      ]
+    }
+  },
+  {
+    "name": "browser_shortcut",
+    "description": "Press a key combination in the browser session, e.g. [\"ctrl\", \"t\"] for a new tab or [\"ctrl\", \"w\"] to close one.",
+    "inputSchema": {
+      "type": "object",
+      "description": "Shortcut request.",
+      "properties": {
+        "keys": {
+          "type": "array",
+          "description": "Up to 5 lowercase key names pressed together.",
+          "items": {
+            "type": "string",
+            "description": "A lowercase key name."
+          }
+        }
+      },
+      "required": [
+        "keys"
+      ]
+    }
+  },
+  {
+    "name": "browser_scroll",
+    "description": "Scroll the browser page. By default scrolls down; pass a positive delta_y to scroll up.",
+    "inputSchema": {
+      "type": "object",
+      "description": "Scroll request.",
+      "properties": {
+        "x": {
+          "type": "integer",
+          "description": "Horizontal position to scroll at. Defaults to the viewport centre."
+        },
+        "y": {
+          "type": "integer",
+          "description": "Vertical position to scroll at. Defaults to the viewport centre."
+        },
+        "delta_y": {
+          "type": "integer",
+          "description": "Vertical scroll amount, -1000 to 1000. Negative scrolls down. Defaults to -300."
+        },
+        "delta_x": {
+          "type": "integer",
+          "description": "Horizontal scroll amount, -1000 to 1000. Defaults to 0."
+        }
+      }
+    }
+  },
+  {
+    "name": "browser_stop",
+    "description": "Close your browser session, discarding its tabs and cookies. Sessions also expire on their own.",
+    "inputSchema": {
+      "type": "object",
+      "description": "No arguments; your own session is used.",
+      "properties": {}
+    }
+  }
+]

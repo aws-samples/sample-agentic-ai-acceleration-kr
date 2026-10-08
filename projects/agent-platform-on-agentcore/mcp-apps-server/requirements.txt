@@ -1,0 +1,8 @@
+# server.py imports mcp.server.mcpserver and mcp.server.apps, which exist only in
+# SDK 2.x (1.x has mcp.server.fastmcp and no apps extension).
+mcp>=2
+uvicorn>=0.34.0
+starlette>=0.46.0
+
+# CloudWatch GetMetricData for the telemetry app.
+boto3>=1.35.0

@@ -1,0 +1,591 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Design tokens.
+ *
+ * Everything is expressed as bare HSL triples so Tailwind's `hsl(var(--x))`
+ * colours and opacity modifiers (`bg-primary/10`) both work. An earlier version
+ * of this file also declared a parallel `--bg-*` / `--text-*` / `--border-*`
+ * layer that tailwind.config mapped `bg-primary`, `text-primary` and
+ * `border-primary` onto — but those variables were never actually defined, so
+ * every primary button resolved to `background-color: var(--bg-primary)` →
+ * transparent. That is why filled buttons rendered white. The mapping is gone;
+ * the semantic scale below is the single source of truth.
+ */
+@layer base {
+  :root {
+    /*
+     * Brand: slate blue-grey. 600 is `#3F5266` exactly — the odd-looking 23.6%
+     * / 32.4% is what round-trips to that hex, so don't "tidy" it to 24%/32%
+     * (that lands on #3E5165).
+     *
+     * Saturation stays flat at ~24-26% the whole way up. An earlier version
+     * pushed the pale end to 46% to stop the tints collapsing into grey, but that
+     * overshot badly: the tint was twice as chromatic as the anchor, so tinted
+     * buttons read as "blue" instead of as slate. Pale steps get *darker* rather
+     * than more saturated — brand-50 at 91% clears ΔE 5.7 from the page and ΔE 9
+     * from a white card while staying unmistakably the same colour.
+     */
+    --brand-50: 211 24% 91%;
+    --brand-100: 211 24% 86%;
+    --brand-200: 211 25% 78%;
+    --brand-300: 211 26% 68%;
+    --brand-400: 211 25% 50%;
+    --brand-500: 211 24% 40%;
+    --brand-600: 211 23.6% 32.4%;
+    --brand-700: 211 25% 26%;
+    --brand-800: 211 26% 20%;
+    --brand-900: 211 27% 15%;
+    --brand-950: 211 28% 9%;
+
+    /*
+     * Neutrals: pushed to a near-hueless 220 at very low chroma.
+     *
+     * These used to be a cool 240 at 4-6%, which was fine against a teal brand
+     * but is only ~10 ΔE from the slate above — greys and brand would have read
+     * as the same muddy family. Dropping the neutrals' chroma is what lets the
+     * slate register as a colour at all.
+     */
+    --neutral-50: 0 0% 98%;
+    --neutral-100: 220 3% 96%;
+    --neutral-200: 220 3% 90%;
+    --neutral-300: 220 3% 84%;
+    --neutral-400: 220 2% 65%;
+    --neutral-500: 220 2% 46%;
+    /* Between 500 and 600: the lightest grey that still clears AA for small text
+       on the page background (4.57:1). Dropping the neutrals' chroma cost a
+       little contrast here, so this is 44% rather than the old 45%. */
+    --neutral-550: 220 2% 44%;
+    --neutral-600: 220 3% 34%;
+    --neutral-700: 220 3% 26%;
+    --neutral-800: 220 4% 16%;
+    --neutral-900: 220 5% 10%;
+    --neutral-950: 220 7% 4%;
+
+    /* Semantic surfaces. `background` sits a step below `card` so cards read as
+       raised without needing a drop shadow. */
+    --background: var(--neutral-100);
+    --foreground: var(--neutral-900);
+    --card: 0 0% 100%;
+    --card-foreground: var(--neutral-900);
+    --popover: 0 0% 100%;
+    --popover-foreground: var(--neutral-900);
+    --sidebar: 0 0% 100%;
+
+    --primary: var(--brand-600);
+    --primary-foreground: 0 0% 100%;
+    /* Filled-button hover: darker, not translucent — a translucent brand colour
+       over a white card washes out instead of reading as pressed. */
+    --primary-hover: var(--brand-700);
+    /*
+     * Wash for selected rows and active chips.
+     *
+     * Sits at 94%, not the 97% a `50` step usually takes: this hue is so close to
+     * the neutrals that a 97% tint measured ΔE 1.4 from the page background —
+     * literally invisible. 94% clears ΔE 4 against both the page and white cards.
+     */
+    --primary-tint: var(--brand-50);
+
+    --secondary: var(--neutral-100);
+    --secondary-foreground: var(--neutral-800);
+    --muted: var(--neutral-100);
+    --muted-foreground: var(--neutral-550);
+    --accent: var(--neutral-100);
+    --accent-foreground: var(--neutral-900);
+
+    /*
+     * Semantic tones, muted to sit beside the brand.
+     *
+     * These were 72-85% saturation against a 24%-saturation brand, so a status
+     * badge was three times more chromatic than the primary button next to it and
+     * the green in particular fought the slate. Now ~46-52%, with hues pulled
+     * cooler (success 158->168, info 214->206) so they read as the same family.
+     *
+     * Lightness is not arbitrary: a chip renders its text on its own colour at
+     * 8% over the page, and that tint darkens the background just enough to cost
+     * contrast. These are the lightest values that still clear AA in that
+     * composited case (~4.6:1), which is stricter than plain text on white.
+     *
+     * Measured in LCh chroma (the honest "how loud is this" metric), the brand
+     * sits at 14 and these land at 26-42, i.e. 1.9-3.0x. That gap is deliberate —
+     * a status badge should be able to raise its hand — but `destructive` was at
+     * 3.9x and became the loudest thing on any screen it appeared on, so it is
+     * pulled back to 3.0x while staying unmistakably red.
+     */
+    --destructive: 4 42% 44%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 168 46% 31%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 52% 34%;
+    --warning-foreground: 0 0% 100%;
+    --info: 206 46% 40%;
+    --info-foreground: 0 0% 100%;
+
+    /* Categorical series colours, for charts only.
+     *
+     * Deliberately NOT the brand ramp or the status colours. Series need hues a
+     * reader can tell apart at a glance, which one ramp cannot supply, and
+     * reusing success/warning would make "series 3" look like a verdict.
+     *
+     * Assigned in this fixed order and never cycled — colour follows the entity,
+     * so a filter that drops a series must not repaint the survivors. Past eight,
+     * fold into "Other" rather than generating a ninth hue.
+     *
+     * Muted to this app's loudness, not a stock palette. The previous set was a
+     * generic reference palette at OKLCH chroma 0.14-0.19, which put the charts
+     * at four to five times the brand slate (0.04) and twice the status tones
+     * (0.07-0.11) — on a console the charts were the loudest thing on screen. All
+     * eight now sit at a flat chroma 0.105, the same register as a status chip.
+     *
+     * Validated, not eyeballed: hue held, lightness re-stepped until the whole set
+     * cleared the lightness band, the chroma floor, adjacent-pair CVD separation
+     * (worst ΔE 9.9 protan, up from 9.1) and the normal-vision floor (worst ΔE
+     * 17.0) against the white card. Two of them — aqua and amber — sit below 3:1
+     * there, so a chart using them owes the reader relief: a visible label, or the
+     * table kind. That was three before.
+     *
+     * The dark values below are a separate validated set, not an automatic flip —
+     * and the set they replace actually failed the band against this app's own
+     * `--card` (the old --chart-8 measured L 0.679 against a 0.48-0.67 ceiling).
+     */
+    --chart-1: 203 67.6% 36.3%;
+    --chart-2: 5.4 38.2% 54.3%;
+    --chart-3: 166.4 45.7% 54.5%;
+    --chart-4: 31.5 60% 60.8%;
+    --chart-5: 324.2 34.6% 59.2%;
+    --chart-6: 83 59.3% 24.1%;
+    --chart-7: 226.7 41.1% 38.6%;
+    --chart-8: 350.3 31.7% 49.4%;
+    /* Cost is its own nature, not a categorical series, so it sits outside
+       --chart-1..8 (extending that set would move SERIES_CAP and change the
+       "기타" fold). Violet, landing in the palette's empty 226°→324° arc — well
+       clear of the tool-call orange (chart-4) and the turns blue in both themes,
+       which an amber/gold would collide with (dark chart-4 is already 39.5°). */
+    --chart-cost: 275 45% 50%;
+
+    /* Hairlines. `border` is the default 1px rule; `border-strong` is for
+       dividers that need to survive next to a filled surface. */
+    --border: var(--neutral-200);
+    --border-strong: var(--neutral-300);
+    --input: var(--neutral-300);
+    --ring: var(--brand-500);
+
+    --scrollbar-thumb: var(--neutral-300);
+    --scrollbar-thumb-hover: var(--neutral-400);
+
+    /* 8px is the widest corner in the system; anything rounder started to read
+       as a consumer app rather than a console. */
+    --radius: 0.5rem;
+
+    /* Layout. */
+    --header-height: 3.5rem;
+    --sidebar-width: 16rem;
+    --sidebar-collapsed-width: 4rem;
+    --chat-max-width: 52rem;
+
+  }
+
+  /*
+   * Dark theme, applied by class.
+   *
+   * There is deliberately no `@media (prefers-color-scheme: dark)` block:
+   * ThemeProvider resolves the OS preference in JS and adds `.dark`, so a media
+   * query here would fight an explicit choice. (It did — the old selector was
+   * `:root:not(.light)`, and since nothing ever adds a `.light` class, picking
+   * light on a dark-OS machine still rendered dark.)
+   */
+  .dark,
+  [data-joy-color-scheme="dark"] {
+    /* Dark mode inverts the surface ladder: the page is the darkest layer and
+       each panel steps *up*, which is the opposite of the light theme. */
+    --background: var(--neutral-950);
+    --foreground: var(--neutral-100);
+    --card: var(--neutral-900);
+    --card-foreground: var(--neutral-100);
+    --popover: var(--neutral-800);
+    --popover-foreground: var(--neutral-100);
+    --sidebar: var(--neutral-900);
+
+    /*
+     * Lifted well up the ramp: brand-600 is 2.5:1 on a near-black page, and even
+     * 400 only reaches 4.7:1. 300 gives 9:1 and still carries dark ink at 8:1,
+     * so filled buttons stay legible in both directions.
+     */
+    --primary: var(--brand-300);
+    --primary-foreground: var(--brand-950);
+    --primary-hover: var(--brand-200);
+    /*
+     * Not brand-950 here. On a #18191B card that step measured only ΔE 6 from the
+     * surface, so a tinted button read as an empty outline rather than a fill.
+     * 18% lightness puts it at ΔE 13 — unmistakably a filled control, at the
+     * ramp's own 26% chroma so it stays slate rather than drifting blue.
+     */
+    --primary-tint: 211 26% 18%;
+
+    --secondary: var(--neutral-800);
+    --secondary-foreground: var(--neutral-100);
+    --muted: var(--neutral-800);
+    --muted-foreground: var(--neutral-400);
+    --accent: var(--neutral-800);
+    --accent-foreground: var(--neutral-50);
+
+    /* Same muted hues, lifted for a dark page; see the light-mode note above. */
+    --destructive: 4 52% 64%;
+    --destructive-foreground: var(--neutral-950);
+    --success: 168 52% 58%;
+    --success-foreground: var(--neutral-950);
+    --warning: 38 62% 60%;
+    --warning-foreground: var(--neutral-950);
+    --info: 206 52% 62%;
+    --info-foreground: var(--neutral-950);
+
+    /* The same eight hues at the same chroma 0.105, re-stepped for the dark card —
+     * a selected set, not a flip of the light values. Validated against `--card`
+     * here: all eight inside the dark lightness band (the set this replaces was
+     * not — its --chart-8 measured L 0.679), worst adjacent CVD ΔE 9.6, worst
+     * normal-vision ΔE 16.1. Only olive sits below 3:1, at 2.85. */
+    --chart-1: 203.7 57.4% 42.4%;
+    --chart-2: 4.9 34.7% 48.6%;
+    --chart-3: 168.4 54.8% 40.8%;
+    --chart-4: 39.5 57.1% 40.2%;
+    --chart-5: 327 29% 48%;
+    --chart-6: 84.2 51.4% 27.5%;
+    --chart-7: 228.1 47.8% 64.7%;
+    --chart-8: 348.1 36.3% 56.3%;
+    /* Cost — see the light block. Lifted for the dark surface. */
+    --chart-cost: 276 50% 68%;
+
+    --border: var(--neutral-800);
+    --border-strong: var(--neutral-700);
+    --input: var(--neutral-700);
+    --ring: var(--brand-300);
+
+    --scrollbar-thumb: var(--neutral-700);
+    --scrollbar-thumb-hover: var(--neutral-600);
+  }
+
+  * {
+    border-color: hsl(var(--border));
+    outline-color: hsl(var(--ring));
+  }
+
+  /* The forms plugin paints its own focus ring on top of ours. */
+  input:focus,
+  textarea:focus,
+  select:focus {
+    box-shadow: none !important;
+  }
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-sans), system-ui, sans-serif;
+  /*
+   * Set on body, never on html: `rem` resolves against the root element, so
+   * shrinking html's font-size also silently scales every rem-based Tailwind
+   * spacing, height and radius in the app (a 0.9375 factor — h-13 came out at
+   * 48.75px instead of 52px, and no header lined up with the sidebar).
+   */
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  /* Slight negative tracking keeps dense UI text from looking loose. */
+  letter-spacing: -0.006em;
+  color: hsl(var(--foreground));
+  background-color: hsl(var(--background));
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  color: hsl(var(--foreground));
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: 1.5rem;
+}
+h2 {
+  font-size: 1.25rem;
+}
+h3 {
+  font-size: 1.0625rem;
+}
+h4 {
+  font-size: 0.9375rem;
+}
+h5 {
+  font-size: 0.875rem;
+}
+h6 {
+  font-size: 0.8125rem;
+}
+
+p {
+  margin-bottom: 0.75rem;
+}
+p:last-child {
+  margin-bottom: 0;
+}
+
+a {
+  color: hsl(var(--primary));
+  text-decoration: none;
+  transition: color 150ms ease;
+}
+a:hover {
+  color: hsl(var(--primary-hover));
+}
+
+code {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.875em;
+  font-feature-settings: "liga" 0;
+  padding: 0.1em 0.32em;
+  color: hsl(var(--foreground));
+  background-color: hsl(var(--muted));
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.25rem;
+}
+
+pre {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.8125rem;
+  line-height: 1.65;
+  padding: 0.875rem 1rem;
+  background-color: hsl(var(--muted));
+  border: 1px solid hsl(var(--border));
+  border-radius: calc(var(--radius) - 2px);
+  overflow-x: auto;
+}
+
+pre code {
+  padding: 0;
+  border: 0;
+  background-color: transparent;
+}
+
+ul,
+ol {
+  padding-left: 1.25rem;
+  margin-bottom: 0.75rem;
+}
+ul:last-child,
+ol:last-child {
+  margin-bottom: 0;
+}
+
+li {
+  margin-bottom: 0.1875rem;
+}
+li:last-child {
+  margin-bottom: 0;
+}
+
+input,
+textarea,
+select {
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  letter-spacing: inherit;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+button:disabled {
+  cursor: not-allowed;
+}
+
+/* Tabular figures wherever numbers are compared down a column. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: scale(0.98) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* Staggered entrance for grids and lists. The delay is set per item with an
+   inline `--i`, so a 12-card grid reveals as a sweep rather than a pop. */
+@keyframes riseIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-rise {
+  animation: riseIn 380ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  animation-delay: calc(var(--i, 0) * 26ms);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-rise {
+    animation: none;
+  }
+}
+
+.scrollbar-pretty {
+  overflow-y: scroll;
+}
+
+.scrollbar-pretty::-webkit-scrollbar {
+  width: 8px;
+}
+
+.scrollbar-pretty::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-pretty::-webkit-scrollbar-thumb {
+  background-color: hsl(var(--scrollbar-thumb));
+  border-radius: 9999px;
+}
+
+.scrollbar-pretty::-webkit-scrollbar-thumb:hover {
+  background-color: hsl(var(--scrollbar-thumb-hover));
+}
+
+/* Diff highlighting. Tinted background with full-strength text, rather than a
+   saturated fill with white text that only worked on dark backgrounds. */
+.word-added {
+  background-color: hsl(var(--success) / 0.18);
+  color: hsl(var(--success));
+  padding: 1px 3px;
+  border-radius: 3px;
+  font-weight: 500;
+}
+
+.word-removed {
+  background-color: hsl(var(--destructive) / 0.16);
+  color: hsl(var(--destructive));
+  padding: 1px 3px;
+  border-radius: 3px;
+  font-weight: 500;
+  text-decoration: line-through;
+  text-decoration-color: hsl(var(--destructive) / 0.6);
+}
+
+/*
+ * JSON tree (`@uiw/react-json-view`) in this app's colours.
+ *
+ * The library ships a Solarized-ish palette hardcoded as CSS-variable fallbacks,
+ * which on a dark page rendered near-black keys on a near-black card. Every one
+ * of its `--w-rjv-*` hooks is re-pointed at a design token here, so the tree
+ * follows the theme in both directions instead of needing two imported themes.
+ *
+ * Only three hues are used, and each carries meaning: keys take the foreground
+ * (they are structure, and structure should read as text), strings and numbers
+ * take two chart hues so a value's type is visible without the type labels, and
+ * punctuation drops to muted so brackets recede behind the data. Nulls and
+ * undefined use `warning` because an absent value is worth noticing in a probe.
+ */
+.json-tree {
+  --w-rjv-font-family: var(--font-mono), ui-monospace, monospace;
+  --w-rjv-background-color: transparent;
+  --w-rjv-color: hsl(var(--foreground));
+
+  --w-rjv-key-string: hsl(var(--foreground));
+  --w-rjv-key-number: hsl(var(--muted-foreground));
+
+  /* Punctuation. Quiet enough to read past, dark enough to still be there. */
+  --w-rjv-brackets-color: hsl(var(--muted-foreground));
+  --w-rjv-curlybraces-color: hsl(var(--muted-foreground));
+  --w-rjv-colon-color: hsl(var(--muted-foreground));
+  --w-rjv-quotes-color: hsl(var(--muted-foreground) / 0.7);
+  --w-rjv-quotes-string-color: hsl(var(--muted-foreground) / 0.7);
+  --w-rjv-arrow-color: hsl(var(--muted-foreground));
+  --w-rjv-ellipsis-color: hsl(var(--muted-foreground));
+  /* The `2 items` counts: present, but never competing with a value. */
+  --w-rjv-info-color: hsl(var(--muted-foreground) / 0.65);
+
+  /* Indent guides, one step below the default hairline — at full `--border`
+     strength a deep object turned into a picket fence. */
+  --w-rjv-line-color: hsl(var(--border) / 0.7);
+  --w-rjv-line-style: solid;
+  --w-rjv-border-left-width: 1px;
+
+  /* Types. These are *text* colours, so they wear the semantic tones rather than
+     the categorical series slots they used to borrow. A series colour is picked to
+     be told apart from its neighbours at mark size — nothing in that brief asks it
+     to clear 4.5:1 as 12px type, and once the chart palette dropped to chroma
+     0.105 the borrowed steps stopped clearing it (int measured 3.71 in dark). The
+     tones below are validated for text in both modes: string 5.61/9.01, numeric
+     5.61/6.64. Boolean keeps a chart slot only because that one does clear it
+     (8.12/5.39). */
+  --w-rjv-type-string-color: hsl(var(--success));
+  --w-rjv-type-url-color: hsl(var(--info));
+  --w-rjv-type-int-color: hsl(var(--info));
+  --w-rjv-type-float-color: hsl(var(--info));
+  --w-rjv-type-bigint-color: hsl(var(--info));
+  --w-rjv-type-date-color: hsl(var(--info));
+  --w-rjv-type-boolean-color: hsl(var(--chart-7));
+  --w-rjv-type-null-color: hsl(var(--warning));
+  --w-rjv-type-undefined-color: hsl(var(--warning));
+  --w-rjv-type-nan-color: hsl(var(--destructive));
+  --w-rjv-type-map-color: hsl(var(--info));
+  --w-rjv-type-set-color: hsl(var(--info));
+
+  --w-rjv-copied-color: hsl(var(--muted-foreground));
+  --w-rjv-copied-success-color: hsl(var(--success));
+  --w-rjv-update-color: hsl(var(--warning));
+}

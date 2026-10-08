@@ -1,0 +1,79 @@
+admin_email    = "admin@example.com"
+admin_password = "ChangeMe123!"
+user_email     = "user@example.com"
+user_password  = "ChangeMe123!"
+
+# Web search on the MCP gateway: "agentcore" (AgentCore Web Search, no API key) or "none".
+# AgentCore Web Search is offered in us-east-1, eu-west-1 and ap-northeast-1.
+web_search_backend = "agentcore"
+
+# The ECR repositories are created by this same apply, so the images start as a
+# public placeholder. After the first apply, push both images and set these
+# (see `terraform output ecr_repository_urls`), then apply again:
+# server_image = "<account>.dkr.ecr.ap-northeast-1.amazonaws.com/bap/server:latest"
+# web_image    = "<account>.dkr.ecr.ap-northeast-1.amazonaws.com/bap/web:latest"
+
+# Default AgentCore runtime the chat invokes. Optional — the UI can also pick
+# one from the registry.
+# agent_runtime_arn = "arn:aws:bedrock-agentcore:ap-northeast-1:<account>:runtime/..."
+
+# Approve registry records on creation. false forces DRAFT → request → admin approval.
+# registry_auto_approval = true
+
+# 0 parks both ECS services without destroying the environment.
+# desired_count = 1
+
+# Models offered by "basic chat" (no registry agent; the default runtime answers).
+# Inference-profile ids. Empty list hides the option.
+# basic_chat_allowed_models = ["global.anthropic.claude-sonnet-5-5", "global.anthropic.claude-opus-5-5", "global.anthropic.claude-haiku-4-5-20251001-v1:0"]
+
+# Email subscribed to the CloudWatch alarms SNS topic (ALB 5xx, web healthy hosts,
+# usage-table throttles). Empty leaves the topic without a subscription.
+# alert_email = "ops@example.com"
+
+# Route each harness's model call through a per-agent inference profile so Bedrock
+# spend carries the AgentName cost-allocation tag. Off by default (live-verification
+# pending); token-based cost estimates work regardless.
+# enable_model_cost_aip = false
+
+# MCP servers on AgentCore Runtime to attach to the MCP gateway (target name =>
+# runtime ARN). Set after deploying mcp-apps-server; see DEPLOYMENT.md.
+# runtime_mcp_servers = { "platform-status" = "arn:aws:bedrock-agentcore:ap-northeast-1:<account>:runtime/bap_platform_status-..." }
+
+# ── Network / TLS ────────────────────────────────────────────────────────────
+# Restrict who can reach the ALB (80/8081, and 443/8443 with TLS). Default open.
+# alb_ingress_cidrs = ["203.0.113.0/24"]
+
+# Terminate TLS on the ALB. Name an ACM certificate in this region and the DNS
+# name it covers; :80 then redirects to :443 and the sandbox origin becomes
+# https://<public_host>:8443. Leave both empty for the HTTP-only ALB.
+# certificate_arn = "arn:aws:acm:ap-northeast-1:<account>:certificate/<id>"
+# public_host     = "agents.example.com"
+
+# Some corporate SSL-inspection proxies break HTTP/2 (ERR_HTTP2_PROTOCOL_ERROR on
+# static chunks). false pins the ALB to HTTP/1.1.
+# alb_enable_http2 = true
+
+# ── Optional pieces ──────────────────────────────────────────────────────────
+# Skip the Agent Registry where an org SCP blocks its actions. The server then
+# runs with AGENT_REGISTRY_ID empty (auto-registration off).
+# enable_agent_registry = true
+
+# S3 bucket names are global; add a suffix if <project>-<purpose>-<region> is taken.
+# bucket_suffix = "-<account_id>"
+
+# Also list AgentCore runtimes deployed in these regions when registering an agent,
+# so an agent living elsewhere can be chatted from here without moving it.
+# agent_runtime_discovery_regions = "ap-northeast-2"
+
+# ── Microsoft Entra ID login ─────────────────────────────────────────────────
+# Optional second login next to the Cognito password form. Needs TLS
+# (certificate_arn + public_host) because Entra only accepts https:// callbacks
+# (http://localhost is the one exception). Register an SPA platform on the app
+# with https://<public_host>/auth/callback and add the `groups` claim to the ID
+# token; see infra/README.md "Entra ID 로그인".
+# oidc_issuer_url     = "https://login.microsoftonline.com/<tenant-id>/v2.0"
+# oidc_client_id      = "<application-client-id>"
+# oidc_admin_groups   = ["PlatformAdmin"]
+# oidc_required_group = ""          # empty = whole tenant may sign in
+# oidc_redirect_uris  = ["https://agents.example.com/auth/callback", "http://localhost:3000/auth/callback"]

@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="light dark" />
+  <title>Platform Telemetry</title>
+  <style>
+    /*
+     * 호스트가 hostContext.styles.variables로 내려주는 규격 변수를 쓴다
+     * (SDK applyHostStyleVariables가 :root에 심는다). 호스트가 안 주면 시스템
+     * 색(Canvas/CanvasText)과 color-scheme에 맡긴다.
+     */
+    :root {
+      --bg: var(--color-background-primary, Canvas);
+      --fg: var(--color-text-primary, CanvasText);
+      --muted: var(--color-text-secondary, color-mix(in srgb, var(--fg) 55%, transparent));
+      --line: var(--color-border-primary, color-mix(in srgb, var(--fg) 15%, transparent));
+      --panel: var(--color-background-secondary, color-mix(in srgb, var(--fg) 6%, transparent));
+      --accent: var(--color-background-info, color-mix(in srgb, var(--fg) 12%, transparent));
+      --danger: var(--color-text-danger, #dc2626);
+      --radius: var(--border-radius-md, 8px);
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      background: var(--bg); color: var(--fg);
+      font-family: var(--font-sans, ui-sans-serif, system-ui, -apple-system, sans-serif);
+      font-size: var(--font-text-sm-size, 14px); line-height: var(--font-text-sm-line-height, 1.5);
+      padding: 14px 16px 12px;
+    }
+    header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+    h1 { font-size: var(--font-heading-xs-size, 16px); margin: 0; font-weight: var(--font-weight-semibold, 600); }
+    .status { color: var(--muted); font-size: var(--font-text-xs-size, 12px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .status.err { color: var(--danger); }
+    .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0 8px; }
+    .seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+    .seg button { border: 0; border-radius: 0; }
+    .seg button + button { border-left: 1px solid var(--line); }
+    .seg button[aria-pressed="true"] { background: var(--accent); font-weight: var(--font-weight-semibold, 600); }
+    button {
+      font: inherit; color: var(--fg); background: transparent;
+      border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 11px; cursor: pointer;
+    }
+    button:hover:not(:disabled) { background: var(--panel); }
+    button:disabled { opacity: .5; cursor: default; }
+    .spacer { flex: 1; }
+    .chart { position: relative; height: 220px; border: 1px solid var(--line); border-radius: var(--radius); padding: 8px; background: var(--panel); }
+    .chart.empty::after { content: "이 기간에는 데이터가 없습니다."; position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; font-variant-numeric: tabular-nums; font-size: var(--font-text-xs-size, 12.5px); }
+    th, td { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+    th:first-child, td:first-child { text-align: left; }
+    th { color: var(--muted); font-weight: var(--font-weight-medium, 500); }
+    tbody tr { cursor: pointer; }
+    tbody tr:hover { background: var(--panel); }
+    tbody tr[aria-selected="true"] { background: var(--accent); }
+    .kind { color: var(--muted); font-size: 11px; margin-left: 6px; }
+    footer { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+    .foot { color: var(--muted); font-size: var(--font-text-xs-size, 11.5px); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>플랫폼 텔레메트리</h1>
+    <div class="status" id="status">호스트 연결을 기다리는 중…</div>
+  </header>
+
+  <div class="controls">
+    <div class="seg" id="tabs" role="tablist">
+      <button data-view="models" aria-pressed="true" disabled>모델</button>
+      <button data-view="agents" aria-pressed="false" disabled>에이전트</button>
+      <button data-view="tools" aria-pressed="false" disabled>툴</button>
+    </div>
+    <div class="seg" id="periods">
+      <button data-period="1h" aria-pressed="false" disabled>1h</button>
+      <button data-period="24h" aria-pressed="true" disabled>24h</button>
+      <button data-period="7d" aria-pressed="false" disabled>7d</button>
+    </div>
+    <span class="spacer"></span>
+    <button id="refresh" disabled>새로 고침</button>
+  </div>
+
+  <div class="chart" id="chartWrap"><canvas id="chart"></canvas></div>
+
+  <table id="table"><thead></thead><tbody></tbody></table>
+
+  <footer>
+    <button id="pin" disabled>선택 항목을 모델 컨텍스트에 넣기</button>
+    <span class="foot" id="foot">행을 클릭하면 차트가 그 항목만 보여줍니다. 지연은 버킷 단순 평균입니다.</span>
+  </footer>
+
+  <script type="module" src="./src/main.ts"></script>
+</body>
+</html>

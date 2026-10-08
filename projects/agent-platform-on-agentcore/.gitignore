@@ -1,0 +1,23 @@
+# Design specs and implementation plans. Deliberately not tracked: they record
+# real pool IDs, client IDs, test-account credentials and ALB hostnames so the
+# verification steps can be reproduced verbatim. Keep them local.
+docs/superpowers/
+
+# SDD scratch (ledgers, task briefs, review packages)
+.superpowers/
+
+# git worktrees (scratch checkouts, never committed)
+.worktrees/
+
+# Installer venv and run logs. Logs capture terraform output verbatim, which
+# includes tfvars values (passwords among them).
+installer/.venv/
+installer/.logs/
+
+# Python build artifacts. Without this a stray .pyc gets committed, as
+# mcp-apps-server/__pycache__ was.
+__pycache__/
+*.py[cod]
+
+# agentcore CLI deployment state (account ID, role and runtime ARNs)
+.bedrock_agentcore.yaml
