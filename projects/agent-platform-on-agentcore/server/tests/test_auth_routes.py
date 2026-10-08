@@ -89,6 +89,22 @@ def test_config_picks_redirect_uri_by_origin(deployment, monkeypatch):
     assert pick("https://evil.example") == "https://agents.example.com/auth/callback"
 
 
+def test_config_picks_redirect_uri_by_origin_query_param(deployment, monkeypatch):
+    """The web asks with `?origin=`: deployed, /api/auth/config is a same-origin
+    GET through the Next proxy and browsers attach no Origin header to those, so
+    the header-only pick always returned the first callback. The query parameter
+    wins over a header when both arrive."""
+    client = _client(monkeypatch)
+    pick = lambda **kw: client.get("/api/auth/config", **kw).json()["providers"][1]["redirect_uri"]  # noqa: E731
+    assert pick(params={"origin": "http://localhost:3000"}) == "http://localhost:3000/auth/callback"
+    assert pick(params={"origin": "https://agents.example.com"}) == "https://agents.example.com/auth/callback"
+    assert pick(params={"origin": "https://evil.example"}) == "https://agents.example.com/auth/callback"
+    assert (
+        pick(params={"origin": "http://localhost:3000"}, headers={"origin": "https://agents.example.com"})
+        == "http://localhost:3000/auth/callback"
+    )
+
+
 def test_config_without_cognito_client_has_no_password_form(deployment, monkeypatch):
     """A pool id alone verifies tokens; without the app client the password
     form has nothing to call, so the screen must not offer it."""

@@ -6,6 +6,7 @@ import {
   sha256Bytes,
   buildAuthorizeUrl,
   parseCallbackParams,
+  authConfigUrl,
 } from "./oidcCore.mjs";
 
 test("base64UrlEncode is url-safe and unpadded", () => {
@@ -67,4 +68,18 @@ test("parseCallbackParams reads code/state/error", () => {
     error: null,
   });
   assert.equal(parseCallbackParams("?error=access_denied").error, "access_denied");
+});
+
+test("authConfigUrl carries the page origin so the server can pick the matching redirect_uri", () => {
+  // Same-origin GETs carry no Origin header, so the origin has to be explicit.
+  assert.equal(
+    authConfigUrl("", "http://localhost:3000"),
+    "/api/auth/config?origin=http%3A%2F%2Flocalhost%3A3000"
+  );
+  assert.equal(
+    authConfigUrl("https://api.example.com", "https://agents.example.com"),
+    "https://api.example.com/api/auth/config?origin=https%3A%2F%2Fagents.example.com"
+  );
+  // No origin to send (server-side render): the plain URL.
+  assert.equal(authConfigUrl("", undefined), "/api/auth/config");
 });

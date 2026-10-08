@@ -143,3 +143,19 @@ export function parseCallbackParams(search) {
     error: params.get("error"),
   };
 }
+
+/**
+ * Where to ask the server for this deployment's login options.
+ *
+ * The origin rides along as a query parameter rather than being left to the
+ * Origin header: deployed, this is a same-origin GET through the Next proxy, and
+ * browsers attach an Origin header only to cross-origin or non-GET requests, so
+ * the server never saw one and always answered with its first registered
+ * redirect_uri. A dev server sharing production's app registration then hit
+ * the IdP's redirect_uri mismatch. Server-rendered code has no origin to send
+ * and gets the plain URL.
+ */
+export function authConfigUrl(apiBase, origin) {
+  const base = `${apiBase ?? ""}/api/auth/config`;
+  return origin ? `${base}?origin=${encodeURIComponent(origin)}` : base;
+}

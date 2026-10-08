@@ -57,9 +57,14 @@ def _user_repo():
 def auth_config(request: Request) -> dict:
     """Login options for this deployment, in the order the screen shows them.
 
-    `redirect_uri` is picked per request Origin so production and a local dev
-    server (http://localhost:3000) can share one Entra app registration — the
-    Next dev proxy forwards the browser's Origin header unchanged.
+    `redirect_uri` is picked per caller origin so production and a local dev
+    server (http://localhost:3000) can share one Entra app registration. The
+    web passes its origin as `?origin=`: this is a same-origin GET through the
+    Next proxy in every deployment, and browsers attach an Origin header only to
+    cross-origin or non-GET requests, so reading the header alone always fell
+    back to the first registered callback and the shared registration never
+    worked through the proxy. The header is still honoured for callers that
+    send one (a cross-origin dev setup, curl).
     """
     providers = []
     if cognito_login_enabled():
@@ -68,7 +73,7 @@ def auth_config(request: Request) -> dict:
             "kind": "password",
             "label": "아이디 · 비밀번호",
         })
-    origin = request.headers.get("origin") or ""
+    origin = request.query_params.get("origin") or request.headers.get("origin") or ""
     for p in config.OIDC_PROVIDERS:
         providers.append({
             "id": p.id,

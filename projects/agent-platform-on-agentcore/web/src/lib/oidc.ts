@@ -10,6 +10,7 @@
  * Pure logic (PKCE, URLs) is in oidcCore.mjs; only the browser coupling is here.
  */
 import {
+  authConfigUrl,
   buildAuthorizeUrl,
   parseCallbackParams,
   sha256Challenge,
@@ -45,7 +46,10 @@ const endpointsCache = new Map<string, Endpoints>();
 export async function getLoginProviders(): Promise<LoginProvider[]> {
   if (providersCache) return providersCache;
   const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "";
-  const res = await fetch(`${apiBase}/api/auth/config`);
+  // The page origin goes along explicitly — see authConfigUrl for why the
+  // Origin header cannot be relied on here.
+  const origin = typeof window === "undefined" ? undefined : window.location.origin;
+  const res = await fetch(authConfigUrl(apiBase, origin));
   if (!res.ok) throw new Error("로그인 설정을 불러오지 못했습니다.");
   const data = (await res.json()) as { providers?: LoginProvider[] };
   providersCache = Array.isArray(data.providers) ? data.providers : [];
