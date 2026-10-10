@@ -431,6 +431,11 @@ async def _anthropic_stream(
     #:    기다리며 없는 tool_use 를 찾다가 멈추거나 재요청한다.
     stop_reason_final = "end_turn"
     saw_message_delta = False
+    #: 이번 턴에 Bedrock 이 보낸 message_delta.delta 의 사본. 마지막 프레임은 이것을
+    #: 복사해 만든다 — 서버 분류기 판정(safeguard_results) 등 처음 보는 필드도 그대로 간다.
+    #: English: copy of this turn's upstream message_delta.delta; the terminal frame is
+    #: built from it, so safeguard_results and any unknown field pass through.
+    turn_delta: dict = {}
     #: 우리가 주입한 web_search 의 tool_use id 전체. force_final 턴에서 이 배관을
     #: 걷어내야 tools 없는 요청이 400 이 되지 않는다(_strip_… docstring 참조).
     our_tool_use_ids: set[str] = set()
@@ -461,6 +466,7 @@ async def _anthropic_stream(
             # ⚠️ stop_reason / saw_message_delta 를 턴마다 재설정한다(선언부 주석의 이유).
             stop_reason_final = "end_turn"
             saw_message_delta = False
+            turn_delta = {}
             assistant_content: list[dict] = []
             local_to_global: dict[int, int] = {}   # local block idx → emitted global idx
             suppressed: dict[int, dict] = {}        # local idx → {kind, buffer, block}
@@ -602,6 +608,7 @@ async def _anthropic_stream(
                 elif etype == "message_delta":
                     saw_message_delta = True
                     d = ev.get("delta") or {}
+                    turn_delta = dict(d)
                     if d.get("stop_reason"):
                         stop_reason_final = d["stop_reason"]
                     u = ev.get("usage") or {}
@@ -670,11 +677,19 @@ async def _anthropic_stream(
                 if emitted_stop_reason == "tool_use" and not client_tool_present:
                     emitted_stop_reason = "end_turn"
 
-                # Terminal: close the single envelope.
+                # Terminal: close the single envelope. 마지막 턴의 delta 를 복사하고 stop_reason
+                # 만 덮어쓴다. 판정은 이 턴 것만 실린다 — Claude Code 는 판정 항목이 정확히
+                # 하나여야 인식하고, 없으면 세션 내내 PC 쪽 분류기로 바꾼다. 앞선 검색 턴의
+                # 판정은 우리 web_search 호출에 대한 것이라 넘기지 않는다.
+                # English: copy the last turn's delta and override only stop_reason. Only
+                # this turn's verdicts go out — Claude Code accepts exactly one entry and
+                # classifies locally for the session when none arrives; earlier search turns'
+                # verdicts cover our own web_search calls.
                 yield _sse(
                     "message_delta",
                     {"type": "message_delta",
-                     "delta": {"stop_reason": emitted_stop_reason, "stop_sequence": None},
+                     "delta": {"stop_sequence": None, **turn_delta,
+                               "stop_reason": emitted_stop_reason},
                      "usage": {"output_tokens": merged.output_tokens}},
                 )
                 yield _sse("message_stop", {"type": "message_stop"})
