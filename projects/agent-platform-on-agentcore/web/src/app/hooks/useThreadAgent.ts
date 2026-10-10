@@ -1,13 +1,7 @@
 "use client";
 
 import useSWR from "swr";
-import { getRegistryRecord, listRegistryRecords } from "@/lib/registry";
-import { getCapabilities } from "@/lib/capabilities";
-import {
-  BASIC_CHAT_NAME,
-  BASIC_CHAT_RECORD_ID,
-  basicChatModelLabel,
-} from "@/lib/basicChat.mjs";
+import { getRegistryRecord, isChattable, listRegistryRecords } from "@/lib/registry";
 import type { SelectedAgent } from "@/lib/config";
 import { ApiClient } from "@/lib/api-client";
 import type { Thread } from "@/lib/api-types";
@@ -23,9 +17,7 @@ export type ThreadAgentProblem =
   /** Pinned to a registry record that no longer resolves (deleted, or revoked). */
   | "unresolvable"
   /** Written before pinning existed: which agent wrote its history is unknown. */
-  | "unpinned"
-  /** A basic-chat thread with no recorded model: continuing it could switch models unnoticed. */
-  | "legacy-basic";
+  | "unpinned";
 
 export interface ThreadAgentResult {
   /** The agent to invoke and to name in the header, or null while unresolved. */
@@ -73,24 +65,16 @@ export function useThreadAgent(
       const recordId = thread.agent_record_id;
       if (!recordId) return { problem: "unpinned" as const };
 
-      // Basic chat has no registry record; the thread's own model is the pin,
-      // and it must still be on the server's allow-list to be invoked.
-      if (recordId === BASIC_CHAT_RECORD_ID) {
-        const modelId = thread.basic_chat_model_id;
-        if (!modelId) return { problem: "legacy-basic" as const };
-        const basic = (await getCapabilities()).basicChat;
-        if (!basic?.configured || !basic.models.includes(modelId)) {
-          return { problem: "unresolvable" as const };
-        }
-        return {
-          agent: {
-            recordId,
-            name: BASIC_CHAT_NAME,
-            description: `${basicChatModelLabel(modelId)} · 에이전트 없이 모델과 바로 대화`,
-            basicChat: true,
-            basicChatModelId: modelId,
-          } satisfies SelectedAgent,
-        };
+      // A thread the retired basic-chat path pinned. The server moves it onto
+      // the default agent's record on its next turn (services/agent_access.py);
+      // until then, drive the chat with that record so the header, the picker and
+      // the turn all name the agent that will actually answer. The pin itself is
+      // not rewritten here — the server owns it.
+      if (recordId === "__basic_chat__") {
+        const records = await listRegistryRecords();
+        const match = records.find((r) => r.is_default && isChattable(r));
+        if (!match) return { problem: "unresolvable" as const };
+        return { agent: toSelectedAgent(match) };
       }
 
       // Deployed-fallback pins (registry off) have no registry record to GET.
@@ -100,30 +84,12 @@ export function useThreadAgent(
         const records = await listRegistryRecords();
         const match = records.find((r) => r.record_id === recordId);
         if (!match) return { problem: "unresolvable" as const };
-        return {
-          agent: {
-            recordId: match.record_id,
-            name: match.name,
-            description: match.description ?? undefined,
-            agentRuntimeArn: match.agent_runtime_arn ?? undefined,
-            harnessArn: match.harness_arn ?? undefined,
-            qualifier: match.qualifier ?? undefined,
-          } satisfies SelectedAgent,
-        };
+        return { agent: toSelectedAgent(match) };
       }
 
       try {
         const record = await getRegistryRecord(recordId);
-        return {
-          agent: {
-            recordId: record.record_id,
-            name: record.name,
-            description: record.description ?? undefined,
-            agentRuntimeArn: record.agent_runtime_arn ?? undefined,
-            harnessArn: record.harness_arn ?? undefined,
-            qualifier: record.qualifier ?? undefined,
-          } satisfies SelectedAgent,
-        };
+        return { agent: toSelectedAgent(record) };
       } catch (err) {
         const failure = err as { status?: number; detail?: string; message?: string };
         const shape = {
@@ -155,4 +121,22 @@ export function useThreadAgent(
     error,
     isLoading,
   }) as ThreadAgentResult;
+}
+
+function toSelectedAgent(record: {
+  record_id: string;
+  name: string;
+  description?: string | null;
+  agent_runtime_arn?: string | null;
+  harness_arn?: string | null;
+  qualifier?: string | null;
+}): SelectedAgent {
+  return {
+    recordId: record.record_id,
+    name: record.name,
+    description: record.description ?? undefined,
+    agentRuntimeArn: record.agent_runtime_arn ?? undefined,
+    harnessArn: record.harness_arn ?? undefined,
+    qualifier: record.qualifier ?? undefined,
+  };
 }

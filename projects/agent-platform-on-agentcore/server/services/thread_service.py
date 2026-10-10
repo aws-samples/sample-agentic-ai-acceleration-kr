@@ -8,7 +8,7 @@ from datetime import datetime
 from repositories.thread_repository import ThreadRepository
 from models.thread import Thread, ThreadStateUpdate, ThreadStatus
 from models.common import ThreadStatus as ThreadStatusEnum
-from core.config import BASIC_CHAT_RECORD_ID
+from core.config import LEGACY_BASIC_CHAT_RECORD_ID, OVERRIDES_METADATA_KEY
 
 
 class ThreadNotFound(Exception):
@@ -106,7 +106,6 @@ class ThreadService:
         thread_data: Optional[Dict[str, Any]] = None,
         agent_record_id: str = "",
         agent_name: str = "",
-        basic_chat_model_id: Optional[str] = None,
     ) -> Thread:
         """Create a new thread owned by `owner_sub`.
 
@@ -125,14 +124,8 @@ class ThreadService:
             owner_sub=owner_sub,
             agent_record_id=agent_record_id,
             agent_name=agent_name,
-            basic_chat_model_id=self._basic_model(agent_record_id, basic_chat_model_id),
         )
         return self.repository.create(thread)
-
-    @staticmethod
-    def _basic_model(agent_record_id: str, model_id: Optional[str]) -> Optional[str]:
-        """The model to pin, which only a basic-chat thread has."""
-        return model_id if agent_record_id == BASIC_CHAT_RECORD_ID else None
 
     @staticmethod
     def _has_turns(thread: Thread) -> bool:
@@ -152,8 +145,8 @@ class ThreadService:
         initial_values: Optional[Dict[str, Any]] = None,
         agent_record_id: str = "",
         agent_name: str = "",
-        basic_chat_model_id: Optional[str] = None,
         agent_target: Optional[Dict[str, Optional[str]]] = None,
+        adopted_model_id: Optional[str] = None,
     ) -> Thread:
         """Get thread or create if it doesn't exist.
 
@@ -174,6 +167,10 @@ class ThreadService:
         live here rather than in the client for the same reason ownership does:
         the request names both the thread and the agent, so nothing but the
         server can refuse the combination.
+
+        `adopted_model_id` matters only for a thread the retired basic-chat path
+        pinned: it is the model the binding decided to carry into the thread's
+        override when moving it onto `agent_record_id` (None = carry nothing).
         """
         thread = self.repository.get(thread_id)
         if not thread:
@@ -187,7 +184,6 @@ class ThreadService:
                 owner_sub=owner_sub,
                 agent_record_id=agent_record_id,
                 agent_name=agent_name,
-                basic_chat_model_id=self._basic_model(agent_record_id, basic_chat_model_id),
                 agent_target=agent_target if agent_record_id else None,
             )
             thread = self.repository.create(thread)
@@ -196,9 +192,7 @@ class ThreadService:
                 raise ThreadForbidden(
                     f"Thread {thread_id} belongs to another user"
                 )
-            thread = self._pin_agent(
-                thread, agent_record_id, agent_name, basic_chat_model_id
-            )
+            thread = self._pin_agent(thread, agent_record_id, agent_name, adopted_model_id)
             # Remember the target the registry answered with, so the next turn
             # with the same ARNs need not ask again (services/agent_access.py).
             if agent_target and agent_record_id and thread.agent_record_id == agent_record_id:
@@ -213,7 +207,7 @@ class ThreadService:
         thread: Thread,
         agent_record_id: str,
         agent_name: str,
-        basic_chat_model_id: Optional[str] = None,
+        adopted_model_id: Optional[str] = None,
     ) -> Thread:
         """Bind the thread to this agent, or refuse if it is bound to another.
 
@@ -233,12 +227,15 @@ class ThreadService:
         rather than refused: a local runtime configured by ARN alone has no
         registry record, and that path worked before pinning existed.
 
-        A basic-chat thread additionally pins its model: the same runtime under
-        a different model is, for the conversation's memory, a different agent.
-        One written before the model was recorded cannot be continued at all.
+        A thread pinned by the retired basic-chat path is the one exception to
+        "pinned to a different one": it moves onto the record the binding
+        resolved for it (the default agent), see _adopt_default_agent.
         """
         if not agent_record_id:
             return thread
+
+        if thread.agent_record_id == LEGACY_BASIC_CHAT_RECORD_ID:
+            return self._adopt_default_agent(thread, agent_record_id, agent_name, adopted_model_id)
 
         if thread.agent_record_id:
             if thread.agent_record_id != agent_record_id:
@@ -247,18 +244,6 @@ class ThreadService:
                     f"'{thread.agent_name or thread.agent_record_id}'. Start a "
                     "new chat to talk to a different agent."
                 )
-            if agent_record_id == BASIC_CHAT_RECORD_ID:
-                if not thread.basic_chat_model_id:
-                    raise ThreadAgentMismatch(
-                        f"Thread {thread.thread_id} has no recorded basic-chat "
-                        "model and cannot be continued. Start a new chat."
-                    )
-                if basic_chat_model_id != thread.basic_chat_model_id:
-                    raise ThreadAgentMismatch(
-                        f"Thread {thread.thread_id} is pinned to model "
-                        f"'{thread.basic_chat_model_id}'. Start a new chat to "
-                        "use a different model."
-                    )
             # Refresh the display name: the record may have been renamed since.
             if agent_name and thread.agent_name != agent_name:
                 thread.agent_name = agent_name
@@ -273,7 +258,29 @@ class ThreadService:
 
         thread.agent_record_id = agent_record_id
         thread.agent_name = agent_name
-        thread.basic_chat_model_id = self._basic_model(agent_record_id, basic_chat_model_id)
+        return thread
+
+    @staticmethod
+    def _adopt_default_agent(
+        thread: Thread, agent_record_id: str, agent_name: str, adopted_model_id: Optional[str]
+    ) -> Thread:
+        """Move a basic-chat thread onto the default agent's record.
+
+        The model it was pinned to becomes the thread's override — the same
+        place a harness thread keeps a chosen model — so the conversation keeps
+        answering with the model it was built under. An override already present
+        wins: it is a later, explicit choice. The retired attribute is cleared so
+        this runs once.
+        """
+        if adopted_model_id:
+            metadata = dict(thread.metadata or {})
+            overrides = dict(metadata.get(OVERRIDES_METADATA_KEY) or {})
+            overrides.setdefault("modelId", adopted_model_id)
+            metadata[OVERRIDES_METADATA_KEY] = overrides
+            thread.metadata = metadata
+        thread.agent_record_id = agent_record_id
+        thread.agent_name = agent_name
+        thread.basic_chat_model_id = None
         return thread
 
     def update_thread_state(

@@ -60,6 +60,7 @@ const LOCAL_DEV_USER: AuthUser = {
   email: "local@dev",
   role: "admin",
   groups: ["admin"],
+  teams: [],
 };
 
 export function useAuth(): AuthContextValue {
@@ -108,6 +109,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           name?: string;
           role: Role;
           groups: string[];
+          teams?: string[];
           provider?: string;
         };
         setUser({
@@ -117,6 +119,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           name: profile.name || undefined,
           role: profile.role,
           groups: profile.groups,
+          teams: profile.teams ?? [],
           provider: profile.provider,
         });
         return;

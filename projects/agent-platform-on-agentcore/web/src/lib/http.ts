@@ -77,6 +77,11 @@ export async function authedFetch(
     } catch (err) {
       // fetch only rejects when the request never completed — DNS, connection
       // refused, aborted. A non-2xx response resolves, so it never lands here.
+      //
+      // An abort is the caller's doing, not the network's: a retry would only
+      // fail again on the same signal after a pointless delay, and the caller
+      // wants its AbortError back to tell the two apart.
+      if (options.signal?.aborted) throw err;
       lastError = err;
       if (i < NETWORK_RETRIES) await sleep(RETRY_DELAY_MS * (i + 1));
     }

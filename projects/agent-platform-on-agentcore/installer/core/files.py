@@ -39,11 +39,19 @@ def is_git_tracked(path: Path) -> bool:
     return _git(["ls-files", "--error-unmatch", str(path)], path.parent).returncode == 0
 
 
-def _check_target(path: Path) -> str | None:
+_TRACKED_WARNING = (
+    "{path} 는 git 이 추적하는 파일입니다. 방금 계정 ID 를 써넣었으니 "
+    "커밋하지 마십시오."
+)
+
+
+def _check_target(path: Path, allow_tracked: bool) -> str | None:
     """Return a warning, or raise if writing here is unsafe."""
     if is_git_ignored(path):
         return None
     if is_git_tracked(path):
+        if allow_tracked:
+            return _TRACKED_WARNING.format(path=path)
         raise WriteRefused(
             f"{path} 는 git 이 추적(tracked)하는 파일이라 비밀값을 쓸 수 없습니다."
         )
@@ -73,8 +81,10 @@ def _backup(path: Path) -> tuple[Path | None, str | None]:
     return dest, None
 
 
-def write_secret_file(path: Path, content: str) -> WriteResult:
-    warning = _check_target(path)
+def write_secret_file(
+    path: Path, content: str, *, allow_tracked: bool = False
+) -> WriteResult:
+    warning = _check_target(path, allow_tracked)
     backup, backup_warning = _backup(path)
     if backup_warning:
         warning = backup_warning if warning is None else f"{warning}\n{backup_warning}"
@@ -89,6 +99,7 @@ def set_keys(
     updates: dict[str, str],
     *,
     style: str,
+    allow_tracked: bool = False,
 ) -> WriteResult:
     """Replace each key's line in `path`, leaving every other byte alone."""
     text = path.read_text() if path.exists() else ""
@@ -97,7 +108,7 @@ def set_keys(
             text = _set_env_key(text, key, rendered)
         else:
             text = hcl.set_var(text, key, rendered)
-    return write_secret_file(path, text)
+    return write_secret_file(path, text, allow_tracked=allow_tracked)
 
 
 def _set_env_key(text: str, key: str, value: str) -> str:

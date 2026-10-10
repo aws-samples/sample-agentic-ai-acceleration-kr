@@ -152,7 +152,7 @@ _MODEL_NOISE = frozenset({
     "cache", "read", "write", "creation", "global", "standard", "cross",
     "region", "batch", "flex", "priority", "provisioned", "latency",
     "optimized", "us", "eu", "apac", "apn", "use", "usw", "afs", "ape",
-    "v", "on", "demand", "ondemand", "inference", "tier",
+    "v", "on", "demand", "ondemand", "inference", "tier", "long", "ctx",
 })
 
 # A build stamp or an SDK version suffix inside a model id: `20241022`, `v2`.
@@ -206,12 +206,24 @@ def model_key(name: str) -> frozenset:
     return frozenset(tokens)
 
 
+# The marker Bedrock puts on the usagetypes of calls billed on a family's long
+# card (`…-input-tokens-long-ctx-global-standard`).
+_LONG_CONTEXT_INFIX = "long-ctx"
+
+
 def _tier_of(usage_type: str) -> Optional[str]:
-    """`input`, `output`, `cache_read` or `cache_write` — or None if not a token line."""
+    """`input`, `output`, `cache_read` or `cache_write` — `long_`-prefixed for a
+    long-context line — or None if not a token line.
+
+    The long lines are their own tiers because they are their own price. Folded
+    into the plain tier, a day that billed only long-context calls (2026-10-08:
+    Haiku 5.5 at 0.50 against a 0.10 card) read as a clean new input rate, and
+    two such days in a row would have taught the learner to price every Haiku 5.5
+    call five times over; a day with both kinds summed to a rate that is neither."""
     lowered = usage_type.lower()
     for infix, tier in _TIERS:
         if infix in lowered:
-            return tier
+            return f"long_{tier}" if _LONG_CONTEXT_INFIX in lowered else tier
     return None
 
 

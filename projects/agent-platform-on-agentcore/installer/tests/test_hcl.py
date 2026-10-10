@@ -233,8 +233,8 @@ def test_multi_line_list_default_is_read_whole():
     assert vars_["after"].default_literal == '"x"'
 
 
-def test_real_basic_chat_models_default_keeps_its_items():
+def test_real_allowed_models_default_keeps_its_items():
     from installer.core.env import get
 
     var = {v.name: v for v in hcl.read_variables(get("standalone").variables_path)}
-    assert var["basic_chat_allowed_models"].default_literal.count('"') >= 4
+    assert var["allowed_models"].default_literal.count('"') >= 4

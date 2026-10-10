@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { Download, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -42,11 +42,19 @@ import { EmptyPlot, Plot, PlotCell } from "./charts";
  */
 
 const TIERS = ["input", "output", "cache_read", "cache_write"] as const;
+// The second card a family can have for calls whose prompt crossed its
+// long-context threshold (Haiku 5.5: 100K). Same four columns, one row lower.
+const LONG_TIERS = ["long_input", "long_output", "long_cache_read", "long_cache_write"] as const;
+const ALL_TIERS: readonly string[] = [...TIERS, ...LONG_TIERS];
 const TIER_LABEL: Record<string, string> = {
   input: "입력",
   output: "출력",
   cache_read: "캐시 읽기",
   cache_write: "캐시 쓰기",
+  long_input: "장문맥 입력",
+  long_output: "장문맥 출력",
+  long_cache_read: "장문맥 캐시 읽기",
+  long_cache_write: "장문맥 캐시 쓰기",
 };
 const ROUTING_LABEL: Record<string, string> = { global: "global", regional: "regional" };
 
@@ -169,7 +177,7 @@ export function RateCardPanel({ days, onChanged }: { days: number; onChanged?: (
   const saveDraft = (row: { family: string; routing: string }) => {
     const draft = drafts[rowKey(row)];
     if (!draft) return;
-    const entries: RateEntryInput[] = TIERS.filter((tier) => (draft.usd[tier] ?? "").trim() !== "").map((tier) => ({
+    const entries: RateEntryInput[] = ALL_TIERS.filter((tier) => (draft.usd[tier] ?? "").trim() !== "").map((tier) => ({
       family: row.family,
       routing: row.routing,
       tier,
@@ -227,6 +235,43 @@ export function RateCardPanel({ days, onChanged }: { days: number; onChanged?: (
       </PlotCell>
     );
   }
+
+  // One tier's cell: the figure (click to change it), or an input while the
+  // row is being edited and this tier is missing or already being typed into.
+  const tierCell = (row: RateRow, tier: string) => {
+    const key = rowKey(row);
+    const draft = drafts[key];
+    const editing = Boolean(draft);
+    const cell = row.tiers[tier];
+    const open = editing && (missingTiers(row).includes(tier) || draft.usd[tier] !== undefined);
+    return (
+      <td key={tier} className="px-2 py-1.5 text-right tabular-nums">
+        {cell && !open ? (
+          <button
+            type="button"
+            className="text-right hover:underline"
+            title="새 요율을 입력합니다 (가격 변경)"
+            onClick={() => setDraft(key, { tier, value: cell.usd_per_1m })}
+          >
+            <div>{formatUsdPer1m(cell.usd_per_1m)}</div>
+            <div className="text-xxs text-muted-foreground">
+              {rateSourceLabel(cell.source)}
+              {cell.effective_from ? ` · ${cell.effective_from}` : ""}
+            </div>
+          </button>
+        ) : (
+          <Input
+            inputMode="decimal"
+            placeholder={cell ? cell.usd_per_1m : "—"}
+            className="h-7 w-24 text-right text-xs"
+            value={draft?.usd[tier] ?? ""}
+            disabled={busy}
+            onChange={(event) => setDraft(key, { tier, value: event.target.value })}
+          />
+        )}
+      </td>
+    );
+  };
 
   const rows: RateRow[] = [...data.rows];
   if (newRow) {
@@ -290,8 +335,12 @@ export function RateCardPanel({ days, onChanged }: { days: number; onChanged?: (
                     const key = rowKey(row);
                     const draft = drafts[key];
                     const editing = Boolean(draft);
+                    // The server sends the long tiers only for a family that has
+                    // a long card (or already carries a long figure).
+                    const longCard = LONG_TIERS.some((tier) => tier in row.tiers);
                     return (
-                      <tr key={key} className="border-b border-border/50 align-top last:border-0">
+                      <Fragment key={key}>
+                      <tr className={`align-top ${longCard ? "" : "border-b border-border/50 last:border-0"}`}>
                         <td className="px-2 py-1.5">
                           <div className="font-mono text-xxs">{row.family}</div>
                           {row.models.length > 0 && (
@@ -305,37 +354,7 @@ export function RateCardPanel({ days, onChanged }: { days: number; onChanged?: (
                           )}
                         </td>
                         <td className="px-2 py-1.5">{ROUTING_LABEL[row.routing] ?? row.routing}</td>
-                        {TIERS.map((tier) => {
-                          const cell = row.tiers[tier];
-                          const open = editing && (missingTiers(row).includes(tier) || draft.usd[tier] !== undefined);
-                          return (
-                            <td key={tier} className="px-2 py-1.5 text-right tabular-nums">
-                              {cell && !open ? (
-                                <button
-                                  type="button"
-                                  className="text-right hover:underline"
-                                  title="새 요율을 입력합니다 (가격 변경)"
-                                  onClick={() => setDraft(key, { tier, value: cell.usd_per_1m })}
-                                >
-                                  <div>{formatUsdPer1m(cell.usd_per_1m)}</div>
-                                  <div className="text-xxs text-muted-foreground">
-                                    {rateSourceLabel(cell.source)}
-                                    {cell.effective_from ? ` · ${cell.effective_from}` : ""}
-                                  </div>
-                                </button>
-                              ) : (
-                                <Input
-                                  inputMode="decimal"
-                                  placeholder={cell ? cell.usd_per_1m : "—"}
-                                  className="h-7 w-24 text-right text-xs"
-                                  value={draft?.usd[tier] ?? ""}
-                                  disabled={busy}
-                                  onChange={(event) => setDraft(key, { tier, value: event.target.value })}
-                                />
-                              )}
-                            </td>
-                          );
-                        })}
+                        {TIERS.map((tier) => tierCell(row, tier))}
                         <td className="px-2 py-1.5">
                           {editing ? (
                             <Input
@@ -386,6 +405,16 @@ export function RateCardPanel({ days, onChanged }: { days: number; onChanged?: (
                           )}
                         </td>
                       </tr>
+                      {longCard && (
+                        <tr className="border-b border-border/50 align-top last:border-0">
+                          <td className="px-2 pb-1.5 text-xxs text-muted-foreground" colSpan={2}>
+                            {`└ 프롬프트 ${((row.long_context_threshold ?? 0) / 1000).toLocaleString("ko-KR")}K 초과 호출`}
+                          </td>
+                          {LONG_TIERS.map((tier) => tierCell(row, tier))}
+                          <td colSpan={2} />
+                        </tr>
+                      )}
+                      </Fragment>
                     );
                   })}
                 </tbody>

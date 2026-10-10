@@ -9,26 +9,18 @@ import routes.config as cfg  # noqa: E402
 def test_config_reports_capabilities(monkeypatch):
     monkeypatch.setattr(cfg, "registry_enabled", lambda: False)
     monkeypatch.setattr(cfg, "HARNESS_EXECUTION_ROLE_ARN", "arn:role")
-    monkeypatch.setattr(cfg, "BASIC_CHAT_ALLOWED_MODELS", [])
+    monkeypatch.setattr(cfg, "ALLOWED_MODELS", [])
     assert cfg.get_config() == {
         "registryEnabled": False,
         "harnessEnabled": True,
-        "basicChat": {"configured": False, "models": []},
+        "allowedModels": [],
     }
 
 
-def test_basic_chat_needs_a_runtime_to_answer(monkeypatch):
-    """The model list ships by default; without a runtime the option would
-    appear and every turn would fail with "no runtime to run on"."""
-    monkeypatch.setattr(cfg, "registry_enabled", lambda: False)
-    monkeypatch.setattr(cfg, "BASIC_CHAT_ALLOWED_MODELS", ["m1"])
-    monkeypatch.setattr(cfg, "BASIC_CHAT_RUNTIME_ARN", "")
-    monkeypatch.delenv("AGENT_RUNTIME_ARN", raising=False)
-    assert cfg.get_config()["basicChat"] == {"configured": False, "models": ["m1"]}
-
-    monkeypatch.setenv("AGENT_RUNTIME_ARN", "arn:runtime")
-    assert cfg.get_config()["basicChat"] == {"configured": True, "models": ["m1"]}
-
-    monkeypatch.delenv("AGENT_RUNTIME_ARN")
-    monkeypatch.setattr(cfg, "BASIC_CHAT_RUNTIME_ARN", "arn:basic")
-    assert cfg.get_config()["basicChat"]["configured"] is True
+def test_the_allow_list_is_published_in_picker_order(monkeypatch):
+    """The web offers exactly what the server will accept, in the operator's order."""
+    monkeypatch.setattr(cfg, "registry_enabled", lambda: True)
+    monkeypatch.setattr(cfg, "ALLOWED_MODELS", ["m2", "m1"])
+    body = cfg.get_config()
+    assert body["allowedModels"] == ["m2", "m1"]
+    assert "basicChat" not in body

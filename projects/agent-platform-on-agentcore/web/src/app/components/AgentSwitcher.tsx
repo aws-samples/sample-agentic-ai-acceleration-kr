@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQueryState } from "nuqs";
+import { useDefaultAgent } from "@/app/hooks/useDefaultAgent";
 import {
   Bot,
   Check,
@@ -26,12 +27,8 @@ import {
   listRegistryRecords,
   type RegistryRecordSummary,
 } from "@/lib/registry";
-import { getCapabilities, type BasicChatCapability } from "@/lib/capabilities";
-import {
-  BASIC_CHAT_NAME,
-  basicChatAgent,
-  basicChatModelLabel,
-} from "@/lib/basicChat.mjs";
+import { modelLabel } from "@/lib/modelLabel.mjs";
+import { useChatContext } from "@/providers/ChatProvider";
 
 /**
  * Switches the agent a chat is bound to, in place.
@@ -59,32 +56,32 @@ export function AgentSwitcher({ className }: { className?: string }) {
   // to the selection here would put a confident agent name on a chat whose header
   // says it cannot be continued, and imply picking that same agent is a no-op —
   // when in fact it starts a new thread.
-  const selected = problem ? null : (threadAgent ?? config?.selectedAgent);
+  // With nothing picked, the default agent is what a new chat will reach, so
+  // the trigger names it rather than reading "Select agent" above a chat whose
+  // header already says who answers. The saved config stays untouched.
+  const { defaultAgent } = useDefaultAgent();
+  const selected = problem
+    ? null
+    : (threadAgent ?? config?.selectedAgent ?? defaultAgent);
+  // The model this thread overrides with, shown beside the pinned default agent
+  // so the row says what will answer. Same source the override popover edits.
+  const { overrides } = useChatContext();
 
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [records, setRecords] = useState<RegistryRecordSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Basic chat sits above the registry list: one row per allowed model. The
-  // allow-list is the server's, fetched on open so an operator change shows up.
-  const [basicChat, setBasicChat] = useState<BasicChatCapability | undefined>();
 
   // Load once per open so a newly approved agent shows up without a reload.
-  // Approved-only, both here and in isChattable: the server refuses to bind a
-  // thread to an unapproved record, so listing one would offer a choice that
-  // can only end in a 403.
+  // The filter is isChattable, not a status check: an edited record is DRAFT but
+  // still discoverable, and must stay in the picker while its approved revision
+  // serves. Listing unapproved records would offer a choice that can only end in
+  // a 403, which isChattable already excludes.
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     setError(null);
-    getCapabilities()
-      .then((caps) => {
-        if (!cancelled) setBasicChat(caps.basicChat ?? { configured: false, models: [] });
-      })
-      .catch(() => {
-        if (!cancelled) setBasicChat({ configured: false, models: [] });
-      });
-    listRegistryRecords({ status: "APPROVED" })
+    listRegistryRecords()
       .then((all) => {
         if (!cancelled) setRecords(all.filter(isChattable));
       })
@@ -104,40 +101,16 @@ export function AgentSwitcher({ className }: { className?: string }) {
   // just because the query ranked it out.
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return records ?? [];
-    return (records ?? []).filter(
+    const matching = (records ?? []).filter(
       (r) =>
+        !q ||
         r.name.toLowerCase().includes(q) ||
         (r.description ?? "").toLowerCase().includes(q)
     );
+    // The default agent first: it is what a new chat starts with when nothing
+    // is picked, so it is the row people look for. Registry order after that.
+    return [...matching.filter((r) => r.is_default), ...matching.filter((r) => !r.is_default)];
   }, [records, query]);
-
-  const basicModels = useMemo(() => {
-    if (!basicChat?.configured) return [];
-    const q = query.trim().toLowerCase();
-    return basicChat.models.filter(
-      (m) =>
-        !q ||
-        BASIC_CHAT_NAME.includes(q) ||
-        m.toLowerCase().includes(q) ||
-        basicChatModelLabel(m).toLowerCase().includes(q)
-    );
-  }, [basicChat, query]);
-
-  const selectBasic = useCallback(
-    (modelId: string) => {
-      setOpen(false);
-      setQuery("");
-      if (selected?.basicChat && selected.basicChatModelId === modelId) return;
-      const agent = basicChatAgent(basicChat, modelId);
-      if (!agent) return;
-      saveConfig({ ...(config ?? {}), selectedAgent: agent });
-      // Same reason as `select` below: a thread is pinned to one agent — and a
-      // basic-chat thread to one model — so changing either starts a new one.
-      void setThreadId(null);
-    },
-    [basicChat, config, saveConfig, selected?.basicChat, selected?.basicChatModelId, setThreadId]
-  );
 
   const select = useCallback(
     (record: RegistryRecordSummary) => {
@@ -186,9 +159,7 @@ export function AgentSwitcher({ className }: { className?: string }) {
         >
           <Bot className="h-3.5 w-3.5 flex-shrink-0" />
           <span className="min-w-0 truncate">
-            {selected?.basicChat
-              ? `${selected.name} · ${basicChatModelLabel(selected.basicChatModelId)}`
-              : (selected?.name ?? "Select agent")}
+            {selected?.name ?? "Select agent"}
           </span>
           <ChevronDown className="h-3.5 w-3.5 flex-shrink-0 opacity-60" />
         </button>
@@ -207,45 +178,6 @@ export function AgentSwitcher({ className }: { className?: string }) {
         </div>
 
         <div className="max-h-72 overflow-y-auto p-1">
-          {basicModels.length > 0 && (
-            <div className="mb-1 border-b pb-1">
-              <p className="px-2 pb-1 pt-1 text-[10px] uppercase tracking-wide text-muted-foreground">
-                {BASIC_CHAT_NAME}
-              </p>
-              {basicModels.map((modelId) => {
-                const isSelected =
-                  !!selected?.basicChat && selected.basicChatModelId === modelId;
-                return (
-                  <button
-                    key={modelId}
-                    type="button"
-                    onClick={() => selectBasic(modelId)}
-                    data-basic-model={modelId}
-                    className={cn(
-                      "flex w-full items-start gap-2 rounded-md px-2 py-2 text-left transition-colors",
-                      "hover:bg-accent",
-                      isSelected && "bg-accent"
-                    )}
-                  >
-                    <Check
-                      className={cn(
-                        "mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-primary",
-                        !isSelected && "invisible"
-                      )}
-                    />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium">
-                        {basicChatModelLabel(modelId)}
-                      </span>
-                      <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-                        {modelId}
-                      </span>
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
           {records === null ? (
             <div className="flex items-center justify-center gap-2 p-4 text-xs text-muted-foreground">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -254,13 +186,11 @@ export function AgentSwitcher({ className }: { className?: string }) {
           ) : error ? (
             <p className="p-3 text-xs text-destructive">{error}</p>
           ) : filtered.length === 0 ? (
-            basicModels.length === 0 && (
-              <p className="p-3 text-xs text-muted-foreground">
-                {query.trim()
-                  ? "일치하는 에이전트가 없습니다."
-                  : "채팅 가능한 에이전트가 없습니다."}
-              </p>
-            )
+            <p className="p-3 text-xs text-muted-foreground">
+              {query.trim()
+                ? "일치하는 에이전트가 없습니다."
+                : "채팅 가능한 에이전트가 없습니다."}
+            </p>
           ) : (
             filtered.map((record) => {
               const isSelected = record.record_id === selected?.recordId;
@@ -289,14 +219,25 @@ export function AgentSwitcher({ className }: { className?: string }) {
                       <span className="flex-shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">
                         {record.harness_arn ? "Harness" : "Runtime"}
                       </span>
+                      {record.is_default && (
+                        <span className="flex-shrink-0 rounded-sm bg-primary/10 px-1 text-[10px] uppercase tracking-wide text-primary">
+                          Default
+                        </span>
+                      )}
                       {record.source === "deployed" && (
                         <span className="text-[10px] uppercase tracking-wide opacity-60">Deployed</span>
                       )}
                     </span>
-                    {record.description && (
-                      <span className="mt-0.5 line-clamp-2 block text-xs text-muted-foreground">
-                        {record.description}
+                    {record.is_default && isSelected && overrides.modelId ? (
+                      <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+                        {modelLabel(overrides.modelId)}
                       </span>
+                    ) : (
+                      record.description && (
+                        <span className="mt-0.5 line-clamp-2 block text-xs text-muted-foreground">
+                          {record.description}
+                        </span>
+                      )
                     )}
                   </span>
                 </button>

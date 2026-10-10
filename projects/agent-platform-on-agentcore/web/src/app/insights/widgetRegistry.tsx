@@ -16,6 +16,7 @@ import { CostCompositionPanel } from "./components/CostCompositionPanel";
 import { ModelMixPanel } from "./components/ModelMixPanel";
 import { TrendCharts } from "./components/TrendCharts";
 import { ReusePanel } from "./components/ReusePanel";
+import { TeamPanel } from "./components/TeamPanel";
 import { UserPanel } from "./components/UserPanel";
 import { QualityPanel } from "./components/QualityPanel";
 import { TriagePanel } from "./components/TriagePanel";
@@ -44,7 +45,8 @@ export type WidgetId =
   | "trend"
   | "reuse"
   | "users"
-  | "guardrail";
+  | "guardrail"
+  | "teams";
 
 export interface WidgetConfig {
   title: string;
@@ -332,6 +334,15 @@ export function createWidgetRegistry(ctx: WidgetRegistryContext): Record<WidgetI
       render: () => (
         <PlotStack>
           <UserPanel days={ctx.days} />
+        </PlotStack>
+      ),
+    },
+    teams: {
+      title: "팀별 사용량과 정책",
+      defaultSpan: "full",
+      render: () => (
+        <PlotStack>
+          <TeamPanel days={ctx.days} />
         </PlotStack>
       ),
     },

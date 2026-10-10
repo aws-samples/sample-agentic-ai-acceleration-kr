@@ -2,12 +2,15 @@
 Configuration settings for the FastAPI application
 """
 import json
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file.
 #
@@ -52,6 +55,26 @@ AUTH_ENFORCED = os.getenv("AUTH_ENFORCED", "true").lower() != "false"
 
 def _csv(name: str) -> List[str]:
     return [v.strip() for v in os.getenv(name, "").split(",") if v.strip()]
+
+
+def _json_dict(name: str) -> Dict[str, str]:
+    """A JSON object of string -> string from an env var; anything else reads as {}.
+
+    Used for TEAM_EXECUTION_ROLES, which terraform `jsonencode`s. A malformed
+    value must not keep the server from starting - teams are a feature, not a
+    precondition - so bad JSON and non-string values are dropped, not raised.
+    """
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("%s is not valid JSON; ignoring", name)
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(k): v for k, v in data.items() if isinstance(v, str) and v}
 
 
 # ── OIDC login providers (Microsoft Entra ID and the like) ───────────────────
@@ -206,19 +229,25 @@ DYNAMODB_THREADS_TABLE = os.getenv("DYNAMODB_THREADS_TABLE", "bap-threads")
 # Bedrock Configuration
 BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "global.anthropic.claude-sonnet-5-5")
 
-# Basic chat: talk to the default runtime with an operator-curated model, without
-# picking a registry agent. Off until BASIC_CHAT_ALLOWED_MODELS names at least one
-# model. Use inference-profile ids (global.anthropic.…): Claude 5 foundation-model
-# ids are rejected by ConverseStream with an on-demand-throughput error.
-BASIC_CHAT_ALLOWED_MODELS = _csv("BASIC_CHAT_ALLOWED_MODELS")
-# Runtime that answers basic chat. Empty means the server's default runtime
-# (AGENT_RUNTIME_ARN), which is what the deployed stack uses.
-BASIC_CHAT_RUNTIME_ARN = os.getenv("BASIC_CHAT_RUNTIME_ARN", "").strip()
-# Synthetic record id pinned onto basic-chat threads. Not a registry id: the
-# thread also pins the model (Thread.basic_chat_model_id) because the memory
-# built under one model should not be continued under another unnoticed.
-BASIC_CHAT_RECORD_ID = "__basic_chat__"
-BASIC_CHAT_AGENT_NAME = "기본 채팅"
+# Models a per-thread override may pick, for every agent (runtime or harness).
+# The operator's ceiling: a team list (services/team_service.py) can only narrow
+# it. Empty = model overrides are refused and each agent runs its own default.
+# Use inference-profile ids (global.anthropic.…): Claude 5 foundation-model ids
+# are rejected by ConverseStream with an on-demand-throughput error.
+ALLOWED_MODELS = _csv("ALLOWED_MODELS")
+# team name -> harness execution role ARN, one per `teams` entry in terraform.
+# Empty = the deployment declared no teams, and every team feature stays off.
+TEAM_EXECUTION_ROLES: Dict[str, str] = _json_dict("TEAM_EXECUTION_ROLES")
+# The retired basic-chat path pinned this synthetic id onto its threads. Kept
+# only to recognise those threads: the next turn moves them onto the default
+# agent's record (services/agent_access.py), and Insights names the history
+# they left in the usage ledger (routes/insights.py).
+LEGACY_BASIC_CHAT_RECORD_ID = "__basic_chat__"
+LEGACY_BASIC_CHAT_LABEL = "기본 채팅 (이전)"
+# Thread.metadata key holding the per-thread model / system-prompt override the
+# web resends on every turn. The name predates overrides on runtime agents and
+# stays so threads written under it keep their settings.
+OVERRIDES_METADATA_KEY = "harness_overrides"
 
 # AgentCore Agent Registry (created by infra/modules/agent_registry)
 AGENT_REGISTRY_ID = os.getenv("AGENT_REGISTRY_ID", "")
@@ -229,6 +258,11 @@ AGENT_REGISTRY_ID = os.getenv("AGENT_REGISTRY_ID", "")
 # "1"/"true": force on. A registry that is configured but answers with an AWS
 # error degrades to the same fallback at read time (registry_service).
 AP_USE_REGISTRY = os.getenv("AP_USE_REGISTRY", "auto").strip().lower()
+# IAM role AWS Agent Registry assumes to SigV4-sign record synchronisation
+# fetches against servers on AgentCore Runtime/Gateway (service `agent-registry`).
+# The server task role needs iam:PassRole on it. Empty = the Register dialog
+# offers only unauthenticated synchronisation.
+REGISTRY_SYNC_ROLE_ARN = os.getenv("REGISTRY_SYNC_ROLE_ARN", "").strip()
 
 # Managed Agent Harness (infra/modules/iam, infra/modules/s3_skills)
 HARNESS_EXECUTION_ROLE_ARN = os.getenv("HARNESS_EXECUTION_ROLE_ARN", "")
@@ -252,6 +286,8 @@ USAGE_TIMEZONE = os.getenv("USAGE_TIMEZONE", "UTC")
 # Per-user preferences (dashboard layout). Absent means the layout routes serve
 # the default and accept no writes — the page still works, unpersisted.
 PREFS_TABLE = os.getenv("PREFS_TABLE", "")
+# The platform gateway whose policy-engine decision metrics Insights collects.
+MCP_GATEWAY_ID = os.getenv("MCP_GATEWAY_ID", "").strip()
 
 # Harness output sweep. A harness runs its tools inside AWS, so a file it produces
 # stays in its sandbox; the server collects it after the turn (see

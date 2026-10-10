@@ -29,7 +29,7 @@ yarn dev                     # http://localhost:3000
 
 | 경로 | 내용 |
 | --- | --- |
-| `/` | 채팅. `?threadId=` 로 스레드를 연다. 에이전트 전환 메뉴 맨 위에는 서버가 허용한 모델별 **기본 채팅** 행이 있다(`/api/config` 의 `basicChat.models`, 로직은 `lib/basicChat.mjs`) |
+| `/` | 채팅. `?threadId=` 로 스레드를 연다. 에이전트 전환 메뉴 맨 위에는 기본 런타임을 가리키는 **기본 에이전트** 레코드(`is_default`)가 고정되고, 모델은 오버라이드 팝오버에서 서버 허용 목록(`/api/config` 의 `allowedModels`) 안에서 고른다 |
 | `/registry`, `/harness`, `/knowledge` | 일반 사용자 메뉴. admin 이 Settings 에서 숨길 수 있다 |
 | `/insights`, `/settings` | admin. Settings 는 `?tab=menus\|rates\|mcp` 세 탭 |
 | `/mcp` | `/settings?tab=mcp` 로 리다이렉트(옛 북마크용) |

@@ -242,10 +242,38 @@ data "aws_iam_policy_document" "task" {
       "agent-registry:UpdateRegistryRecordStatus",
       "agent-registry:SearchDiscoverableRegistryRecords",
       "agent-registry:ListDiscoverableRegistryRecords",
+      # Also authorises BatchGetDiscoverableRegistryRecord, which has no action
+      # of its own (each requested record is checked against this one).
       "agent-registry:GetDiscoverableRegistryRecord",
       "agent-registry:BatchGetDiscoverableRegistryRecord",
+      # The registry's own MCP endpoint (search/list/batch-get as MCP tools).
+      "agent-registry:InvokeRegistryMcp",
+      # Sync-created records carry the Platform cost-allocation tag.
+      "agent-registry:TagResource",
+      "agent-registry:UntagResource",
+      "agent-registry:ListTagsForResource",
     ]
     resources = ["arn:aws:agent-registry:${var.region}:${data.aws_caller_identity.current.account_id}:*"]
+  }
+
+  # Registering a record whose descriptor source is signed with IAM hands the
+  # sync role to AgentCore Identity, which does the fetch on the registry's
+  # behalf — hence PassedToService is bedrock-agentcore, not agent-registry
+  # (AWS registry-sync-records). Without this the create fails with
+  # AccessDenied on iam:PassRole.
+  dynamic "statement" {
+    for_each = var.registry_sync_role_arn != "" ? [var.registry_sync_role_arn] : []
+    content {
+      sid       = "AgentRegistrySyncPassRole"
+      effect    = "Allow"
+      actions   = ["iam:PassRole"]
+      resources = [statement.value]
+      condition {
+        test     = "StringEquals"
+        variable = "iam:PassedToService"
+        values   = ["bedrock-agentcore.amazonaws.com", "agent-registry.amazonaws.com"]
+      }
+    }
   }
 
   statement {
@@ -378,7 +406,7 @@ data "aws_iam_policy_document" "task" {
     sid       = "PassHarnessExecutionRole"
     effect    = "Allow"
     actions   = ["iam:PassRole"]
-    resources = [var.harness_execution_role_arn]
+    resources = concat([var.harness_execution_role_arn], var.team_harness_role_arns)
 
     condition {
       test     = "StringEquals"

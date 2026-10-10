@@ -9,8 +9,11 @@ import {
   BarChart,
   CartesianGrid,
   Legend,
+  Cell,
   Line,
   LineChart,
+  Pie,
+  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -28,13 +31,14 @@ import {
   COST_COLOR,
   GRID,
   MUTED_MARK,
+  SERIES_CAP,
   SERIES_COLORS,
   TOOLTIP_CONTENT,
   TOOLTIP_ITEM,
   TOOLTIP_LABEL,
 } from "@/app/components/chartTheme";
 import { cn } from "@/lib/utils";
-import { shareOf } from "@/app/insights/insightsFormat.mjs";
+import { shareOf, topNWithOther } from "@/app/insights/insightsFormat.mjs";
 
 /**
  * The charts this dashboard owns.
@@ -463,6 +467,96 @@ export function ShareBar({
         ))}
       </ul>
       {footnote && <p className="text-xxs text-muted-foreground">{footnote}</p>}
+    </div>
+  );
+}
+
+/**
+ * Part-to-whole as a donut plus the same legend `ShareBar` carries.
+ *
+ * A donut rather than a second ranked list: the ranked bars beside it already
+ * answer "which is biggest", and this answers "what share of the whole" — the
+ * question a per-tool breakdown is actually asked. The hole keeps the ink down
+ * and leaves the centre for the total, so the figure the slices divide is on the
+ * plot rather than in the reader's head.
+ *
+ * Past `SERIES_CAP` slices the tail folds into "기타" (`topNWithOther`): a ninth
+ * hue would not be distinguishable, and a sliver is not a reading. The legend
+ * beneath carries exact figures, so nothing is gated behind hover.
+ */
+export function DonutShare({
+  segments,
+  totalLabel,
+  empty = "이 기간에 호출된 툴이 없습니다.",
+}: {
+  segments: Array<{ name: string; value: number }>;
+  /** Unit for the centre total, e.g. "회". */
+  totalLabel?: string;
+  empty?: string;
+}) {
+  const total = segments.reduce((sum, segment) => sum + segment.value, 0);
+  if (segments.length === 0 || total <= 0) return <EmptyPlot label={empty} />;
+  const data = topNWithOther(segments, SERIES_CAP) as Array<{
+    name: string;
+    value: number;
+    folded?: number;
+  }>;
+
+  return (
+    <div className="flex flex-col gap-2 @md:flex-row @md:items-center">
+      <div className="relative mx-auto size-40 shrink-0">
+        <ResponsiveContainer width="100%" height="100%" minWidth={0}>
+          <PieChart>
+            <Pie
+              data={data}
+              dataKey="value"
+              nameKey="name"
+              innerRadius={52}
+              outerRadius={76}
+              paddingAngle={2}
+              stroke="hsl(var(--card))"
+              strokeWidth={BAR_GAP}
+              isAnimationActive={false}
+            >
+              {data.map((segment, index) => (
+                <Cell key={segment.name} fill={SERIES_COLORS[index % SERIES_CAP]} />
+              ))}
+            </Pie>
+            <Tooltip
+              contentStyle={TOOLTIP_CONTENT}
+              labelStyle={TOOLTIP_LABEL}
+              itemStyle={TOOLTIP_ITEM}
+              formatter={(value) => [`${Number(value).toLocaleString("ko-KR")}${totalLabel ?? ""}`, ""]}
+            />
+          </PieChart>
+        </ResponsiveContainer>
+        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+          <span className="text-base font-semibold tabular-nums">
+            {total.toLocaleString("ko-KR")}
+          </span>
+          {totalLabel && <span className="text-xxs text-muted-foreground">{totalLabel}</span>}
+        </div>
+      </div>
+      <ul className="min-w-0 flex-1 space-y-1">
+        {data.map((segment, index) => (
+          <li key={segment.name} className="flex min-w-0 items-center gap-1.5 text-xs">
+            <span
+              className="size-2 shrink-0 rounded-sm"
+              style={{ backgroundColor: SERIES_COLORS[index % SERIES_CAP] }}
+            />
+            <span className="min-w-0 truncate text-muted-foreground" title={segment.name}>
+              {segment.name}
+              {segment.folded ? ` (${segment.folded}개)` : ""}
+            </span>
+            <span className="ml-auto shrink-0 tabular-nums">
+              {segment.value.toLocaleString("ko-KR")}
+            </span>
+            <span className="w-9 shrink-0 text-right text-xxs tabular-nums text-muted-foreground">
+              {Math.round(shareOf(segment.value, total) * 100)}%
+            </span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

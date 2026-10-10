@@ -37,6 +37,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { BEDROCK_MODELS } from "@/lib/models";
+import { useAuth } from "@/providers/AuthProvider";
+import { fetchTeams } from "@/lib/settings";
 import {
   AlertTriangle,
   Blocks,
@@ -379,6 +381,17 @@ export default function HarnessPage() {
   // not (see `server/routes/harness.py`). Only those two controls are gated, so
   // the page itself renders for any signed-in user.
   const { allowed: isAdmin } = useRequireRole(["admin"]);
+  const { user } = useAuth();
+  const myTeams = user?.teams ?? [];
+  const [teamOptions, setTeamOptions] = useState<string[]>(myTeams);
+  const [team, setTeam] = useState<string>(myTeams.length === 1 ? myTeams[0] : "");
+  useEffect(() => {
+    if (!isAdmin) return;
+    fetchTeams()
+      .then((r) => setTeamOptions(r.teams.map((t) => t.name)))
+      .catch(() => setTeamOptions(myTeams));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin]);
 
   const [catalog, setCatalog] = useState<HarnessCatalog | null>(null);
   const [harnesses, setHarnesses] = useState<HarnessSummary[]>([]);
@@ -604,6 +617,7 @@ export default function HarnessPage() {
       // registration continue on the server. The phases below are polls.
       const result = await composeHarness({
         name: name.trim(),
+        team: team || undefined,
         description: description.trim() || undefined,
         system_prompt: systemPrompt.trim() || undefined,
         model_id: modelId.trim() || undefined,
@@ -1098,6 +1112,32 @@ export default function HarnessPage() {
                       </p>
                     </div>
                   </div>
+
+                  {teamOptions.length > 0 && (
+                    <div className="grid gap-2">
+                      <Label htmlFor="h-team">팀</Label>
+                      <select
+                        id="h-team"
+                        className="h-9 rounded-md border bg-background px-2 text-sm"
+                        value={team}
+                        onChange={(e) => setTeam(e.target.value)}
+                        disabled={!!editing}
+                      >
+                        {(isAdmin || myTeams.length === 0) && <option value="">shared (기본 역할)</option>}
+                        {/* A member of several teams must pick one; without this the
+                            browser shows the first team while the form sends "". */}
+                        {!isAdmin && myTeams.length > 1 && (
+                          <option value="" disabled>팀 선택</option>
+                        )}
+                        {teamOptions.map((t) => (
+                          <option key={t} value={t}>{t}</option>
+                        ))}
+                      </select>
+                      <p className="text-xxs leading-normal text-muted-foreground">
+                        이 팀의 실행 역할로 동작합니다. 팀 설정에 허용 툴 목록이 있으면 그 목록이 적용되고(관리자만 덮어쓸 수 있음), 없으면 Allowed tools 를 씁니다. 여러 팀에 속해 있으면 하나를 골라야 합니다.
+                      </p>
+                    </div>
+                  )}
 
                   <div className="grid gap-2">
                     <Label htmlFor="h-allowed">Allowed tools</Label>

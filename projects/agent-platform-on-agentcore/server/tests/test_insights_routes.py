@@ -975,3 +975,20 @@ def test_a_broken_directory_leaves_the_rows_unnamed_but_served():
 
     assert body["subjects"] == {}
     assert body["users"][0]["sub"] == "sub-1"
+
+
+def test_history_from_the_retired_basic_chat_path_is_named_not_shown_as_an_id():
+    """No registry record ever had the id `__basic_chat__`, so the generic
+    `names.get(id, id)` would print the raw id in the agent table."""
+    usage = usage_with_one_agent({
+        f"AGENTS#{_current_month}": [
+            {"sk": f"D#{_today_str}#A#__basic_chat__", "turns": Decimal(3),
+             "input_tokens": Decimal(100), "output_tokens": Decimal(10)},
+        ],
+    })
+    wire(usage, StubTelemetry())
+
+    body = insights.summary(days=7, user=user(is_admin=True))
+
+    rows = {row["record_id"]: row for row in body["agents"]}
+    assert rows["__basic_chat__"]["name"] == "기본 채팅 (이전)"

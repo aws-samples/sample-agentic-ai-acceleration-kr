@@ -727,6 +727,14 @@ test("a row opens with exactly the tiers it lacks", () => {
   assert.deepEqual(missingTiers({ tiers: {} }), ["input", "output", "cache_read", "cache_write"]);
 });
 
+test("a family with a long card also lacks the long tiers the server sent empty", () => {
+  const plain = { input: { usd_per_1m: "0.1" }, output: { usd_per_1m: "0.5" }, cache_read: { usd_per_1m: "0.01" }, cache_write: { usd_per_1m: "0.125" } };
+  const row = { tiers: { ...plain, long_input: null, long_output: { usd_per_1m: "2.5" }, long_cache_read: null, long_cache_write: null } };
+  assert.deepEqual(missingTiers(row), ["long_input", "long_cache_read", "long_cache_write"]);
+  // A one-card family has no long tiers to be missing.
+  assert.deepEqual(missingTiers({ tiers: plain }), []);
+});
+
 test("the overlay summary names each source instead of calling everything the bill's", () => {
   assert.equal(overlaySummary([]), null);
   assert.equal(

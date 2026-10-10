@@ -23,9 +23,9 @@ web_search_backend = "agentcore"
 # 0 parks both ECS services without destroying the environment.
 # desired_count = 1
 
-# Models offered by "basic chat" (no registry agent; the default runtime answers).
-# Inference-profile ids. Empty list hides the option.
-# basic_chat_allowed_models = ["global.anthropic.claude-sonnet-5-5", "global.anthropic.claude-opus-5-5", "global.anthropic.claude-haiku-4-5-20251001-v1:0"]
+# Models a per-thread override may pick, for every agent (inference-profile ids,
+# picker order). Empty list hides the model override.
+# allowed_models = ["global.anthropic.claude-sonnet-5-5", "global.anthropic.claude-opus-5-5", "global.anthropic.claude-haiku-5-5"]
 
 # Email subscribed to the CloudWatch alarms SNS topic (ALB 5xx, web healthy hosts,
 # usage-table throttles). Empty leaves the topic without a subscription.
@@ -77,3 +77,18 @@ web_search_backend = "agentcore"
 # oidc_admin_groups   = ["PlatformAdmin"]
 # oidc_required_group = ""          # empty = whole tenant may sign in
 # oidc_redirect_uris  = ["https://agents.example.com/auth/callback", "http://localhost:3000/auth/callback"]
+
+# ── Teams and gateway policy ─────────────────────────────────────────────────
+# One harness execution role + Cognito group `team:<name>` per team. With
+# enable_gateway_policy a Cedar policy engine guards the Lambda tools gateway.
+# The engine uses the hashicorp/time provider: an existing checkout must run
+# `terraform init` once before `plan`.
+# teams                 = ["finance", "hr", "support"]
+# enable_gateway_policy = true
+# policy_mode           = "LOG_ONLY"   # ENFORCE denies; LOG_ONLY only records
+# Roles that call the gateway but are not <project>-agent-runtime (e.g. a runtime
+# deployed with the toolkit's AmazonBedrockAgentCoreSDKRuntime-* role). Under
+# ENFORCE a caller without a permit sees no tools at all.
+# extra_platform_role_names = ["AmazonBedrockAgentCoreSDKRuntime-ap-northeast-1-xxxxxxxxxx"]
+# Workshop mock tools (approve_expense, lookup_salary); off outside the workshop.
+# demo_tools = true

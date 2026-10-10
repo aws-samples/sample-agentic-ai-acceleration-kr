@@ -704,7 +704,12 @@ export function rateCandidateNote(candidate) {
  */
 export function missingTiers(row) {
   const order = ["input", "output", "cache_read", "cache_write"];
-  return order.filter((tier) => !row?.tiers?.[tier]);
+  // The long card's tiers count only where the server sent them: a family with
+  // one card has no long tiers to be missing.
+  const long = ["long_input", "long_output", "long_cache_read", "long_cache_write"].filter(
+    (tier) => row?.tiers && tier in row.tiers,
+  );
+  return [...order, ...long].filter((tier) => !row?.tiers?.[tier]);
 }
 
 /**

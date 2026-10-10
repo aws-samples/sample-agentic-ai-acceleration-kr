@@ -3,13 +3,24 @@
 import { useEffect, useState } from "react";
 
 import { LoadingState } from "@/app/components/PageHeader";
+import { METRIC_COLOR } from "@/app/components/chartTheme";
+import {
+  DailyColumns,
+  DonutShare,
+  EmptyPlot,
+  Plot,
+  PlotCell,
+  PlotGrid,
+  RankedBars,
+} from "@/app/insights/components/charts";
 import { TrendCharts } from "@/app/insights/components/TrendCharts";
-import { formatTokens } from "@/app/insights/insightsFormat.mjs";
+import { dailySeries, formatTokens } from "@/app/insights/insightsFormat.mjs";
 import {
   fetchRecordInsights,
   fetchRecordEvaluation,
   InsightsApiError,
   type RecordInsights,
+  type RecordReach,
   type EvaluationRun,
 } from "@/lib/insights";
 import {
@@ -26,8 +37,23 @@ import { cn } from "@/lib/utils";
  * `APPROVED` on its own records that a curator pressed a button; nothing behind
  * it says the agent is used, healthy or affordable. This panel is the answer to
  * that, so it sits beside the approval control rather than a page away.
+ *
+ * `isAgent` decides whether evaluation belongs here. A batch evaluation runs over
+ * the threads one agent answered in, so a skill or MCP server — which owns no
+ * threads — can never have one. The tab used to offer the launcher anyway and
+ * reported "no threads opened with this agent" on a skill, which read as a
+ * failure; now it names the agents that reach the record and sends the reader
+ * there, where the scores actually live.
  */
-export function RecordUsageTab({ recordId }: { recordId: string }) {
+export function RecordUsageTab({
+  recordId,
+  isAgent = true,
+  onOpenRecord,
+}: {
+  recordId: string;
+  isAgent?: boolean;
+  onOpenRecord?: (recordId: string) => void;
+}) {
   const [days, setDays] = useState(30);
   const [insights, setInsights] = useState<RecordInsights | null>(null);
   const [evaluation, setEvaluation] = useState<EvaluationRun | { status: "none" } | null>(null);
@@ -60,6 +86,9 @@ export function RecordUsageTab({ recordId }: { recordId: string }) {
   useEffect(() => {
     let live = true;
     setEvaluation(null);
+    // Not fetched for a skill or MCP record: the answer is always "none" and
+    // showing it would claim the record could have been evaluated.
+    if (!isAgent) return;
     fetchRecordEvaluation(recordId)
       .then((value) => live && setEvaluation(value))
       .catch((e) => {
@@ -68,7 +97,7 @@ export function RecordUsageTab({ recordId }: { recordId: string }) {
     return () => {
       live = false;
     };
-  }, [recordId]);
+  }, [recordId, isAgent]);
 
   if (unconfigured) {
     return (
@@ -87,11 +116,14 @@ export function RecordUsageTab({ recordId }: { recordId: string }) {
   // is a literal union, so `status !== "none"` is enough — with `status: string`
   // it was not, and every use site carried an `as EvaluationRun` instead.
   const run = evaluation && evaluation.status !== "none" ? evaluation : null;
-  // An MCP/gateway record is called *through*, not run, so its own turn, user and
-  // token counters are always zero. `reach` is present exactly for those records,
-  // and it is the honest measure: who attaches this server and how much traffic
-  // they carried. Tool calls below are attributed back to it from those agents.
+  // A skill or MCP record is reached, not run, so its own turn, user and token
+  // counters are always zero. `reach` is present exactly for those records, and
+  // it is the honest measure: which agents reach it and how much traffic they
+  // carried. For an MCP server the turns passed *through* it (`traffic`) and the
+  // tool calls below are its own; for a skill nothing counts a read, so the turns
+  // are those of the agents that attach it (`reach`) and there are no calls.
   const reach = insights.reach;
+  const isSkillReach = reach?.metric === "reach";
   const toolCallTotal = insights.tools.reduce(
     (sum, tool) => sum + tool.tool_calls,
     0,
@@ -114,26 +146,39 @@ export function RecordUsageTab({ recordId }: { recordId: string }) {
         ))}
       </div>
       {reach ? (
-        <dl className="grid grid-cols-3 gap-2 text-xs">
-          <div>
-            <dt className="text-muted-foreground">연결된 에이전트</dt>
-            <dd className="tabular-nums">
-              {reach.agents.toLocaleString("ko-KR")}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-muted-foreground">처리한 턴</dt>
-            <dd className="tabular-nums">
-              {reach.turns.toLocaleString("ko-KR")}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-muted-foreground">툴 호출</dt>
-            <dd className="tabular-nums">
-              {toolCallTotal.toLocaleString("ko-KR")}
-            </dd>
-          </div>
-        </dl>
+        <div className="space-y-2">
+          <dl className="grid grid-cols-3 gap-2 text-xs">
+            <div>
+              <dt className="text-muted-foreground">연결된 에이전트</dt>
+              <dd className="tabular-nums">
+                {reach.agents.toLocaleString("ko-KR")}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground">
+                {isSkillReach ? "도달한 턴" : "처리한 턴"}
+              </dt>
+              <dd className="tabular-nums">
+                {reach.turns.toLocaleString("ko-KR")}
+              </dd>
+            </div>
+            {/* A skill has no call count — nothing counts it being read — so the
+                tile is left out rather than shown as a 0 that looks measured. */}
+            {!isSkillReach && (
+              <div>
+                <dt className="text-muted-foreground">툴 호출</dt>
+                <dd className="tabular-nums">
+                  {toolCallTotal.toLocaleString("ko-KR")}
+                </dd>
+              </div>
+            )}
+          </dl>
+          {isSkillReach && (
+            <p className="text-xxs text-muted-foreground">
+              스킬은 호출 카운트가 없어 이 스킬을 붙인 에이전트가 처리한 턴으로 셉니다.
+            </p>
+          )}
+        </div>
       ) : (
         <dl className="grid grid-cols-2 gap-2 text-xs lg:grid-cols-4">
           <div>
@@ -218,20 +263,121 @@ export function RecordUsageTab({ recordId }: { recordId: string }) {
       {/* The launcher sits with the scores it produces. It used to live under
           every assistant message in the chat, which repeated it once per turn and
           started runs nothing attributed back to this record. */}
-      <EvaluationPanel recordId={recordId} />
-      {insights.tools.length > 0 && (
-        <ul className="flex flex-wrap gap-1 text-xxs text-muted-foreground">
-          {insights.tools.map((tool) => (
-            <li key={tool.name} className="rounded bg-muted px-1.5 py-0.5">
-              {tool.name} {tool.tool_calls}회
-            </li>
-          ))}
-        </ul>
+      {isAgent && <EvaluationPanel recordId={recordId} />}
+
+      {/* Who reaches this record, and what was called through it. The agents are
+          a ranked list because the question is "who, and how much" — and each row
+          opens that agent, which is where evaluation lives (a batch runs over one
+          agent's threads, so a skill or MCP record can never have one of its own).
+          Tools are a donut because the question there is share of the whole. A
+          skill has no calls to share out, so its cell is left out rather than
+          drawn empty. */}
+      {(reach || insights.tools.length > 0) && (
+        <PlotGrid>
+          {reach && (
+            <PlotCell>
+              <Plot
+                title="연결된 에이전트"
+                hint={
+                  isSkillReach
+                    ? "이 스킬을 붙인 에이전트와 그 턴 수입니다. 평가는 각 에이전트에서 봅니다."
+                    : "이 서버를 호출한 에이전트와 그 턴 수입니다. 평가는 각 에이전트에서 봅니다."
+                }
+              >
+                <RankedBars
+                  entries={reach.agent_records.map((agent) => ({
+                    id: agent.record_id,
+                    name: agent.name ?? agent.record_id,
+                    value: agent.turns,
+                    display: `${agent.turns.toLocaleString("ko-KR")}턴`,
+                  }))}
+                  onSelect={onOpenRecord}
+                  colorIndex={METRIC_COLOR.turns}
+                  empty="이 기간에 이 레코드에 도달한 에이전트가 없습니다."
+                />
+              </Plot>
+            </PlotCell>
+          )}
+          {!isSkillReach && (
+            <PlotCell>
+              <Plot
+                title="툴별 호출"
+                hint={
+                  reach
+                    ? "이 서버의 툴이 호출된 횟수의 비중입니다."
+                    : "이 에이전트가 호출한 툴의 비중입니다."
+                }
+              >
+                {insights.tools.length > 0 ? (
+                  <DonutShare
+                    segments={insights.tools.map((tool) => ({
+                      name: tool.name,
+                      value: tool.tool_calls,
+                    }))}
+                    totalLabel="회"
+                  />
+                ) : (
+                  <EmptyPlot label="이 기간에 호출된 툴이 없습니다." />
+                )}
+              </Plot>
+            </PlotCell>
+          )}
+        </PlotGrid>
       )}
-      {/* The daily trend is the record's own turns over time, which a gateway does
-          not have — its `reach` traffic belongs to the agents, shown on their own
-          pages. So the chart is for agent records only. */}
-      {!reach && <TrendCharts daily={insights.daily} />}
+      {/* The daily trend is the record's own turns for an agent, and the same
+          reach rolled up per day for a skill or MCP record — `insights.daily` is
+          the record's own counters, which for those are empty. */}
+      {reach ? (
+        <ReachTrend reach={reach} partialDay={insights.partial_day} />
+      ) : (
+        <TrendCharts daily={insights.daily} />
+      )}
     </div>
+  );
+}
+
+/**
+ * The reach figures above, day by day. Turns are columns like the agent trend;
+ * for a skill they are the turns of the agents that attach it, said so in the
+ * hint, and the calls plot is left out rather than drawn flat at zero. An
+ * MCP record gets both: the turns that passed through it and its own calls.
+ */
+function ReachTrend({
+  reach,
+  partialDay,
+}: {
+  reach: RecordReach;
+  partialDay?: string | null;
+}) {
+  if (reach.daily.length === 0) return null;
+  const series = dailySeries(reach.daily, partialDay) as Array<Record<string, unknown>>;
+  const isSkill = reach.metric === "reach";
+  return (
+    <PlotGrid>
+      <PlotCell>
+        <Plot
+          title={isSkill ? "일별 도달 턴" : "일별 턴"}
+          hint={
+            isSkill
+              ? "이 스킬을 붙인 에이전트가 하루에 처리한 턴 수입니다."
+              : "이 서버를 호출한 에이전트가 하루에 처리한 턴 수입니다."
+          }
+        >
+          <DailyColumns data={series} dataKey="turns" name="턴" colorIndex={METRIC_COLOR.turns} />
+        </Plot>
+      </PlotCell>
+      {!isSkill && (
+        <PlotCell>
+          <Plot title="일별 툴 호출" hint="이 서버의 툴이 하루에 호출된 횟수입니다.">
+            <DailyColumns
+              data={series}
+              dataKey="tool_calls"
+              name="툴 호출"
+              colorIndex={METRIC_COLOR.tool_calls}
+            />
+          </Plot>
+        </PlotCell>
+      )}
+    </PlotGrid>
   );
 }

@@ -13,7 +13,7 @@ rather than an A2A one, which is both what keeps it out of the chat agent picker
 and what puts it in the harness composer's catalog.
 """
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from models.registry import (
     CreateRecordRequest,
@@ -28,8 +28,14 @@ from models.registry import (
     TARGET_HARNESS,
     TARGET_RUNTIME,
 )
+from core.config import PLATFORM
 from services.harness_service import HarnessService
-from services.registry_service import RegistryService, fan_out, is_deprecated
+from services.registry_service import (
+    RegistryService,
+    fan_out,
+    is_deprecated,
+    mcp_endpoint_of,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -260,18 +266,27 @@ class AgentSyncService:
         description = target.description or (
             f"Auto-registered from deployed AgentCore {target.kind}."
         )
+        # The same cost-allocation tag every harness and gateway carries, so the
+        # catalog's records are attributable to this stack too.
+        tags = {"Platform": PLATFORM}
         if target.kind == TARGET_GATEWAY:
             # MCP, not A2A: a gateway serves tools rather than answering prompts, so
             # an A2A record would offer it in the chat agent picker as something that
             # cannot hold a conversation. The MCP type is also what the harness
             # composer reads its catalog from.
+            #
+            # No `sync_url` here on purpose: synchronising would overwrite the
+            # record's name/description/version with what the gateway advertises
+            # and collide with any other record synced from the same server. An
+            # admin can opt into it per record from the Register dialog.
             return CreateRecordRequest(
                 name=target.name,
                 description=description,
                 descriptor_type=DESCRIPTOR_MCP,
                 version="1.0.0",
-                remote_url=target.gateway_url,
+                remote_url=mcp_endpoint_of(target.gateway_url) if target.gateway_url else None,
                 gateway_arn=target.arn,
+                tags=tags,
                 submit_for_approval=submit_for_approval,
             )
 
@@ -280,6 +295,7 @@ class AgentSyncService:
             description=description,
             descriptor_type=DESCRIPTOR_A2A,
             version="1.0",
+            tags=tags,
             harness_arn=(target.arn if target.kind == TARGET_HARNESS else None),
             agent_runtime_arn=(
                 target.runtime_arn if target.kind == TARGET_HARNESS else target.arn
@@ -307,9 +323,11 @@ class AgentSyncService:
         companion = {h.runtime_arn for h in harnesses if h.runtime_arn}
 
         records: List[RegistryRecordSummary] = []
-        for h in harnesses:
-            if (h.status or "").upper() not in _READY_STATUSES or not h.runtime_arn:
-                continue
+        ready = [
+            h for h in harnesses
+            if (h.status or "").upper() in _READY_STATUSES and h.runtime_arn
+        ]
+        for h, (known, team) in zip(ready, fan_out(self._harness_team, ready)):
             records.append(
                 RegistryRecordSummary(
                     record_id=f"deployed:{h.harness_arn}",
@@ -320,6 +338,10 @@ class AgentSyncService:
                     harness_arn=h.harness_arn,
                     agent_runtime_arn=h.runtime_arn,
                     source="deployed",
+                    # The same field a registry record carries its team in, so
+                    # the one team filter covers both (services/team_access.py).
+                    custom_metadata={"team": team} if team else None,
+                    visibility_known=known,
                 )
             )
         for r in runtimes:
@@ -343,9 +365,27 @@ class AgentSyncService:
             )
         return records
 
-    def sync(self, req: SyncAgentsRequest) -> SyncAgentsResponse:
+    def _harness_team(self, harness: Any) -> Tuple[bool, Optional[str]]:
+        """(known, team) of a deployed harness from its `Team` tag.
+
+        A teamed harness runs as its team's execution role, so a fallback
+        record that dropped the team would let any user run it (and its role's
+        tools) through a `deployed:<arn>` id. Unreadable tags → unknown, which
+        the team filter hides from non-admins.
+        """
+        reader = getattr(self.harness, "team_tag_of", None)
+        if reader is None:
+            return False, None
+        try:
+            return True, reader(harness.harness_arn)
+        except Exception as exc:  # noqa: BLE001 — degrade to "unknown", never 500
+            logger.warning("Could not read tags of harness %s: %s", harness.harness_arn, exc)
+            return False, None
+
+    def sync(self, req: SyncAgentsRequest, owner: Optional[str] = None) -> SyncAgentsResponse:
         """
         Register every unregistered, ready target (optionally a chosen subset).
+        `owner` is stamped on each new record's metadata (the admin running it).
 
         A target whose only record was deprecated is skipped unless it is named
         explicitly: deprecation is terminal, so re-registering creates a second
@@ -368,7 +408,7 @@ class AgentSyncService:
 
             try:
                 record = self.registry.create_record(
-                    self._record_request(target, req.submit_for_approval)
+                    self._record_request(target, req.submit_for_approval), owner=owner
                 )
                 response.registered.append(record)
             except Exception as exc:

@@ -419,6 +419,31 @@ def test_reprice_events_prices_an_unpriced_turn_once_its_rate_is_learned_and_mov
         set_learned_rates([])
 
 
+def test_reprice_events_moves_the_team_counter_too():
+    # Final review I6: the TEAMS# row is a projection of the same event; a
+    # reprice that skipped it showed team spend as "unattributed".
+    from data.model_rates import set_learned_rates
+
+    repo = LedgerRepo()
+    svc = UsageService(repo)
+    try:
+        turn(svc, team="finance", model_id="global.anthropic.claude-opus-5-5",
+             input_tokens=1_000_000, output_tokens=100_000)
+        before = repo.get("TEAMS#2026-09", "D#2026-09-23#G#finance")
+        assert before["unpriced_turns"] == 1 and before.get("model_cost_micros", 0) == 0
+        for tier, usd in (("input", "7.5"), ("output", "37.5")):
+            repo.set_fields("RATES#learned", f"R#claude-opus-5-5|global|{tier}|2026-09-22",
+                            {"family": "claude-opus-5-5", "routing": "global", "tier": tier,
+                             "effective_from": "2026-09-22", "usd_per_1m": usd})
+        svc.reprice_events("2026-09-01", "2026-09-30")
+        team = repo.get("TEAMS#2026-09", "D#2026-09-23#G#finance")
+        assert team["model_cost_micros"] == 11_250_000
+        assert team["priced_turns"] == 1 and team["unpriced_turns"] == 0
+        assert svc.team_totals("2026-09-01", "2026-09-30")["finance"]["model_cost_micros"] == 11_250_000
+    finally:
+        set_learned_rates([])
+
+
 def test_reprice_events_moves_a_priced_turn_to_a_price_change_effective_on_its_day():
     from data.model_rates import set_learned_rates
 
@@ -454,5 +479,53 @@ def test_a_turn_using_a_tier_the_learned_rate_lacks_stays_unpriced():
         day = repo.get("AGENTS#2026-09", "D#2026-09-23#A#rec-1")
         assert "model_cost_micros" not in event and event["measured"] is True
         assert day["unpriced_turns"] == 1 and day.get("priced_turns", 0) == 0
+    finally:
+        set_learned_rates([])
+
+
+def test_a_turn_that_becomes_unpriceable_on_its_second_flush_drops_the_stale_zero_cost():
+    """Basic chat flushes once at messageStop with no tokens yet (cost 0, unmeasured)
+    and once post-loop with the tokens. If the second flush cannot price them —
+    here a learned family whose cache tier the overlay lacks — the event must not
+    keep the first flush's 0: the repricer reads a stored figure as "already
+    priced" and never moves priced/unpriced, which is how 21 priced turns sat
+    under 미가격 on 2026-10-10 after the cache rate was registered."""
+    from data.model_rates import set_learned_rates
+    set_learned_rates([
+        {"family": "claude-sonnet-5-5", "routing": "global", "tier": tier,
+         "usd_per_1m": usd, "effective_from": "2026-10-06"}
+        for tier, usd in (("input", "2"), ("output", "10"))
+    ])
+    try:
+        repo = LedgerRepo()
+        svc = UsageService(repository=repo)
+        svc.ensure_learned_rates = lambda: None
+        model = "global.anthropic.claude-sonnet-5-5"
+        when = dict(date="2026-10-10", started_at="2026-10-10T03:24:00Z", ended_at="2026-10-10T03:24:05Z")
+        turn(svc, input_tokens=0, output_tokens=0, model_id=model, **when)
+        event = repo.get("TURNS#2026-10", "T#t-1:h-1")
+        assert event["model_cost_micros"] == 0 and event["measured"] is False
+
+        out = turn(svc, input_tokens=89, output_tokens=5, cache_read_tokens=4702, turns=0,
+                   model_id=model, **when)
+
+        assert out == {"event": "updated", "cost_micros": None}
+        event = repo.get("TURNS#2026-10", "T#t-1:h-1")
+        assert event.get("model_cost_micros") is None
+        agents = repo.get("AGENTS#2026-10", "D#2026-10-10#A#rec-1")
+        assert agents["unpriced_turns"] == 1 and agents.get("priced_turns", 0) == 0
+
+        # The cache rate arrives; repricing now moves the counters as well as the event.
+        set_learned_rates([
+            {"family": "claude-sonnet-5-5", "routing": "global", "tier": tier,
+             "usd_per_1m": usd, "effective_from": "2026-10-06"}
+            for tier, usd in (("input", "2"), ("output", "10"), ("cache_read", "0.1"), ("cache_write", "2.5"))
+        ])
+        svc.load_learned_rates = lambda: None
+        report = svc.reprice_events("2026-10-10", "2026-10-10")
+        assert report["newly_priced"] == 1
+        agents = repo.get("AGENTS#2026-10", "D#2026-10-10#A#rec-1")
+        assert agents["priced_turns"] == 1 and agents["unpriced_turns"] == 0
+        assert agents["model_cost_micros"] == 89 * 2 + 5 * 10 + 470  # 4702 × 0.1 = 470.2 → half-up
     finally:
         set_learned_rates([])

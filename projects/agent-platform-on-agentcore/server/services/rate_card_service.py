@@ -36,7 +36,10 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional, Tuple
 
 from data.model_rates import (
+    LONG_CONTEXT_THRESHOLDS,
+    LONG_TIERS,
     RATE_CARD_VERSION,
+    RATE_TIERS,
     TIERS,
     effective_rate,
     family_name_of,
@@ -95,8 +98,8 @@ def validate_entry(raw: Dict[str, Any], *, today: str) -> Dict[str, Any]:
     if routing not in ROUTINGS:
         raise RateCardError("라우팅은 global 또는 regional 이어야 합니다.")
     tier = str(raw.get("tier") or "").strip().lower()
-    if tier not in TIERS:
-        raise RateCardError(f"tier 는 {', '.join(TIERS)} 중 하나여야 합니다.")
+    if tier not in RATE_TIERS:
+        raise RateCardError(f"tier 는 {', '.join(RATE_TIERS)} 중 하나여야 합니다.")
     try:
         usd = Decimal(str(raw.get("usd_per_1m", "")).strip())
     except (InvalidOperation, ValueError):
@@ -189,6 +192,14 @@ class RateCardService:
         for row in rows.values():
             in_force = effective_rate(row["family"], row["routing"], end_date)
             row["models"] = sorted(row["models"])
+            # The long card is shown for a family that has one — where its four
+            # tiers are part of being complete — and for any row that somehow
+            # carries a long figure, so a stored entry is never invisible.
+            threshold = LONG_CONTEXT_THRESHOLDS.get(row["family"])
+            tiers = TIERS + LONG_TIERS if threshold or (
+                in_force and any(tier in in_force["usd_per_1m"] for tier in LONG_TIERS)
+            ) else TIERS
+            row["long_context_threshold"] = threshold
             row["tiers"] = {
                 tier: (
                     {
@@ -199,9 +210,9 @@ class RateCardService:
                     if in_force and tier in in_force["usd_per_1m"]
                     else None
                 )
-                for tier in TIERS
+                for tier in tiers
             }
-            row["complete"] = all(row["tiers"][tier] is not None for tier in TIERS)
+            row["complete"] = all(row["tiers"][tier] is not None for tier in tiers)
 
         candidates = self._bill_candidates(start_date, end_date, {key for key in rows})
         return {
@@ -265,7 +276,7 @@ class RateCardService:
                     continue
                 family, _, tail = rest.partition("|")
                 routing, _, tier = tail.partition("|")
-                if (family, routing) not in pairs or tier not in TIERS:
+                if (family, routing) not in pairs or tier not in RATE_TIERS:
                     continue
                 by_key.setdefault((family, routing, tier), {})[day] = item
 

@@ -236,7 +236,7 @@ def open_session(url: str):
             return self._portal.call(self._session.read_resource, uri)
 
         def list_tools(self):
-            return self._portal.call(self._session.list_tools)
+            return self._portal.call(_list_all_tools, self._session)
 
         def call_tool(self, name, arguments):
             return self._portal.call(self._session.call_tool, name, arguments)
@@ -246,6 +246,25 @@ def open_session(url: str):
             _async_session(url, streamablehttp_client, ClientSession)
         ) as session:
             yield _Sync(portal, session)
+
+
+async def _list_all_tools(session):
+    """Every tool the server lists, following `nextCursor` to the last page.
+
+    An AgentCore gateway pages tools/list six at a time, so a first-page-only
+    read saw the Lambda target's tools and nothing attached after it — the
+    platform-status and registry targets were invisible to the tryout and to
+    app discovery although the gateway served them (measured live 2026-10-10:
+    3 pages, 11 tools).
+    """
+    tools = []
+    cursor = None
+    while True:
+        result = await (session.list_tools(cursor) if cursor else session.list_tools())
+        tools.extend(result.tools)
+        cursor = getattr(result, "nextCursor", None)
+        if not cursor:
+            return tools
 
 
 def list_tools(url: str, timeout: float | None = None, *, _client_factory=None, _session_cls=None):
@@ -276,10 +295,10 @@ def list_tools(url: str, timeout: float | None = None, *, _client_factory=None, 
         cm = _async_session(url, client, session_cls)
         if timeout is None:
             async with cm as session:
-                return (await session.list_tools()).tools
+                return await _list_all_tools(session)
         with anyio.fail_after(timeout):
             async with cm as session:
-                return (await session.list_tools()).tools
+                return await _list_all_tools(session)
 
     with anyio.from_thread.start_blocking_portal() as portal:
         return portal.call(_run)

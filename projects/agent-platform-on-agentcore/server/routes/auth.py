@@ -117,6 +117,7 @@ def session(user: AuthUser = Depends(current_user)) -> SessionProfile:
         name=user.name,
         role="admin" if user.is_admin else "user",
         groups=user.groups,
+        teams=user.teams,
         provider=user.provider,
     )
 

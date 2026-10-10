@@ -40,3 +40,9 @@ variable "domain_prefix" {
   type        = string
   default     = ""
 }
+
+variable "teams" {
+  description = "Team names. Each becomes a Cognito group `team:<name>`; the server reads the prefix (core/auth.py TEAM_GROUP_PREFIX). Empty = no team groups."
+  type        = list(string)
+  default     = []
+}

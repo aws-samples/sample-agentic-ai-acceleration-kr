@@ -2,9 +2,12 @@
 Search-path tests for RegistryService.
 
 The registry's hybrid search is the discovery surface, so what matters here is
-the request we send AWS (bounded maxResults, no server-side filters) and that
-we hand back its relevance order untouched. Type narrowing happens client-side
-because SearchDiscoverableRegistryRecords takes no type filter.
+the request we send AWS (bounded maxResults, the filter expression it accepts)
+and that we hand back its relevance order untouched. Narrowing is server-side:
+SearchDiscoverableRegistryRecords takes a `filters` expression over recordType,
+name, recordVersion and customMetadata.<field> (verified live 2026-10-10), and a
+filter applied before ranking is the only way to get 20 results *of a type*
+rather than 20 results some of which are the type.
 """
 import os
 import sys
@@ -51,18 +54,44 @@ def test_max_results_stays_within_the_api_limit():
     assert stub.calls[0]["maxResults"] <= 20
 
 
-def test_no_server_side_filters_are_sent():
+def test_type_filter_is_sent_server_side_as_in():
     service, stub = _service()
     service.search_records(query="weather", descriptor_types=["A2A", "MCP"])
-    assert "filters" not in stub.calls[0]
+    assert stub.calls[0]["filters"] == {"recordType": {"$in": ["AGENT", "MCP"]}}
     assert stub.calls[0]["registryIds"] == ["reg-1"]
 
 
-def test_search_filters_by_record_type_client_side():
+def test_custom_metadata_filter_joins_with_and_and_skips_blank_values():
+    service, stub = _service()
+    service.search_records(
+        query="x", descriptor_types=["MCP"], custom_metadata={"team": "search", "tier": ""}
+    )
+    assert stub.calls[0]["filters"] == {
+        "$and": [
+            {"recordType": {"$in": ["MCP"]}},
+            {"customMetadata.team": {"$eq": "search"}},
+        ]
+    }
+
+
+def test_single_metadata_filter_is_not_wrapped_in_and():
+    service, stub = _service()
+    service.search_records(query="x", custom_metadata={"owner": "yoo"})
+    assert stub.calls[0]["filters"] == {"customMetadata.owner": {"$eq": "yoo"}}
+
+
+def test_no_filters_key_when_nothing_to_narrow():
+    service, stub = _service()
+    service.search_records(query="x", custom_metadata={"tier": ""})
+    assert "filters" not in stub.calls[0]
+
+
+def test_results_are_passed_through_unfiltered():
+    # AWS already applied the type filter before ranking; a second client-side
+    # pass could only drop records AWS deliberately returned.
     records = [_record("agent", "AGENT"), _record("tools", "MCP")]
     service, _ = _service(records)
-    result = service.search_records(query="x", descriptor_types=["A2A"])
-    assert [r.name for r in result] == ["agent"]
+    assert len(service.search_records(query="x", descriptor_types=["A2A"])) == 2
 
 
 def test_relevance_order_is_preserved():
@@ -109,3 +138,13 @@ def test_list_omits_filters_when_no_narrowing_given():
     service, stub = _list_service()
     service.list_records()
     assert "filters" not in stub.calls[0]
+
+
+def test_route_parses_repeated_meta_params_into_a_map():
+    from routes.registry import _parse_meta_filters
+
+    assert _parse_meta_filters(["team=search", "tier=internal", "broken", "=x"]) == {
+        "team": "search",
+        "tier": "internal",
+    }
+    assert _parse_meta_filters(None) == {}

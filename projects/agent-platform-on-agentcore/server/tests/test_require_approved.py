@@ -20,6 +20,9 @@ class _Reg:
         if self._exc:
             raise self._exc
         return SimpleNamespace(status=self._status)
+    def chattable_record(self, record_id):
+        # The approval gate reads the chattable revision; these doubles have one.
+        return self.get_record(record_id)
 
 
 def _svc(reg):
@@ -32,6 +35,9 @@ def test_synthetic_deployed_id_skips_lookup():
     class Boom:
         def get_record(self, rid):
             raise AssertionError("should not be called")
+        def chattable_record(self, record_id):
+            # The approval gate reads the chattable revision; these doubles have one.
+            return self.get_record(record_id)
 
     _svc(Boom())._require_approved("deployed:arn:aws:...:harness/hx", "hx")
 

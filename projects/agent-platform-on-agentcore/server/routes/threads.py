@@ -51,8 +51,10 @@ from services.browser_screenshot_service import (
     ScreenshotNotFound,
     ScreenshotsNotConfigured,
 )
-from services.streaming_service import AgentNotApproved
-from services.agent_access import AgentTargetMismatch, BasicChatUnavailable
+from services.streaming_service import AgentNotApproved, SSE_HEADERS
+import services.streaming_service as streaming_module
+from services.run_broker import RunAlreadyActive
+from services.agent_access import AgentTargetMismatch
 from services.thread_service import (
     ThreadAgentMismatch,
     ThreadForbidden,
@@ -194,6 +196,7 @@ async def _stream(thread_id: str, request: StreamRequest, user: AuthUser):
             # reassigned username would inherit the previous account's memory.
             actor_id=user.sub or None,
             owner_sub=user.sub,
+            caller=user,
         )
     except ThreadForbidden as exc:
         raise HTTPException(status_code=403, detail=str(exc))
@@ -203,7 +206,7 @@ async def _stream(thread_id: str, request: StreamRequest, user: AuthUser):
         # agents out of the picker; this holds the same line against a request
         # that names the record id directly.
         raise HTTPException(status_code=403, detail=str(exc))
-    except (AgentTargetMismatch, BasicChatUnavailable) as exc:
+    except AgentTargetMismatch as exc:
         # The ARNs or model the request named are not the bound agent's. The
         # server derives the target itself (services/agent_access.py); a client
         # that disagrees is trying to reach something it was not given.
@@ -213,6 +216,11 @@ async def _stream(thread_id: str, request: StreamRequest, user: AuthUser):
         # thread's state rather than a permission failure. The client turns this
         # into "start a new chat", which is the only resolution.
         raise HTTPException(status_code=409, detail=str(exc))
+    except RunAlreadyActive as exc:
+        # 409 like ThreadAgentMismatch: the thread is the caller's, but it is
+        # already running a turn. A second tab sent this; it should attach
+        # (GET …/runs/stream) rather than start another.
+        raise HTTPException(status_code=409, detail=f"Thread {exc} already has a run in flight")
 
 
 @router.post("/{thread_id}/runs/stream")
@@ -235,6 +243,61 @@ async def stream_thread_direct(
     return await _stream(thread_id, request, user)
 
 
+@router.get("/{thread_id}/runs/stream")
+def attach_thread_run(thread_id: str, user: AuthUser = Depends(current_user)):
+    """Follow a run already in flight on this thread.
+
+    Replays every frame the run has produced, then tails it live. This is how a
+    reopened `busy` thread catches up after the browser left: the run itself
+    never depended on the browser staying.
+    """
+    _owned(thread_id, user)
+    run = streaming_service.run_broker.get(thread_id)
+    if run is None:
+        # Not an error for the UI: the run finished (or never existed) and the
+        # stored record is now the truth. The client re-reads the thread.
+        raise HTTPException(status_code=404, detail="No run in flight on this thread")
+
+    async def body():
+        # First, which stored messages predate this run (plus its own question).
+        # The client has just loaded the row, which also holds this run's
+        # partial work under the same ids the replay is about to rebuild; this
+        # tells it exactly what to keep instead of guessing from the last human
+        # message — a guess that cut one turn too many for a run started without
+        # a new human message, or when the row was read before the question was
+        # saved.
+        baseline = {"event": "run_baseline", "data": {"message_ids": run.baseline_message_ids}}
+        yield f"data: {json.dumps(baseline)}\n\n"
+        # Read through the module at call time, like the start route does, so the
+        # interval stays one knob (and one monkeypatch) for both.
+        async for frame in run.subscribe(
+            heartbeat_interval=streaming_module.HEARTBEAT_INTERVAL_SECONDS
+        ):
+            yield frame
+
+    return StreamingResponse(body(), media_type="text/event-stream", headers=SSE_HEADERS)
+
+
+@router.post("/{thread_id}/runs/cancel")
+def cancel_thread_run(thread_id: str, user: AuthUser = Depends(current_user)):
+    """Stop the run on this thread, if any.
+
+    Dropping the connection used to be the stop; now that a run outlives its
+    connections, Stop has to say so explicitly. `cancelled: false` (200, not
+    404) when nothing was running, so a Stop that races the run's own end is
+    not an error on the client.
+    """
+    try:
+        _owned(thread_id, user)
+    except HTTPException as exc:
+        # Not found is allowed through: a Stop during a first turn's setup
+        # arrives before the thread row exists. The reservation it lands on is
+        # bound to its reserver, so it can only ever cancel this caller's run.
+        if exc.status_code != 404:
+            raise
+    return {"cancelled": streaming_service.run_broker.cancel(thread_id, owner_sub=user.sub)}
+
+
 @router.delete("/{thread_id}")
 def delete_thread(
     thread_id: str,
@@ -242,6 +305,10 @@ def delete_thread(
 ):
     """Delete a thread"""
     _owned(thread_id, user)
+    # A run no longer dies with its connection, so it would keep spending model
+    # and harness time on a thread nobody can see — and its next persist could
+    # put the deleted row back.
+    streaming_service.run_broker.cancel(thread_id, owner_sub=user.sub)
     try:
         thread_service.delete_thread(thread_id)
         return {"status": "deleted"}

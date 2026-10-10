@@ -13,28 +13,32 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
-  SelectGroup,
   SelectItem,
-  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { BEDROCK_MODELS } from "@/lib/models";
+import { getCapabilities } from "@/lib/capabilities";
+import { modelLabel } from "@/lib/modelLabel.mjs";
 import { hasOverrides } from "@/lib/agent-config";
 import { useChatContext } from "@/providers/ChatProvider";
 
-/** Select cannot hold "", so the harness default gets a sentinel value. */
-const DEFAULT_MODEL = "__harness_default__";
+/** Select cannot hold "", so the agent's own default gets a sentinel value. */
+const DEFAULT_MODEL = "__agent_default__";
 
 /**
- * Per-thread model / system-prompt override for a harness agent.
+ * Per-thread model / system-prompt override for the agent a chat is bound to.
  *
- * InvokeHarness applies `model` and `systemPrompt` to one request; the harness
- * itself is unchanged and no version is made. So this is how to try the same
- * agent on a bigger model for one conversation, or steer it with an extra
- * instruction, without going to the Harness page and recomposing it for
- * everyone. Runtime agents have no such fields — the control does not render.
+ * The server forwards both per turn — InvokeHarness `model`/`systemPrompt` for
+ * a harness, the invoke payload for a runtime agent — and the agent definition
+ * is untouched. So this is how to try the same agent on a bigger model for one
+ * conversation, or steer it with an extra instruction, without recomposing or
+ * redeploying it for everyone.
+ *
+ * The model list is the server's allow-list (GET /api/config), fetched when the
+ * popover opens so an operator change shows up: offering anything else would
+ * only end in a 403. A stored model that has since left the list is still shown,
+ * marked, so the user can see why a turn is refused and pick another.
  *
  * The values persist on the thread (metadata.harness_overrides), so the
  * conversation keeps answering the same way when reopened. The dot on the
@@ -47,6 +51,7 @@ export function ThreadOverrides({ className }: { className?: string }) {
   const [open, setOpen] = useState(false);
   const [modelId, setModelId] = useState(overrides.modelId ?? "");
   const [systemPrompt, setSystemPrompt] = useState(overrides.systemPrompt ?? "");
+  const [allowedModels, setAllowedModels] = useState<string[] | null>(null);
 
   // Re-sync the drafts whenever the popover opens or the stored value changes
   // underneath (thread switched), so it never shows a stale draft.
@@ -55,12 +60,31 @@ export function ThreadOverrides({ className }: { className?: string }) {
     setSystemPrompt(overrides.systemPrompt ?? "");
   }, [overrides.modelId, overrides.systemPrompt, open]);
 
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    getCapabilities()
+      .then((caps) => {
+        if (!cancelled) setAllowedModels(caps.allowedModels ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setAllowedModels([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
   if (!overridesSupported) return null;
 
   const active = hasOverrides(overrides);
   const dirty =
     (modelId || "") !== (overrides.modelId ?? "") ||
     (systemPrompt || "") !== (overrides.systemPrompt ?? "");
+  const models = allowedModels ?? [];
+  const storedUnlisted =
+    !!modelId && allowedModels !== null && !models.includes(modelId);
+  const showModel = allowedModels === null || models.length > 0 || storedUnlisted;
 
   const apply = () => {
     setOverrides({
@@ -109,37 +133,39 @@ export function ThreadOverrides({ className }: { className?: string }) {
         <div>
           <p className="text-xs font-semibold">이 대화만 덮어쓰기</p>
           <p className="mt-0.5 text-xxs leading-normal text-muted-foreground">
-            harness 정의는 그대로 두고, 이 스레드의 턴에만 적용됩니다. 대화
+            에이전트 정의는 그대로 두고, 이 스레드의 턴에만 적용됩니다. 대화
             메모리는 이어집니다.
           </p>
         </div>
 
-        <div className="grid gap-1.5">
-          <Label htmlFor="ov-model" className="text-xs">
-            Model
-          </Label>
-          <Select
-            value={modelId || DEFAULT_MODEL}
-            onValueChange={(v) => setModelId(v === DEFAULT_MODEL ? "" : v)}
-          >
-            <SelectTrigger id="ov-model" className="h-8 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={DEFAULT_MODEL}>Harness 기본 모델</SelectItem>
-              {modelGroups().map((group) => (
-                <SelectGroup key={group.provider}>
-                  <SelectLabel>{group.provider}</SelectLabel>
-                  {group.models.map((model) => (
-                    <SelectItem key={model.id} value={model.id}>
-                      {model.label}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+        {showModel && (
+          <div className="grid gap-1.5">
+            <Label htmlFor="ov-model" className="text-xs">
+              Model
+            </Label>
+            <Select
+              value={modelId || DEFAULT_MODEL}
+              onValueChange={(v) => setModelId(v === DEFAULT_MODEL ? "" : v)}
+            >
+              <SelectTrigger id="ov-model" className="h-8 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={DEFAULT_MODEL}>에이전트 기본 모델</SelectItem>
+                {models.map((id) => (
+                  <SelectItem key={id} value={id}>
+                    {modelLabel(id)}
+                  </SelectItem>
+                ))}
+                {storedUnlisted && (
+                  <SelectItem value={modelId} data-unlisted-model={modelId}>
+                    {modelLabel(modelId)} · 허용 목록에 없음
+                  </SelectItem>
+                )}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
 
         <div className="grid gap-1.5">
           <Label htmlFor="ov-prompt" className="text-xs">
@@ -150,7 +176,7 @@ export function ThreadOverrides({ className }: { className?: string }) {
             rows={4}
             value={systemPrompt}
             onChange={(e) => setSystemPrompt(e.target.value)}
-            placeholder="비우면 harness 의 프롬프트를 씁니다. 채우면 그것을 대체합니다."
+            placeholder="비우면 에이전트의 프롬프트를 씁니다. 채우면 그것을 대체합니다."
             className="text-xs"
           />
         </div>
@@ -171,17 +197,4 @@ export function ThreadOverrides({ className }: { className?: string }) {
       </PopoverContent>
     </Popover>
   );
-}
-
-function modelGroups(): Array<{
-  provider: string;
-  models: Array<{ id: string; label: string }>;
-}> {
-  const groups = new Map<string, Array<{ id: string; label: string }>>();
-  for (const model of BEDROCK_MODELS) {
-    const list = groups.get(model.provider) ?? [];
-    list.push({ id: model.id, label: model.label });
-    groups.set(model.provider, list);
-  }
-  return Array.from(groups, ([provider, models]) => ({ provider, models }));
 }

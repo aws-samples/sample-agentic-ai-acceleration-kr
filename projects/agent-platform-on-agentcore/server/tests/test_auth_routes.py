@@ -129,6 +129,7 @@ def test_session_records_oidc_user_and_returns_profile(deployment, monkeypatch):
     assert res.status_code == 200
     assert res.json() == {
         "sub": "e-1", "username": "alice@corp.com", "email": "alice@corp.com", "name": "Alice",
+        "teams": [],
         "role": "admin", "groups": ["PlatformAdmin"], "provider": "entra",
     }
     assert repo.calls == [{

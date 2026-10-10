@@ -72,6 +72,9 @@ class StubRegistry:
             record_id=record_id, name=f"agent {record_id}", status=status,
             agent_runtime_arn=RUNTIME_ARN,
         )
+    def chattable_record(self, record_id):
+        # The approval gate reads the chattable revision; these doubles have one.
+        return self.get_record(record_id)
 
 
 class StubRepository:
@@ -195,6 +198,50 @@ def test_an_approved_agent_streams(monkeypatch):
     response = _stream(app, service, monkeypatch, "t-new", APPROVED)
 
     assert response.status_code == 200, response.text
+
+
+EDITED = ("rec-edited", "Edited Agent")  # latest revision DRAFT, approved one still served
+OLD_RUNTIME_ARN = "arn:aws:bedrock-agentcore:us-east-1:1:runtime/r-approved"
+
+
+class DualRevisionRegistry(StubRegistry):
+    """An approved record that was just edited: AWS opens a DRAFT revision and
+    keeps serving the approved one to consumers. `get_record` (control plane)
+    returns the draft; `chattable_record` resolves to the approved revision."""
+
+    def get_record(self, record_id):
+        self.lookups.append(record_id)
+        if record_id == EDITED[0]:
+            return RegistryRecordDetail(
+                record_id=record_id, name=EDITED[1], status="DRAFT",
+                agent_runtime_arn=RUNTIME_ARN,
+            )
+        return super().get_record(record_id)
+
+    def chattable_record(self, record_id):
+        if record_id == EDITED[0]:
+            self.lookups.append(record_id)
+            return RegistryRecordDetail(
+                record_id=record_id, name=EDITED[1], status="APPROVED",
+                revision="approved", discoverable=True,
+                agent_runtime_arn=OLD_RUNTIME_ARN,
+            )
+        return super().chattable_record(record_id)
+
+
+def test_an_edited_record_keeps_chatting_through_its_approved_revision(monkeypatch):
+    """Editing an approved agent must not 403 its users: the data plane still
+    serves the approved revision, and that is the one chat binds to."""
+    registry = DualRevisionRegistry()
+    service = make_service(registry)
+    app = make_app(service)
+
+    response = _stream(app, service, monkeypatch, "t-new", EDITED)
+
+    assert response.status_code == 200, response.text
+    thread = service.thread_service.get_thread("t-new")
+    # The binding is the approved revision's runtime, not the draft's.
+    assert (thread.agent_target or {}).get("agent_runtime_arn") == OLD_RUNTIME_ARN
 
 
 def test_an_unverifiable_record_fails_closed():

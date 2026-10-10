@@ -43,6 +43,7 @@ Evaluations**, 사용량과 비용은 **Amazon CloudWatch**와 **AWS Cost Explor
 | 사내 문서는 어떻게 붙이나 | 사용자가 만든 Amazon Bedrock Knowledge Base 를 게이트웨이 툴로 감싸 Harness 에 부착 |
 | 안전한가, 잘 동작하나, 얼마 드나 | Guardrails 개입 집계, AgentCore Evaluations 점수·실패 분석, 턴 단위 사용량 원장과 청구서 대조 |
 | 누가 무엇을 할 수 있나 | Amazon Cognito 또는 Microsoft Entra ID 로 로그인, 서버에서 역할(admin/user)과 리소스 소유권 강제 |
+| 팀마다 쓸 수 있는 모델·툴을 어떻게 가르나 | Cognito 그룹 `team:<name>` 을 팀으로 읽어 팀별 Harness 실행 역할·허용 모델·레코드 가시성을 두고, Gateway 툴 권한은 AgentCore Policy(Cedar)로 강제 |
 
 ## 아키텍처
 
@@ -187,9 +188,11 @@ flowchart TB
   별도 Runtime 에 배포됩니다.
 
   런타임은 AgentCore Memory 에서 최근 대화와 세션 요약을 복원하고, 사용자(`actor_id`)마다
-  메모리를 분리합니다. 호출 페이로드로 턴 단위 모델·시스템 프롬프트를 받을 수 있어
-  **기본 채팅**(에이전트를 고르지 않고 운영자가 허용한 모델과 바로 대화)도 같은 런타임이
-  처리합니다.
+  메모리를 분리합니다. 호출 페이로드로 턴 단위 모델·시스템 프롬프트를 받으므로, 채팅의
+  **스레드 오버라이드**로 런타임 에이전트도 harness 처럼 이 대화만 다른 모델로 돌릴 수
+  있습니다(운영자 허용 목록 `allowed_models` 안에서). 기본 런타임을 가리키는 레코드가
+  **기본 에이전트**로 선택기 맨 위에 고정되고, 아무것도 고르지 않은 새 채팅은 그
+  에이전트로 시작합니다.
 - **AgentCore Harness** — 코드 없이 시스템 프롬프트·모델·툴·스킬·반복 횟수로 정의하는
   관리형 에이전트입니다. 메모리와 실행 루프를 AgentCore 가 소유합니다. `InvokeHarness`
   의 요청별 `model`/`systemPrompt` 오버라이드를 써서, harness 정의는 그대로 둔 채 한
@@ -197,6 +200,11 @@ flowchart TB
 - 두 경로의 이벤트(텍스트, 리즈닝, 툴 호출·결과, 가드레일 개입, 파일)는 서버가 Strands
   이벤트 형식으로 정규화해 `POST /threads/{id}/runs/stream` 하나로 내보냅니다. 프론트는
   어느 경로인지 몰라도 같은 화면을 그립니다.
+- 런은 응답 연결이 아니라 서버의 백그라운드 태스크가 끝까지 소비합니다(`RunBroker`).
+  탭을 닫거나 다른 스레드로 가도 에이전트는 계속 돌고 턴은 DynamoDB 에 저장됩니다.
+  `busy` 인 스레드를 다시 열면 `GET /threads/{id}/runs/stream` 이 지금까지의 이벤트를
+  재생한 뒤 라이브로 이어 주고, Stop 은 `POST /threads/{id}/runs/cancel` 로 런을 실제로
+  중단합니다(`interrupted`).
 
 <table>
   <tr>
@@ -221,6 +229,12 @@ flowchart TB
   원본은 S3 스킬 버킷에 두고 레코드는 그 위치만 가리킵니다.
 - 레코드 상세에서 그 에이전트의 사용량과 AgentCore Evaluations 점수를 보고, MCP 레코드의
   툴은 스키마대로 인자를 채워 시험 호출합니다.
+- 레지스트리의 커스텀 메타데이터 스키마(owner·team·tier 등)를 폼으로 받아 레코드에 붙이고
+  검색 필터로 씁니다. MCP·A2A 레코드는 엔드포인트에서 정의를 동기화할 수 있고, 승인된
+  레코드를 편집해도 승인본이 계속 제공되는 동안 채팅이 끊기지 않습니다.
+- 레지스트리 자체가 MCP 서버입니다. 플랫폼 게이트웨이에 `registry` 타깃으로 붙어 에이전트가
+  대화 중에 카탈로그를 검색하고, 화면의 **IDE 연결**로 Kiro·Claude Code 에서도 같은 엔드포인트에
+  붙습니다.
 
 <table>
   <tr>

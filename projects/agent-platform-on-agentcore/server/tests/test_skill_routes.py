@@ -76,7 +76,7 @@ class StubRegistry:
             and (name is None or record.name == name)
         ]
 
-    def create_record(self, req):
+    def create_record(self, req, owner=None):
         self.created.append(req)
         return RegistryRecordSummary(
             record_id="rec-new",

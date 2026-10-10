@@ -7,6 +7,7 @@ import { Settings } from "lucide-react";
 import { PageBody, PageHeader } from "@/app/components/PageHeader";
 import { useRequireRole } from "@/app/components/AppShell";
 import { McpInspector } from "@/app/components/McpInspector";
+import { TeamsPanel } from "./components/TeamsPanel";
 import { RateCardPanel } from "@/app/insights/components/RateCardPanel";
 import { PlotStack } from "@/app/insights/components/charts";
 import { Switch } from "@/components/ui/switch";
@@ -35,7 +36,7 @@ import {
  * ten days ago and still has unpriced turns on the dashboard.
  */
 const RATE_WINDOW_DAYS = 30;
-const TABS = ["menus", "rates", "mcp"] as const;
+const TABS = ["menus", "rates", "mcp", "teams"] as const;
 type Tab = (typeof TABS)[number];
 
 function Section({
@@ -160,6 +161,7 @@ function SettingsPageInner() {
               <TabsTrigger value="menus">메뉴</TabsTrigger>
               <TabsTrigger value="rates">모델 요율</TabsTrigger>
               <TabsTrigger value="mcp">MCP Tools</TabsTrigger>
+              <TabsTrigger value="teams">팀</TabsTrigger>
             </TabsList>
             <TabsContent value="menus">
               <Section
@@ -185,6 +187,14 @@ function SettingsPageInner() {
                 hint="MCP 서버에 연결해 도구 목록을 확인하고 하나씩 호출해 봅니다. 게이트웨이나 외부 MCP 서버가 살아 있는지 점검할 때 씁니다."
               >
                 <McpInspector />
+              </Section>
+            </TabsContent>
+            <TabsContent value="teams">
+              <Section
+                title="팀"
+                hint="팀은 Cognito 그룹 team:<이름> 과 terraform 의 teams 변수로 정해집니다. 여기서는 팀마다 표시 이름, 허용 모델, 하네스 허용 툴 패턴, 일일 비용 경고를 정합니다. 실행 역할은 terraform 이 만들고 바꿀 수 없습니다."
+              >
+                <TeamsPanel />
               </Section>
             </TabsContent>
           </Tabs>

@@ -12,6 +12,10 @@ terraform {
       source  = "hashicorp/null"
       version = "~> 3.2"
     }
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.9"
+    }
   }
 }
 
@@ -120,6 +124,56 @@ locals {
   ] : []
 }
 
+# The registry's MCP endpoint is an mcpServer target like a runtime's, but it is
+# signed for the `agent-registry` service and authorised by the data-plane
+# actions (InvokeRegistryMcp plus the discovery action behind each tool).
+locals {
+  registry_iam_statements = var.attach_registry ? [
+    {
+      Sid    = "AgentRegistryDiscovery"
+      Effect = "Allow"
+      Action = [
+        "agent-registry:InvokeRegistryMcp",
+        "agent-registry:SearchDiscoverableRegistryRecords",
+        "agent-registry:ListDiscoverableRegistryRecords",
+        "agent-registry:GetDiscoverableRegistryRecord",
+      ]
+      Resource = [var.registry_arn, "${var.registry_arn}/record/*"]
+    }
+  ] : []
+}
+
+# Attaching a policy engine makes the gateway call the engine as this role:
+# GetPolicyEngine to read it, AuthorizeAction / PartiallyAuthorizeActions to
+# decide each call (both checked against the engine AND the gateway ARN). Without
+# them UpdateGateway fails with "Access denied while calling GetPolicyEngine on
+# Policy Engine ... with Gateway role" (2026-10-10 live), and an attached engine
+# would deny every call even in LOG_ONLY. See the AgentCore devguide page
+# policy-permissions.html. gateway/* because this role's own gateway ARN would
+# be a dependency cycle.
+locals {
+  policy_engine_iam_statements = var.policy_engine_arn != "" ? [
+    {
+      Sid      = "PolicyEngineConfiguration"
+      Effect   = "Allow"
+      Action   = ["bedrock-agentcore:GetPolicyEngine"]
+      Resource = [var.policy_engine_arn]
+    },
+    {
+      Sid    = "PolicyEngineAuthorization"
+      Effect = "Allow"
+      Action = [
+        "bedrock-agentcore:AuthorizeAction",
+        "bedrock-agentcore:PartiallyAuthorizeActions",
+      ]
+      Resource = [
+        var.policy_engine_arn,
+        "arn:aws:bedrock-agentcore:${var.region}:${data.aws_caller_identity.current.account_id}:gateway/*",
+      ]
+    },
+  ] : []
+}
+
 # The gateway assumes this role to invoke targets on the agent's behalf.
 resource "aws_iam_role_policy" "gateway" {
   name = "${var.project}-gateway-policy"
@@ -142,7 +196,7 @@ resource "aws_iam_role_policy" "gateway" {
         Action   = ["bedrock-agentcore:InvokeAgentRuntime"]
         Resource = ["*"]
       },
-    ], local.websearch_iam_statements)
+    ], local.websearch_iam_statements, local.registry_iam_statements, local.policy_engine_iam_statements)
   })
 }
 
@@ -152,11 +206,34 @@ resource "awscc_bedrockagentcore_gateway" "this" {
   role_arn        = aws_iam_role.gateway.arn
   authorizer_type = "AWS_IAM"
 
+  # Cedar policies (modules/gateway_policies) are evaluated here. null keeps the
+  # attribute off the resource entirely so an existing gateway shows no diff.
+  policy_engine_configuration = var.policy_engine_arn == "" ? null : {
+    arn  = var.policy_engine_arn
+    mode = var.policy_mode
+  }
+
   # runtime과 harness 모두 실행 역할 SigV4로 호출한다. bearer 토큰 경로는 제거됐다
   # (agent-runtime/auth/sigv4.py). authorizer 는 생성 후 변경 불가라 이 변경은 게이트웨이를
   # 재생성한다.
 
   # protocol_type is intentionally omitted (see below).
+
+  # role_arn only orders this after the role, not its policy; and even with the
+  # policy as a dependency, IAM is eventually consistent — the engine attach
+  # failed with GetPolicyEngine AccessDenied 1s after PutRolePolicy (2026-10-10
+  # 04:18 live). time_sleep gives the grant time to propagate.
+  depends_on = [aws_iam_role_policy.gateway, time_sleep.gateway_role_policy]
+}
+
+# Only when an engine is attached; re-sleeps whenever the role policy changes.
+resource "time_sleep" "gateway_role_policy" {
+  count           = var.policy_engine_arn == "" ? 0 : 1
+  create_duration = "30s"
+  depends_on      = [aws_iam_role_policy.gateway]
+  triggers = {
+    policy = aws_iam_role_policy.gateway.policy
+  }
 }
 
 # awscc 게이트웨이 리소스는 tags 인자를 지원하지 않으므로 control-plane TagResource로
@@ -178,6 +255,16 @@ resource "null_resource" "gateway_tags" {
 
 # --- Gateway target ----------------------------------------------------------
 
+# The workshop's mock team tools return canned approvals and salary bands, so
+# they ship only when asked for. Not a trigger: toggling demo_tools on an
+# existing stack needs `-replace` of this target (see README).
+locals {
+  drop_demo_tools = var.demo_tools ? [] : [
+    "--drop-tool", "approve_expense",
+    "--drop-tool", "lookup_salary",
+  ]
+}
+
 resource "null_resource" "target" {
   triggers = {
     gateway_id  = awscc_bedrockagentcore_gateway.this.gateway_identifier
@@ -195,14 +282,14 @@ resource "null_resource" "target" {
   }
 
   provisioner "local-exec" {
-    command = join(" ", [
+    command = join(" ", concat([
       "python3", local.script, "upsert",
       "--gateway-id", awscc_bedrockagentcore_gateway.this.gateway_identifier,
       "--name", local.target_name,
       "--lambda-arn", aws_lambda_function.tools.arn,
       "--schema", local.tool_schema,
       "--region", var.region,
-    ])
+    ], local.drop_demo_tools))
   }
 
   provisioner "local-exec" {
@@ -304,4 +391,54 @@ resource "null_resource" "runtime_mcp_target" {
   # Same serialization as the web search target: concurrent CreateGatewayTarget
   # calls on one gateway can fail while it is UPDATING.
   depends_on = [aws_iam_role_policy.gateway, null_resource.target, null_resource.websearch_target]
+}
+
+# --- AWS Agent Registry as a tool ------------------------------------------------
+#
+# Each registry exposes its discovery APIs as an MCP server
+# (`…/registry/<id>/mcp`: search_discoverable_registry_records,
+# list_discoverable_registry_records, batch_get_discoverable_registry_record).
+# Attached here, every agent and harness on this gateway can look the catalog up
+# mid-conversation — "is there a skill for X?" — instead of relying on what the
+# composer wired in. A harness `remote_mcp` tool cannot call it directly because
+# the endpoint needs SigV4 and `remoteMcp` takes only static headers.
+resource "null_resource" "registry_target" {
+  count = var.attach_registry ? 1 : 0
+  triggers = {
+    gateway_id  = awscc_bedrockagentcore_gateway.this.gateway_identifier
+    endpoint    = var.registry_mcp_endpoint
+    script_sha  = filesha256(local.script)
+    target_name = "registry"
+    delete_command = join(" ", [
+      "python3", abspath(local.script), "delete",
+      "--gateway-id", awscc_bedrockagentcore_gateway.this.gateway_identifier,
+      "--name", "registry",
+      "--region", var.region,
+    ])
+  }
+
+  provisioner "local-exec" {
+    command = join(" ", [
+      "python3", local.script, "upsert",
+      "--gateway-id", awscc_bedrockagentcore_gateway.this.gateway_identifier,
+      "--name", "registry",
+      "--mcp-endpoint", var.registry_mcp_endpoint,
+      "--iam-service", "agent-registry",
+      "--region", var.region,
+    ])
+  }
+
+  provisioner "local-exec" {
+    when    = destroy
+    command = self.triggers.delete_command
+  }
+
+  # Serialised with the other targets: concurrent CreateGatewayTarget calls on
+  # one gateway fail while it is UPDATING.
+  depends_on = [
+    aws_iam_role_policy.gateway,
+    null_resource.target,
+    null_resource.websearch_target,
+    null_resource.runtime_mcp_target,
+  ]
 }

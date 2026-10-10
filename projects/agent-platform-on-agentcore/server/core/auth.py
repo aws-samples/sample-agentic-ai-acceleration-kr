@@ -31,6 +31,10 @@ from core import config
 logger = logging.getLogger(__name__)
 
 ADMIN_GROUP = "admin"
+# A Cognito group named `team:<name>` makes its members part of team <name>.
+# Teams decide which registry records a person sees, which harness execution
+# role their harnesses run under, and which models they may pick.
+TEAM_GROUP_PREFIX = "team:"
 COGNITO_PROVIDER_ID = "cognito"
 
 
@@ -58,6 +62,17 @@ class AuthUser(BaseModel):
         if self.role:
             return self.role == "admin"
         return ADMIN_GROUP in self.groups
+
+    @property
+    def teams(self) -> List[str]:
+        """Team names from `team:` groups, in group order, without duplicates."""
+        seen: List[str] = []
+        for group in self.groups:
+            if isinstance(group, str) and group.startswith(TEAM_GROUP_PREFIX):
+                name = group[len(TEAM_GROUP_PREFIX):]
+                if name and name not in seen:
+                    seen.append(name)
+        return seen
 
 
 # PyJWKClient caches the fetched JWKS, so this is built once per pool.

@@ -119,6 +119,9 @@ class CollectorService:
         self.usage_logs_ensurer: Optional[Any] = None
         # `BillingService`, for the six-hourly reconciliation (`reconcile`).
         self.billing: Optional[Any] = None
+        # Gateways whose policy-engine decision metrics are collected; empty
+        # collects nothing. Set from MCP_GATEWAY_ID in core.dependencies.
+        self.policy_gateway_ids: List[str] = []
 
     # --- CloudWatch ----------------------------------------------------------
 
@@ -364,6 +367,88 @@ class CollectorService:
             written += 1
         return {"day": day, "written": written}
 
+    # --- gateway policy decisions ----------------------------------------------
+
+    # The service publishes every decision under several rollups of the same
+    # count — with and without Mode, with and without PolicyEngine (and, for
+    # AuthorizeAction, without TargetResource) — and also counts tools/list
+    # filtering as PartiallyAuthorizeActions decisions, one per listed tool.
+    # Summing every set multiplied the real number (2026-10-10 live: 296 denies
+    # shown for 1 denied call). Exactly one rollup is a tool *call* counted once:
+    # AuthorizeAction with TargetResource + Mode + PolicyEngine and nothing finer.
+    _POLICY_ROLLUP = frozenset({"OperationName", "TargetResource", "Mode", "PolicyEngine"})
+
+    def _policy_dimension_sets(self, metric: str, gateway_id: str) -> List[List[Dict[str, str]]]:
+        """The one-per-Mode call rollup of this metric on this gateway."""
+        sets: List[List[Dict[str, str]]] = []
+        token: Optional[str] = None
+        try:
+            while True:
+                kwargs: Dict[str, Any] = {
+                    "Namespace": NAMESPACE, "MetricName": metric,
+                    "Dimensions": [{"Name": "TargetResource", "Value": gateway_id}],
+                }
+                if token:
+                    kwargs["NextToken"] = token
+                response = self.cloudwatch.list_metrics(**kwargs)
+                for m in response.get("Metrics", []):
+                    dims = m.get("Dimensions", [])
+                    names = {d.get("Name") for d in dims}
+                    values = {d.get("Name"): d.get("Value") for d in dims}
+                    if names == self._POLICY_ROLLUP and values.get("OperationName") == "AuthorizeAction":
+                        sets.append(dims)
+                token = response.get("NextToken")
+                if not token:
+                    break
+        except Exception:
+            logger.warning("list_metrics failed for %s/%s", metric, gateway_id, exc_info=True)
+            return []
+        return sets
+
+    def collect_policy_day(self, day: str, gateway_ids: List[str], *, today: str) -> Dict[str, Any]:
+        """Allow/deny tool-call decisions per gateway, split by mode.
+
+        These are the policy engine's own numbers (no caller in them), so they
+        cross-check the per-team denial ledger the stream writes: when the two
+        disagree the difference is shown as unattributed, never invented."""
+        shard = month_shard(day)
+        collected_at = clock.now().isoformat()
+        written = 0
+        for gateway_id in gateway_ids:
+            specs: List[Dict[str, Any]] = []
+            modes: Dict[str, str] = {}
+            for metric, prefix in (("AllowDecisions", "a"), ("DenyDecisions", "d")):
+                for i, dims in enumerate(self._policy_dimension_sets(metric, gateway_id)):
+                    spec_id = f"{prefix}{i}"
+                    specs.append({"id": spec_id, "metric": metric, "dimensions": dims})
+                    modes[spec_id] = next((d["Value"] for d in dims if d.get("Name") == "Mode"), "")
+            if not specs:
+                continue
+            values = self._sums(day, specs)
+            by_mode: Dict[str, Dict[str, int]] = {
+                m or "unknown": {"allow": 0, "deny": 0} for m in modes.values()
+            }
+            for k, v in values.items():
+                bucket = by_mode.setdefault(modes[k] or "unknown", {"allow": 0, "deny": 0})
+                bucket["allow" if k.startswith("a") else "deny"] += int(round(v or 0))
+            self.repository.set_fields(
+                f"GATEWAY_POLICY#{shard}", f"D#{day}#G#{gateway_id}",
+                {"allow_decisions": sum(b["allow"] for b in by_mode.values()),
+                 "deny_decisions": sum(b["deny"] for b in by_mode.values()),
+                 "by_mode": by_mode,
+                 # AuthorizeAction carries no ToolName dimension (only tools/list
+                 # filtering does), so the per-tool split comes from the stream's
+                 # denial ledger, not from these metrics.
+                 "deny_by_tool": {},
+                 "collected_at": collected_at, "complete": day < today},
+            )
+            written += 1
+        return {"day": day, "written": written}
+
+    def policy_decisions(self, start_date: str, end_date: str) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        """gateway_id -> day -> item."""
+        return self._grouped("GATEWAY_POLICY#", "#G#", start_date, end_date)
+
     # --- reads ---------------------------------------------------------------
 
     def _grouped(self, prefix: str, marker: str, start_date: str, end_date: str) -> Dict[str, Dict[str, Dict[str, Any]]]:
@@ -503,6 +588,7 @@ class CollectorService:
                 "runtime": self.collect_day(day, arns, today=today)["written"],
                 "gateway": self.collect_gateways_day(day, gateways, today=today)["written"],
                 "memory": self.collect_memories_day(day, memories, today=today)["written"],
+                "policy": self.collect_policy_day(day, self.policy_gateway_ids, today=today)["written"],
             }
         if self.session_collector is not None:
             for day in (yesterday, today):

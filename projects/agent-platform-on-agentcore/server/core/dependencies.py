@@ -11,6 +11,7 @@ from services.artifact_service import ArtifactService
 from services.thread_service import ThreadService
 from services.mcp_apps_service import shared_relay
 from services.streaming_service import StreamingService
+from services.run_broker import RunBroker
 from services.harness_output_service import HarnessOutputService
 from services.artifact_preview_service import ArtifactPreviewService
 from services.knowledge_provisioner import KnowledgeProvisioner
@@ -26,11 +27,15 @@ from services.rate_card_service import RateCardService
 from services.evaluation_service import EvaluationService
 from services.layout_service import LayoutService
 from services.nav_service import NavService
+from services.team_service import TeamService
 from services.collector_service import CollectorService
 from services.observability_service import ObservabilityService
 from services.directory_service import DirectoryService
+from services.registry_service import set_owner_resolver
 from agents.agentcore_client import AgentCoreClient
 from core.config import (
+    MCP_GATEWAY_ID,
+    TEAM_EXECUTION_ROLES,
     COGNITO_REGION,
     COGNITO_USER_POOL_ID,
     ARTIFACTS_BUCKET,
@@ -133,6 +138,10 @@ evaluation_service = EvaluationService(region_name=AWS_REGION)
 # Initialize streaming service. The relay is passed so an app-mount signal can be
 # stamped with the MCP record that serves it: the runtime knows only the ui:// URI,
 # and the relay resolves endpoints from records alone.
+# One broker for the process: the routes that attach to and cancel runs must see
+# the same runs the start route created. See services/run_broker.py.
+run_broker = RunBroker()
+
 streaming_service = StreamingService(
     thread_service=thread_service,
     agentcore_client=agentcore_client,
@@ -140,6 +149,7 @@ streaming_service = StreamingService(
     mcp_apps_relay=shared_relay(),
     harness_output_service=harness_output_service,
     usage_service=usage_service,
+    run_broker=run_broker,
 )
 
 # Same conditional construction as artifact_repository: the base repository
@@ -181,6 +191,12 @@ layout_service = LayoutService(repository=prefs_repository)
 # Which sidebar menus a plain user sees; one platform-wide document in the same table.
 nav_service = NavService(repository=prefs_repository)
 
+# Team settings: the document lives in the same table; the set of teams comes
+# from terraform through TEAM_EXECUTION_ROLES.
+team_service = TeamService(repository=prefs_repository, seeded_roles=TEAM_EXECUTION_ROLES)
+# Attached here because streaming_service is built above, before teams exist (module order).
+streaming_service.team_service = team_service
+
 # The rate card an admin can read into and fill. Shares the usage service (the
 # overlay lives in its table and it reprices) and the Price List client.
 rate_card_service = RateCardService(usage=usage_service, pricing=pricing_service)
@@ -216,6 +232,9 @@ directory_service = DirectoryService(
     user_pool_id=COGNITO_USER_POOL_ID,
     users=user_repository,
 )
+# Registry records are stamped with their registering user's e-mail; a Cognito
+# access token only names the sub, so the directory resolves it.
+set_owner_resolver(lambda sub: directory_service.emails([sub]).get(sub))
 
 # Per-session runtime usage (vended USAGE_LOGS). Disabled — `enabled` False — until
 # terraform provides the log group and delivery destination; the collector then
@@ -237,6 +256,7 @@ if collector_service is not None:
     collector_service.billing = billing_service
     collector_service.reconciler = collector_service.reconcile
     collector_service.usage = usage_service
+    collector_service.policy_gateway_ids = [MCP_GATEWAY_ID] if MCP_GATEWAY_ID else []
     if observability_service.enabled:
         collector_service.session_collector = observability_service.collect_sessions
         collector_service.usage_logs_ensurer = observability_service.ensure_usage_logs

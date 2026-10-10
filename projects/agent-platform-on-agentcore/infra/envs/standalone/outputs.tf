@@ -26,6 +26,16 @@ output "agent_registry_id" {
   value       = var.enable_agent_registry ? module.agent_registry[0].registry_id : ""
 }
 
+output "agent_registry_mcp_endpoint" {
+  description = "The registry's MCP endpoint; connect an IDE through mcp-proxy-for-aws (--service agent-registry). Empty when the registry is off."
+  value       = var.enable_agent_registry ? module.agent_registry[0].mcp_endpoint : ""
+}
+
+output "registry_approvals_topic_arn" {
+  description = "SNS topic announcing record approval-workflow events; empty when the registry is off."
+  value       = var.enable_agent_registry ? module.agent_registry[0].approvals_topic_arn : ""
+}
+
 output "mcp_gateway_url" {
   description = "Set this as MCP_GATEWAY_URL for the agent runtime (already without the /mcp suffix)."
   value       = module.mcp_gateway.gateway_url
@@ -108,4 +118,26 @@ output "active_cost_allocation_tags" {
 output "runtime_mcp_endpoints" {
   description = "Runtime MCP servers attached to the gateway (name => endpoint). Use the URL as the MCP record's remote URL in the Agent Registry."
   value       = module.mcp_gateway.runtime_mcp_endpoints
+}
+
+output "team_harness_role_arns" {
+  description = "team => harness execution role ARN; the server gets this as TEAM_EXECUTION_ROLES."
+  value       = { for t, m in module.team_harness_roles : t => m.role_arn }
+}
+
+output "mcp_gateway_id" {
+  value = module.mcp_gateway.gateway_id
+}
+
+output "mcp_gateway_arn" {
+  description = "Resource of the Cedar policies in modules/gateway_policies."
+  value       = module.mcp_gateway.gateway_arn
+}
+
+output "policy_engine_arn" {
+  value = var.enable_gateway_policy ? module.policy_engine[0].engine_arn : ""
+}
+
+output "policy_engine_id" {
+  value = var.enable_gateway_policy ? module.policy_engine[0].engine_id : ""
 }
