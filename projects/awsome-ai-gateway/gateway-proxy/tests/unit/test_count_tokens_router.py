@@ -173,3 +173,33 @@ async def test_count_tokens_bedrock_error():
         )
 
     assert resp.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_strips_unsupported_tools():
+    """count_tokens builds its own body, so it must run the same tool filter as /v1/messages
+    — otherwise Claude Code's advisor tool (and a tool_addition naming it) is a 400 here."""
+    adapter = MagicMock()
+    adapter.count_tokens = AsyncMock(return_value=(200, 7))
+    app = _build_app(adapter)
+    read = {"name": "Read", "description": "read", "input_schema": {"type": "object"}}
+    advisor = {"type": "advisor_20260301", "name": "advisor", "model": "claude-fable-5-1"}
+    messages = [{"role": "user", "content": "hi"},
+                {"role": "system", "content": [
+                    {"type": "text", "text": "note"},
+                    {"type": "tool_addition",
+                     "tool": {"type": "tool_reference", "name": "advisor"}}]}]
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/messages/count_tokens",
+            json={"model": MODEL_ALIAS, "tools": [read, advisor], "messages": messages},
+        )
+
+    assert resp.status_code == 200
+    import json as _json
+
+    body_arg, _model = adapter.count_tokens.call_args.args
+    sent = _json.loads(body_arg)
+    assert [t.get("name") for t in sent["tools"]] == ["Read"]
+    assert "advisor" not in _json.dumps(sent)

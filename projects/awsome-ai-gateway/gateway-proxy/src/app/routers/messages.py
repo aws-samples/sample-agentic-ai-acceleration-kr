@@ -806,6 +806,10 @@ async def count_tokens(request: Request) -> JSONResponse:
         model_alias = req_data.get("model", "")
         bedrock_body = {k: v for k, v in req_data.items() if k in _BEDROCK_ALLOWED_FIELDS}
         bedrock_body["anthropic_version"] = "bedrock-2023-05-31"
+        # Same filter as the /v1/messages body builder — an Anthropic-only tool (Claude
+        # Code's advisor) or a tool_addition naming one is a 400 here too.
+        bedrock_body = strip_unsupported_tools(
+            bedrock_body, request_id=state.get("request_id", ""))
         # Bedrock CountTokens requires max_tokens in the wrapped Anthropic body
         # even though it doesn't generate output; inject a placeholder when absent.
         bedrock_body.setdefault("max_tokens", 1)
