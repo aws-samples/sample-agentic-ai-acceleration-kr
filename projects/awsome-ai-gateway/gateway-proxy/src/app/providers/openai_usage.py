@@ -1,5 +1,8 @@
 # Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
-"""OpenAI-dialect usage parsers — the ONE place both Bedrock planes and both wires agree.
+"""OpenAI-dialect wire facts — the ONE place both Bedrock planes and both wires agree.
+
+Usage parsers, plus the terminal-frame test both streaming adapters need (see the bottom
+section). Same reason for living together: two adapters that must not drift.
 
 Four call sites bill from these numbers and they must never disagree:
 
@@ -35,6 +38,8 @@ The prompt count is CACHE-INCLUSIVE on both wires, while ``TokenUsage`` is Anthr
 docstring for the measurement and the mis-billing it prevents.
 """
 from __future__ import annotations
+
+import json
 
 from app.schemas.domain import TokenUsage, split_openai_input
 
@@ -113,3 +118,53 @@ def extract_chat_usage(usage: dict) -> TokenUsage:
         reasoning=_int(out_details.get("reasoning_tokens")),
         provider_total=_int(usage.get("total_tokens")),
     )
+
+
+# ── terminal frame detection ──────────────────────────────────────────────────
+#
+# 두 스트리밍 어댑터는 상류 iteration 이 터지면 오류 프레임을 하나 덧붙인다. 문제는
+# **언제** 터지느냐다: httpx 는 마지막 청크를 넘긴 **뒤** 연결 정리 단계에서 예외를 던지는
+# 일이 잦다(peer 가 깔끔하지 않게 닫는 경우). 그러면 이미 `response.completed` / `[DONE]`
+# 을 받은 클라이언트에게 오류 프레임이 뒤따라 붙는다.
+#
+# 결과가 나쁜 쪽으로만 틀린다: Codex 는 완료된 응답을 실패로 처리하고 재시도한다 — 우리는
+# 이미 그 턴의 토큰을 지불했고, 재시도분도 지불한다. 감사 로그에도 성공한 요청이 오류로
+# 남는다.
+#
+# 그래서 종료 프레임을 이미 보냈으면 오류 프레임을 덧붙이지 않는다(로그만 남긴다). #86 의
+# "받지 못한 성공을 주장하지 않는다" 의 거울상이다 — 이미 얻은 성공을 실패로 덮지 않는다.
+_RESPONSES_TERMINAL_TYPES = frozenset(
+    {"response.completed", "response.incomplete", "response.failed"}
+)
+
+_DONE_SENTINEL = "[DONE]"
+
+
+def is_terminal_responses_payload(payload: str) -> bool:
+    """Responses 와이어: 이 payload 가 스트림의 종료 신호인가.
+
+    ``[DONE]`` 센티널과 typed terminal 이벤트를 **둘 다** 본다. 상류가 종료 이벤트를 보낸
+    직후 ``[DONE]`` 전에 연결이 끊기는 경우가 있고, 그때도 응답 자체는 완결됐다.
+    """
+    if not isinstance(payload, str):
+        return False
+    stripped = payload.strip()
+    if stripped == _DONE_SENTINEL:
+        return True
+    try:
+        obj = json.loads(stripped)
+    except (ValueError, TypeError):
+        return False
+    return isinstance(obj, dict) and obj.get("type") in _RESPONSES_TERMINAL_TYPES
+
+
+def chat_chunk_is_terminal(chunk: bytes) -> bool:
+    """Chat 와이어: 이 원본 청크에 ``data: [DONE]`` 이 들어 있는가.
+
+    chat 은 바이트 그대로 통과시키므로 파싱하지 않는다. 한 청크에 여러 SSE 줄이 들어올 수
+    있어서 정확일치가 아니라 포함으로 본다.
+    """
+    if not isinstance(chunk, (bytes, bytearray)):
+        return False
+    return b"[DONE]" in chunk
+

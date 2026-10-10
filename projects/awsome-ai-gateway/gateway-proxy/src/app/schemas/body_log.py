@@ -37,10 +37,24 @@ class BodyLogRecord(BaseModel):
          exist, which is the kind of error that gets a compensating control built for
          nothing.
 
-    Where both copies exist they are NOT byte-identical: ``request_body`` here is what
-    the router captured, before ``runtime_openai_adapter._store_disabled_body`` injects
-    ``store: false`` on the way upstream, so AWS's ``inputBodyJson`` has one extra key.
-    ``bedrock_request_id`` is the join key to the AWS-side record.
+    Where both copies exist, ``request_body`` here is what the router captured and the
+    gateway forwards it unmodified on the OpenAI wire, so it should match AWS's
+    ``inputBodyJson`` key-for-key. ``bedrock_request_id`` is the join key to the AWS-side
+    record.
+
+    ⚠️ **This paragraph used to claim otherwise, and the claim was false.** It said the
+    copies differ because ``runtime_openai_adapter._store_disabled_body`` injects
+    ``store: false`` on the way upstream. Neither that module nor that function has ever
+    existed in this repository, and nothing sets ``store`` anywhere. An auditor reading
+    the old text would have concluded that upstream retention was already suppressed.
+
+    ``store`` is therefore left at the provider's default on ``/v1/responses``. Forcing it
+    to ``false`` was **not** done here on purpose: it is an untested field injection on the
+    highest-volume client's only path, and a provider that rejects unknown fields would turn
+    every Codex request into a 400. It also interacts with ``previous_response_id`` chaining,
+    which this gateway passes through without inspecting. Deciding it needs one live dev
+    probe (does the plane accept and honour ``store``?) plus an operator-visible setting —
+    see the PR that corrected this docstring.
     """
 
     request_id: str
