@@ -218,6 +218,24 @@ class Settings(BaseSettings):
     #:    되거나 컨텍스트 창을 넘겨 continuation 턴이 400 이 된다(그때까지 과금분 전부 유실).
     web_search_max_searches_per_turn: int = 4
 
+    #: Bedrock InvokeModel 로 넘길 anthropic-beta 값(본문 ``anthropic_beta``). 쉼표로 구분한
+    #: ``beta[:field]`` 이고, ``field`` 는 그 beta 가 여는 최상위 본문 필드로 beta 와 함께일
+    #: 때만 넘어간다. 나머지 beta 는 버린다 — Bedrock 은 모르는 이름 하나에도 요청 전체를
+    #: 거부한다. 빈 값 = 아무것도 넘기지 않음(이전 동작, 끄기 스위치). 각 beta 의 시험 기록과
+    #: 추가 기준: docs/beta-headers/, services/upstream_compat.py.
+    #:
+    #: English: anthropic-beta values forwarded to Bedrock InvokeModel (body
+    #: ``anthropic_beta``), as comma-separated ``beta[:field]`` — ``field`` is the top-level
+    #: body field the beta opens and travels ONLY with it. Every other beta is dropped:
+    #: Bedrock 400s the whole request on a name it does not know. Blank = forward nothing
+    #: (the previous behaviour) — the kill switch. Adding a beta is a config change only when
+    #: its field and response do not touch the web-search loop, usage accounting or
+    #: fallback; otherwise it needs a code change.
+    bedrock_forward_betas: str = (
+        "dangerous-tool-use-2026-09-03:safeguards,per-turn-control-2026-07-01,"
+        "inline-tools-2026-09-15,thinking-display-updates-2026-08-18"
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -42,6 +42,11 @@ from app.services.router_service import RouterService
 from app.services.streaming import bedrock_anthropic_sse_stream
 from app.services.thinking_normalizer import normalize_thinking
 from app.services.tool_filter import strip_unsupported_tools
+from app.services.upstream_compat import (
+    apply_forwarded_betas,
+    client_betas,
+    forward_beta_map,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -87,7 +92,10 @@ def _has_1h_cache_control(req_data: dict) -> bool:
 
 # Bedrock invoke_model only accepts specific fields — strip everything else.
 # Claude Code sends extra fields (model, stream, context_management, etc.) that Bedrock rejects.
-# Bedrock does NOT accept anthropic_beta — caching is handled automatically via cache_control in content.
+# anthropic_beta and safeguards are deliberately NOT here. Bedrock takes betas only in the body
+# and 400s on a name it does not know, so only the configured ones (and their paired fields)
+# are added — by apply_forwarded_betas in _build_candidate_body, which is what makes the
+# BEDROCK_FORWARD_BETAS kill switch work. Prompt caching needs no beta (cache_control in content).
 _BEDROCK_ALLOWED_FIELDS = {
     "anthropic_version",
     "messages",
@@ -342,6 +350,13 @@ async def messages(request: Request) -> StreamingResponse | JSONResponse:
 
     is_mantle = decision.provider == ProviderType.BEDROCK_MANTLE
 
+    # 클라이언트가 보낸 anthropic-beta 와 넘길 목록은 요청마다 한 번만 읽는다
+    # (_build_candidate_body 는 폴백 후보·웹 검색 턴마다 불린다).
+    # English: read once per request; the body builder runs per fallback candidate and per
+    # web-search turn.
+    _client_betas = client_betas(request.headers.getlist("anthropic-beta"))
+    _fwd_map = forward_beta_map(get_settings().bedrock_forward_betas)
+
     def _build_candidate_body(
         req_d: dict, cand_config: ModelConfigSchema, streaming: bool
     ) -> tuple[bytes, dict, dict]:
@@ -395,6 +410,11 @@ async def messages(request: Request) -> StreamingResponse | JSONResponse:
             bedrock_b = normalize_thinking(
                 bedrock_b, cand_config.provider_model_id, request_id=request_id
             )
+            # 정해 둔 anthropic-beta 와 짝 필드(safeguards)를 마지막에 넣는다 — 위의 정규화가
+            # 지우지 못하게. Mantle 분기에는 넣지 않는다(헤더로 가야 하고 시험하지 않았다).
+            # English: last, so no normalisation step above can drop them. Not on the Mantle
+            # branch (betas would go as a header there; untested).
+            apply_forwarded_betas(bedrock_b, req_d, _client_betas, _fwd_map)
             return (
                 json.dumps(bedrock_b).encode(),
                 {"path_suffix": "invoke-with-response-stream"},
