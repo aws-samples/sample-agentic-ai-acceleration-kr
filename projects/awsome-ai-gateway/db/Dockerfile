@@ -17,7 +17,10 @@ COPY ca-certificates.cr[t] /etc/ssl/certs/ca-certificates.crt
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 
-RUN uv pip install --system alembic asyncpg sqlalchemy
+# env.py 가 create_async_engine 을 쓰므로 greenlet 이 필요하다.
+# SQLAlchemy 2.1 부터 greenlet 은 [asyncio] extra 로만 설치된다
+# (2.0.x 는 x86_64 에서 자동 설치됐다). extra 를 빼면 alembic 이 import 에서 죽는다.
+RUN uv pip install --system alembic asyncpg "sqlalchemy[asyncio]"
 
 COPY alembic.ini env.py ./
 COPY versions/ ./versions/
