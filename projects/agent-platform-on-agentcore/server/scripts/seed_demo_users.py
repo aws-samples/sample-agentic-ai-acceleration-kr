@@ -11,9 +11,8 @@ the same AWS credentials the deployment used:
     python scripts/seed_demo_users.py --password '<choose-a-password>'
     python scripts/seed_demo_users.py --list
 
-Not terraform on purpose: the installer form is generated from
-`standalone/variables.tf` and renders string/bool/number/list variables only, so
-a `map(string)` of demo accounts would break it (installer/tests/test_values.py).
+Not terraform on purpose: accounts are data, not infrastructure, and the pool
+outlives any one demo.
 """
 import argparse
 import os
@@ -37,13 +36,60 @@ DEMO_USERS = (
     ("sooyoung.han@example.com", "고객 지원"),
     ("taeyang.oh@example.com", "인턴"),
 )
+
+# Workshop personas: one account per team, named after the team so a participant
+# can tell at a glance whose seat they are in.
+WORKSHOP_USERS = {
+    "finance": ("finance-user@example.com", "재무팀"),
+    "hr": ("hr-user@example.com", "HR"),
+    "support": ("support-user@example.com", "고객지원"),
+}
+
 GROUP = "user"
+
+
+def ensure_user(idp, pool_id: str, email: str, password: str, groups: list[str]) -> tuple[bool, str]:
+    """Create or update a user and ensure they are in the specified groups.
+
+    Returns (created, sub) where created is True if the user was newly created.
+    Raises SystemExit if a required group does not exist.
+    """
+    try:
+        idp.admin_create_user(
+            UserPoolId=pool_id,
+            Username=email,
+            UserAttributes=[{"Name": "email", "Value": email}, {"Name": "email_verified", "Value": "true"}],
+            MessageAction="SUPPRESS",
+        )
+        created = True
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] != "UsernameExistsException":
+            raise
+        created = False
+
+    idp.admin_set_user_password(UserPoolId=pool_id, Username=email, Password=password, Permanent=True)
+
+    existing_groups = {g["GroupName"] for g in idp.admin_list_groups_for_user(UserPoolId=pool_id, Username=email)["Groups"]}
+    for group in groups:
+        if group not in existing_groups:
+            try:
+                idp.admin_add_user_to_group(UserPoolId=pool_id, Username=email, GroupName=group)
+            except ClientError as exc:
+                if exc.response["Error"]["Code"] == "ResourceNotFoundException":
+                    raise SystemExit(f"Group {group} does not exist; add the team to terraform `teams` and apply first")
+                raise
+
+    sub = next(
+        a["Value"] for a in idp.admin_get_user(UserPoolId=pool_id, Username=email)["UserAttributes"] if a["Name"] == "sub"
+    )
+    return created, sub
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--password", help="Permanent password for every demo account (pool policy: 8+, upper, lower, digit).")
     parser.add_argument("--list", action="store_true", help="Print the pool's users and exit.")
+    parser.add_argument("--teams", default="", help="Comma-separated team names. Demo users are spread across them round-robin and one <team>-user@example.com is created per team; groups must exist (terraform `teams`).")
     args = parser.parse_args()
 
     load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"), override=True)
@@ -64,27 +110,19 @@ def main() -> int:
     if not args.password:
         parser.error("--password is required unless --list")
 
-    for email, persona in DEMO_USERS:
-        try:
-            idp.admin_create_user(
-                UserPoolId=pool_id,
-                Username=email,
-                UserAttributes=[{"Name": "email", "Value": email}, {"Name": "email_verified", "Value": "true"}],
-                MessageAction="SUPPRESS",
-            )
-            created = True
-        except ClientError as exc:
-            if exc.response["Error"]["Code"] != "UsernameExistsException":
-                raise
-            created = False
-        idp.admin_set_user_password(UserPoolId=pool_id, Username=email, Password=args.password, Permanent=True)
-        groups = {g["GroupName"] for g in idp.admin_list_groups_for_user(UserPoolId=pool_id, Username=email)["Groups"]}
-        if GROUP not in groups:
-            idp.admin_add_user_to_group(UserPoolId=pool_id, Username=email, GroupName=GROUP)
-        sub = next(
-            a["Value"] for a in idp.admin_get_user(UserPoolId=pool_id, Username=email)["UserAttributes"] if a["Name"] == "sub"
-        )
-        print(f"{'created' if created else 'exists ':8s} {email:32s} {persona:8s} {sub}")
+    teams = [t.strip() for t in args.teams.split(",") if t.strip()]
+
+    for i, (email, persona) in enumerate(DEMO_USERS):
+        groups = [GROUP] + ([f"team:{teams[i % len(teams)]}"] if teams else [])
+        created, sub = ensure_user(idp, pool_id, email, args.password, groups)
+        print(f"{'created' if created else 'exists ':8s} {email:32s} {persona:8s} {','.join(groups):24s} {sub}")
+
+    for team in teams:
+        if team in WORKSHOP_USERS:
+            email, persona = WORKSHOP_USERS[team]
+            created, sub = ensure_user(idp, pool_id, email, args.password, [GROUP, f"team:{team}"])
+            print(f"{'created' if created else 'exists ':8s} {email:32s} {persona:8s} {GROUP},team:{team:16s} {sub}")
+
     return 0
 
 

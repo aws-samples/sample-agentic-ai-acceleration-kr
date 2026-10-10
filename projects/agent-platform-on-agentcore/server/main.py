@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # Import routers
 from routes import health, threads, mcp_apps, mcp, auth, registry, harness, artifacts, knowledge, insights, config, settings
 from core.config import COLLECTOR_ENABLED, COLLECTOR_INTERVAL_SECONDS
-from core.dependencies import collector_service
+from core.dependencies import collector_service, streaming_service
 
 
 @asynccontextmanager
@@ -31,6 +31,8 @@ async def lifespan(app: FastAPI):
     task, and the collector's own DDB lease keeps a second replica from doubling
     the work. Its passes run in a worker thread (`asyncio.to_thread`), so the
     blocking boto3 calls never stall request handling.
+
+    Also drains in-flight chat runs on shutdown; see services/run_broker.py.
     """
     task = None
     if COLLECTOR_ENABLED and collector_service is not None:
@@ -41,6 +43,10 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        # ECS stops a task with SIGTERM and uvicorn runs this before exiting.
+        # Each run's generator writes `interrupted` on cancellation, so a
+        # redeploy leaves no thread stuck on `busy` with nothing behind it.
+        await streaming_service.run_broker.shutdown()
         if task is not None:
             task.cancel()
 

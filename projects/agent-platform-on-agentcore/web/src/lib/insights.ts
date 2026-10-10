@@ -322,6 +322,8 @@ export interface RateRow {
   unpriced_since: string | null;
   tiers: Record<string, RateTier | null>;
   complete: boolean;
+  /** Prompt size above which a call is billed on the family's long card (`long_*` tiers); null when it has one card. */
+  long_context_threshold?: number | null;
 }
 
 /** A figure a source can state that the card lacks or disputes. */
@@ -490,11 +492,28 @@ export interface RecordInsights extends WindowFields {
   daily: DailyPoint[];
   tools: ToolUsage[];
   /**
-   * Set only for an MCP/gateway record, whose own turn/token counters are always
-   * zero because it is called *through* rather than run. When present, the Usage
-   * view shows attaching agents and their traffic instead of those empty counters.
+   * Set for every non-agent record (skill, MCP server, gateway), whose own
+   * turn/token counters are always zero because it is reached rather than run.
+   * When present, the Usage view shows the agents that reach it and their
+   * traffic instead of those empty counters. `metric` is `traffic` when the
+   * turns passed through the record (an MCP call) and `reach` when they merely
+   * ran on an agent that attaches it (a skill, which nothing counts being read).
+   * `agent_records` ranks those agents by traffic; evaluation lives on them.
    */
-  reach?: { agents: number; turns: number } | null;
+  reach?: RecordReach | null;
+}
+
+export interface RecordReach {
+  metric: "traffic" | "reach";
+  agents: number;
+  turns: number;
+  /** The agents that reach this record, ranked by their turns in the window. */
+  agent_records: Array<{ record_id: string; name: string | null; turns: number }>;
+  /**
+   * The same turns and calls per day, dense over the window, oldest first. For
+   * a skill `tool_calls` is always zero — nothing counts a skill being read.
+   */
+  daily: Array<{ date: string; turns: number; tool_calls: number }>;
 }
 
 export interface CompositionEntry {
@@ -650,6 +669,42 @@ export function fetchMyUsage(days: number): Promise<MyUsage> {
  */
 export function fetchUserLeaderboard(days: number): Promise<UserLeaderboard> {
   return request<UserLeaderboard>(`/api/insights/users?days=${days}`);
+}
+
+export interface TeamUsageRow {
+  team: string;
+  label: string;
+  turns: number;
+  input_tokens: number;
+  output_tokens: number;
+  failed_turns: number;
+  tool_calls: number;
+  unmeasured_turns: number;
+  priced_turns: number;
+  unpriced_turns: number;
+  model_cost_micros: number;
+  policy_denials: number;
+  denied_tools: Record<string, number>;
+  daily_cost_alert_usd: number | null;
+}
+
+export interface TeamInsights extends WindowFields {
+  sources: { usage: boolean; policy_metrics: boolean };
+  teams: TeamUsageRow[];
+  unattributed: { turns: number; model_cost_micros: number; policy_denials: number };
+  gateway_decisions: {
+    allow: number;
+    deny: number;
+    by_tool: Record<string, number>;
+    /** LOG_ONLY counts what would have been denied; only ENFORCE blocked calls. */
+    by_mode?: Record<string, { allow: number; deny: number }>;
+  };
+  recent_denials: { at: string; team: string; tool_name: string; agent_record_id: string; thread_id: string }[];
+}
+
+/** Per-team spend and policy denials. 403 for a plain user, rendered as "관리자만". */
+export function fetchTeamInsights(days: number): Promise<TeamInsights> {
+  return request<TeamInsights>(`/api/insights/teams?days=${days}`);
 }
 
 export interface TraceSpan {

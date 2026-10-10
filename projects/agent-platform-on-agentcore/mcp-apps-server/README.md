@@ -79,6 +79,9 @@ uv run --with 'mcp>=2' --with boto3 --with pytest --with anyio python -m pytest 
 agentcore configure --entrypoint server.py --name bap_platform_status \
   --requirements-file requirements.txt --region ap-northeast-1 --ecr auto -p MCP
 agentcore launch
+# launch 는 platformVersion 을 못 건드립니다(새 런타임은 V1, 갱신은 기존 값 유지).
+# 스냅샷 기반 V2 로 맞추는 건 agent-runtime 의 스크립트가 합니다. READY 까지 수 분.
+python3 ../agent-runtime/scripts/set_platform_version.py --name bap_platform_status --region us-east-1
 ```
 
 실행 역할에 CloudWatch 읽기 권한이 필요합니다. 역할은 agentcore CLI가 만들었으므로 인라인

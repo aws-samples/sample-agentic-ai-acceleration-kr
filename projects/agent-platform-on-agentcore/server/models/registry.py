@@ -34,10 +34,49 @@ class RegistryRecordSummary(BaseModel):
     # invoked through InvokeHarness rather than InvokeAgentRuntime.
     harness_arn: Optional[str] = None
     qualifier: Optional[str] = None
+    # True for the record that points at the server's default runtime
+    # (AGENT_RUNTIME_ARN): the agent a chat starts with when none is picked, and
+    # the one the picker pins to the top. Derived at read time
+    # (services/default_agent.py), never stored on the record.
+    is_default: bool = False
     # "deployed" when this summary was synthesised from a deployed AgentCore
     # resource rather than read from the registry (registry-off fallback). None
     # for real registry records. The UI uses it to hide registry-only actions.
     source: Optional[str] = None
+    # Whether the discovery data plane (search, browse, the registry MCP
+    # endpoint) returns this record — i.e. it has an APPROVED revision. Differs
+    # from `status` after an edit: AWS opens a DRAFT revision but keeps serving
+    # the approved one, so a DRAFT record can still be discoverable and
+    # chattable. None when not looked up (deployed fallback, search results).
+    discoverable: Optional[bool] = None
+    # Typed key/values validated against the registry's custom metadata schema
+    # (owner, team, tier, …). Searchable as `customMetadata.<field>`.
+    custom_metadata: Optional[Dict[str, Any]] = None
+    # False when custom_metadata could not be determined (a failed BatchGet or
+    # Get while listing, a deployed harness whose tags could not be read). The
+    # team filter hides such records from non-admins instead of treating the
+    # missing team as "shared" (services/team_access.py).
+    visibility_known: bool = True
+    # COMPLIANT / NON_COMPLIANT against the current schema; a later schema change
+    # (a field made required) can turn an approved record NON_COMPLIANT without
+    # touching its approval.
+    compliance_status: Optional[str] = None
+    # Provenance: set by organisation-wide auto-detection, which catalogs every
+    # AgentCore Runtime and Gateway in the org and links each record back to its
+    # source resource. Such records are owned by the detector (no delete while
+    # it is on; source-derived fields are refreshed) and must not be registered
+    # a second time by this platform's sync.
+    auto_detected: bool = False
+    source_arn: Optional[str] = None
+    source_type: Optional[str] = None
+
+    @property
+    def team(self) -> Optional[str]:
+        """`custom_metadata["team"]` normalised; None = shared. Not serialised —
+        the web reads custom_metadata directly."""
+        from services.team_access import team_of  # local: models must not import services at load
+
+        return team_of(self)
 
 
 class RegistryRecordDetail(RegistryRecordSummary):
@@ -45,7 +84,20 @@ class RegistryRecordDetail(RegistryRecordSummary):
     # Descriptor inlineContent is a JSON/markdown string; parsed for display.
     descriptor_content: Optional[Any] = None
     status_reason: Optional[str] = None
+    # Kept for API compatibility; the new schema moved synchronization into the
+    # descriptor, which `sync_source` summarises.
     sync_config: Optional[Dict[str, Any]] = None
+    # `{"url": …, "credential": "none" | "iam" | "oauth", "role_arn"?: …}` when
+    # the primary descriptor carries a `source.fromUrl`, i.e. AWS can re-fetch
+    # the server/agent-card definition from that endpoint on demand.
+    sync_source: Optional[Dict[str, Any]] = None
+    # Raw provenance entries as AWS returns them (relation, sourceId, sourceType,
+    # sourceDetails), for the detail panel.
+    provenance: Optional[List[Dict[str, Any]]] = None
+    # "approved" when this detail is the discoverable approved revision served
+    # in place of a newer non-approved latest revision (see
+    # RegistryService.chattable_record). None for the latest revision.
+    revision: Optional[str] = None
 
 
 class CreateRecordRequest(BaseModel):
@@ -75,6 +127,20 @@ class CreateRecordRequest(BaseModel):
     # Records are created as DRAFT; submitting is what makes them searchable and
     # (on an auto-approval registry) immediately APPROVED.
     submit_for_approval: bool = True
+    # Values for the registry's custom metadata schema (owner, team, tier…).
+    # Omitted or empty = not sent: a registry without a schema rejects even {}.
+    custom_metadata: Optional[Dict[str, Any]] = None
+    # Synchronise from an endpoint: an MCP server URL (MCP records) or an agent
+    # card URL (A2A records). AWS fetches the definition and populates the
+    # descriptor — tools included — and *overwrites the record's name,
+    # description and version with what the source advertises* (measured live
+    # 2026-10-10), which is why the bulk sync never sets this on its own.
+    sync_url: Optional[str] = None
+    # IAM role AWS assumes to sign the fetch (SigV4, service `agent-registry`)
+    # for servers on AgentCore Runtime or Gateway. None = unauthenticated fetch.
+    sync_role_arn: Optional[str] = None
+    # Resource tags on the record (e.g. the Platform cost-allocation tag).
+    tags: Optional[Dict[str, str]] = None
 
 
 class UpdateRecordRequest(BaseModel):
@@ -90,6 +156,9 @@ class UpdateRecordRequest(BaseModel):
     skill_markdown: Optional[str] = None
     # Replaces the record's bundle pointer; see CreateRecordRequest.skill_source.
     skill_source: Optional[Dict[str, Any]] = None
+    # Full replacement of the record's custom metadata map (AWS semantics: the
+    # map is replaced, not merged; {} clears it). None = untouched.
+    custom_metadata: Optional[Dict[str, Any]] = None
 
 
 class UpdateStatusRequest(BaseModel):
@@ -192,6 +261,22 @@ class RegistryInfo(BaseModel):
     description: Optional[str] = None
     status: Optional[str] = None
     auto_approval: Optional[bool] = None
+    registry_arn: Optional[str] = None
+    # The registry's own MCP endpoint: search/list/batch-get exposed as MCP
+    # tools, callable from any MCP client (SigV4 via mcp-proxy-for-aws) and
+    # attached to the platform gateway as a target.
+    mcp_endpoint: Optional[str] = None
+    # Parsed JSON Schema per record type, with the default schema under
+    # "DEFAULT". None when the registry has no custom metadata schema.
+    custom_metadata_schema: Optional[Dict[str, Any]] = None
+    # {"enabled": bool, "status": "ACTIVE" | "INACTIVE"} — organisation-wide
+    # auto-detection of Runtimes and Gateways. None when never configured.
+    auto_detection: Optional[Dict[str, Any]] = None
+    # Customer managed key encrypting the registry, when one was set at creation.
+    kms_key_arn: Optional[str] = None
+    # Role the server may hand to AWS for record synchronisation
+    # (REGISTRY_SYNC_ROLE_ARN); None = only unauthenticated sync is offered.
+    sync_role_arn: Optional[str] = None
 
 
 class RecordListResponse(BaseModel):

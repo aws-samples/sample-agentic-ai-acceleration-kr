@@ -30,7 +30,7 @@ data "aws_iam_policy_document" "harness_assume" {
 }
 
 resource "aws_iam_role" "harness_execution" {
-  name               = "${var.project}-harness-execution"
+  name               = "${var.project}-harness-${var.role_suffix}"
   assume_role_policy = data.aws_iam_policy_document.harness_assume.json
 }
 
@@ -42,7 +42,7 @@ data "aws_iam_policy_document" "harness_execution" {
       "bedrock:InvokeModel",
       "bedrock:InvokeModelWithResponseStream",
     ]
-    resources = ["*"]
+    resources = var.allowed_model_arns
   }
 
   statement {
@@ -154,7 +154,7 @@ data "aws_iam_policy_document" "harness_execution" {
 }
 
 resource "aws_iam_role_policy" "harness_execution" {
-  name   = "${var.project}-harness-execution-policy"
+  name   = "${var.project}-harness-${var.role_suffix}-policy"
   role   = aws_iam_role.harness_execution.id
   policy = data.aws_iam_policy_document.harness_execution.json
 }

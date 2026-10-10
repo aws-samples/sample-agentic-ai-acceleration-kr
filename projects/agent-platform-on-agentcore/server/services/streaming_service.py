@@ -19,14 +19,18 @@ from services.registry_service import (
     RegistryService,
     is_registry_unavailable,
 )
-from services.thread_service import ThreadService
+from services.thread_service import ThreadService, ThreadForbidden
+from services.run_broker import HEARTBEAT_FRAME, RunAlreadyActive, RunBroker
 from services.agent_access import bind_execution, is_record_verdict
-from core.config import BASIC_CHAT_RECORD_ID
+from services.policy_denial import is_policy_denial, resolve_turn_team
+from core.auth import AuthUser
 from agents.agentcore_client import AgentCoreClient
 from agents.harness_client import HarnessClient
 from agents.base import AgentClient
 from models.common import StreamRequest, StreamEvent, ThreadStatus as ThreadStatusEnum
 from models.artifact import normalize_kind
+
+from data.model_rates import LONG_COUNTERS, long_context_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +52,17 @@ HEARTBEAT_INTERVAL_SECONDS = 10.0
 # Sent during a gap. An SSE comment, not an event: `:` lines are ignored by every
 # SSE parser, and useStream only reads lines beginning with `data: `, so a
 # heartbeat can never be mistaken for content or reach the stored transcript.
-HEARTBEAT_FRAME = ": keep-alive\n\n"
+# Imported from run_broker, which keeps it out of the replay buffer.
+
+# Shared by the start and the attach route, which return the same kind of body.
+SSE_HEADERS = {
+    # `no-transform` keeps intermediate proxies from gzipping the stream. A
+    # compressor withholds each token until its buffer fills, which delivers the
+    # whole answer as one burst.
+    "Cache-Control": "no-cache, no-transform",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
+}
 
 # Distinguishes "nothing arrived in time" from a real event, which may be any dict.
 _HEARTBEAT = object()
@@ -359,6 +373,21 @@ class AgentNotApproved(Exception):
     """
 
 
+def execution_config(request_config: Any, bound: Dict[str, Any]) -> Dict[str, Any]:
+    """The config a turn runs with: exactly what `bind_execution` returned.
+
+    The binding is given the request's config as a dict (extras included) and
+    hands back a copy with the target filled in — and, sometimes, with keys
+    *removed*: a retired basic-chat thread pinned to a withdrawn model has its
+    `model_id` dropped so the agent's default runs. Merging that result back
+    over the raw request, as this used to, revived every removed key: live
+    2026-10-10 the "dropped" claude-sonnet-5 still reached the runtime payload
+    and the ledger. `request_config` is accepted only to document that it is
+    deliberately not consulted here.
+    """
+    return dict(bound)
+
+
 class StreamingService:
     """Service for handling thread streaming"""
 
@@ -371,8 +400,13 @@ class StreamingService:
         registry_service: Optional[RegistryService] = None,
         harness_output_service: Optional[Any] = None,
         usage_service: Optional[Any] = None,
+        run_broker: Optional[RunBroker] = None,
     ):
         self.thread_service = thread_service
+        # Owns the background task that drains each turn. Injected so one broker
+        # is shared with the routes that attach to and cancel runs; the default
+        # keeps the many tests that build this service bare working.
+        self.run_broker = run_broker or RunBroker()
         self.agentcore_client = agentcore_client
         self.artifact_service = artifact_service
         self.mcp_apps_relay = mcp_apps_relay
@@ -747,6 +781,7 @@ class StreamingService:
         model_id: Optional[str] = None,
         started_at: Optional[str] = None,
         model_calls: int = 0,
+        team: Optional[str] = None,
     ) -> None:
         """Record what the turn consumed, then zero the accumulator.
 
@@ -805,7 +840,11 @@ class StreamingService:
             # the runtime reported this turn, so zero tokens is a figure.
             usage_reported=bool(model_calls or usage.get("guardrail_scanned")),
             blocked=bool(usage.get("blocked")),
+            team=team,
+            long_tokens={name: int(usage.get(name) or 0) for name in LONG_COUNTERS},
         )
+        for name in LONG_COUNTERS:
+            usage[name] = 0
         usage["input"] = 0
         usage["output"] = 0
         usage["cache_read"] = 0
@@ -828,12 +867,13 @@ class StreamingService:
         """
         # A deployed-resource fallback agent has no registry record to check; its
         # ARN binding is the authorisation. Recognised by the synthetic id prefix.
-        # Basic chat likewise: its target and model were bound from the server's
-        # own allow-list (services/agent_access.py), there is no record to approve.
-        if record_id.startswith("deployed:") or record_id == BASIC_CHAT_RECORD_ID:
+        if record_id.startswith("deployed:"):
             return
         try:
-            record = self.registry_service.get_record(record_id)
+            # The approved revision when one exists, even if the latest revision
+            # is a DRAFT opened by an edit — AWS keeps serving the approved one
+            # to consumers, and so does chat.
+            record = self.registry_service.chattable_record(record_id)
         except RegistryNotConfigured:
             return
         except Exception as exc:
@@ -869,25 +909,21 @@ class StreamingService:
                 "Could not set thread %s to %s", thread_id, status, exc_info=True
             )
 
-    async def stream_thread_execution(
+    async def _prepare_run(
         self,
         thread_id: str,
         request: StreamRequest,
-        actor_id: Optional[str] = None,
-        owner_sub: str = "",
-    ) -> StreamingResponse:
-        """Stream thread execution (Server-Sent Events)"""
-        # Wall-clock origin for the startup-latency breakdown. Logged with the
-        # `[timing]` tag at each phase boundary so a single grep reconstructs
-        # where the pre-first-token seconds go (approval+thread setup vs. the
-        # runtime invoke). perf_counter, not the event loop clock: the pre-stream
-        # part runs before the generator and its loop.
-        t_request = time.perf_counter()
+        existing: Any,
+        owner_sub: str,
+        t_request: float,
+        caller: Optional[AuthUser] = None,
+    ):
+        """The pre-stream setup: approval gate, target binding, thread row.
 
-        # The thread as it is now: supplies the pinned agent when the request
-        # omits one, and decides whether this turn needs the approval gate.
-        existing = await asyncio.to_thread(self.thread_service.get_thread, thread_id)
-
+        Runs under a reservation (see stream_thread_execution) and raises the
+        same exceptions it always did; the caller releases the reservation.
+        Returns (prepared_thread, requested_config, learned_target).
+        """
         # Only a turn that would *bind* the thread to this agent needs the
         # approval gate: a thread already pinned to the record was approved when
         # it was pinned, and re-checking every turn would let a later revocation
@@ -906,10 +942,10 @@ class StreamingService:
             )
 
         # Decide the execution target server-side. The record (or the default
-        # runtime, or basic chat's allow-list) says which ARNs and model this
-        # turn may run with; client-sent values that disagree are refused. See
-        # services/agent_access.py. Raises AgentTargetMismatch / BasicChatUnavailable
-        # (403 at the route) before anything is written.
+        # runtime) says which ARNs this turn may run with; a model override is
+        # checked against the allow-lists; client-sent values that disagree are
+        # refused. See services/agent_access.py. Raises AgentTargetMismatch (403
+        # at the route) before anything is written.
         requested_config, learned_target = await asyncio.to_thread(
             functools.partial(
                 bind_execution,
@@ -917,6 +953,8 @@ class StreamingService:
                 existing_thread=existing,
                 registry_service=self.registry_service,
                 default_client=self.agentcore_client,
+                caller=caller,
+                team_service=getattr(self, "team_service", None),
             )
         )
 
@@ -925,11 +963,11 @@ class StreamingService:
         # two agents — their AgentCore Memory scopes would collide or diverge.
         agent_record_id = requested_config.get("registry_record_id") or ""
         agent_name = requested_config.get("registry_agent_name") or ""
-        basic_chat_model_id = (
-            requested_config.get("basic_chat_model_id")
-            if agent_record_id == BASIC_CHAT_RECORD_ID
-            else None
-        )
+        # Set only when this turn moved a retired basic-chat thread onto the
+        # default record: the model ThreadService writes into the thread's
+        # override (None = the pinned model is no longer allowed, carry nothing).
+        adopting = "adopted_model_id" in requested_config
+        adopted_model_id = requested_config.get("adopted_model_id")
 
         # Everything up to the StreamingResponse goes through to_thread. These are
         # blocking DynamoDB and GetRegistryRecord calls, and this handler is
@@ -958,9 +996,9 @@ class StreamingService:
                 initial_values=None,
                 agent_record_id=agent_record_id,
                 agent_name=agent_name,
-                # Only what this turn actually learned: a basic-chat model, or a
-                # target freshly read from the registry worth remembering.
-                **({"basic_chat_model_id": basic_chat_model_id} if basic_chat_model_id else {}),
+                # Only what this turn actually learned: a target freshly read
+                # from the registry, or the model carried off a legacy thread.
+                **({"adopted_model_id": adopted_model_id} if adopting else {}),
                 **({"agent_target": learned_target} if learned_target else {}),
             )
         )
@@ -971,8 +1009,84 @@ class StreamingService:
             time.perf_counter() - t_request,
         )
 
+        return prepared_thread, requested_config, learned_target
+
+    async def stream_thread_execution(
+        self,
+        thread_id: str,
+        request: StreamRequest,
+        actor_id: Optional[str] = None,
+        owner_sub: str = "",
+        caller: Optional[AuthUser] = None,
+    ) -> StreamingResponse:
+        """Stream thread execution (Server-Sent Events)"""
+        # Wall-clock origin for the startup-latency breakdown. Logged with the
+        # `[timing]` tag at each phase boundary so a single grep reconstructs
+        # where the pre-first-token seconds go (approval+thread setup vs. the
+        # runtime invoke). perf_counter, not the event loop clock: the pre-stream
+        # part runs before the generator and its loop.
+        t_request = time.perf_counter()
+
+        # The thread as it is now: supplies the pinned agent when the request
+        # omits one, and decides whether this turn needs the approval gate.
+        existing = await asyncio.to_thread(self.thread_service.get_thread, thread_id)
+
+        # Ownership before the run check, so a guessed id on someone else's
+        # busy thread is refused as foreign (403) and never learns it is busy
+        # (409). get_or_create_thread enforces the full rule below; this only
+        # settles the order for threads that already have an owner.
+        existing_owner = getattr(existing, "owner_sub", None) if existing is not None else None
+        if existing_owner and owner_sub and existing_owner != owner_sub:
+            raise ThreadForbidden(f"Thread {thread_id} belongs to another user")
+
+        # Claim the thread for the whole setup, not just from the first frame.
+        # Two requests used to be able to pass an "is a run active" check
+        # together, and the second then ran get_or_create_thread — a whole-row
+        # put — after the first run had started writing, clobbering its human
+        # message. Reserved, a second request is refused (409) before it writes
+        # anything, and a Stop pressed during setup has a run to land on.
+        reservation = self.run_broker.reserve(thread_id, owner_sub=owner_sub or None)
+        try:
+            prepared_thread, requested_config, learned_target = await self._prepare_run(
+                thread_id, request, existing, owner_sub, t_request, caller
+            )
+        except BaseException:
+            # No run will follow; free the thread for the next attempt.
+            self.run_broker.release(reservation)
+            raise
+
+        agent_record_id = requested_config.get("registry_record_id") or ""
+        agent_name = requested_config.get("registry_agent_name") or ""
+        # The team this turn's spend and denials are attributed to. Decided once
+        # here, from the caller's groups and the record's team tag; see
+        # services/policy_denial.resolve_turn_team.
+        team_names = getattr(getattr(self, "team_service", None), "names", None)
+        turn_team = resolve_turn_team(
+            list(caller.teams) if caller is not None else [],
+            requested_config.get("record_team"),
+            team_names() if callable(team_names) else None,
+        )
+
+        # What a reattaching client keeps from the stored record: the messages
+        # from before this run, plus this run's own question — the generator
+        # saves that below, so it is not in the row yet, and the replay never
+        # re-sends it. Everything else in the row is this run's partial work,
+        # which the replay rebuilds.
+        baseline_message_ids = [
+            m.get("id")
+            for m in ((prepared_thread.values or {}).get("messages") or [])
+            if isinstance(m, dict) and m.get("id")
+        ]
+        if request.values and isinstance(request.values.get("messages"), list):
+            for msg in reversed(request.values["messages"]):
+                if isinstance(msg, dict) and msg.get("type") == "human":
+                    if msg.get("id") and msg["id"] not in baseline_message_ids:
+                        baseline_message_ids.append(msg["id"])
+                    break
+
         async def event_generator() -> AsyncIterator[str]:
             """Generate SSE events using Bedrock"""
+
             # Declared before the `try` so the cancellation handler can persist
             # whatever the turn had produced. Inside it, a disconnect during the
             # first `yield` would reach the handler with these still unbound.
@@ -995,6 +1109,9 @@ class StreamingService:
 
             # Track tool use for Strands Agent SDK
             current_tool_uses: Dict[str, Dict[str, Any]] = {}  # toolUseId -> {name, input}
+            # A harness re-emits a tool result once per delta, each restamped
+            # status="error"; record a denial once per toolUseId, not per delta.
+            denials_recorded: set = set()
             current_tool_use_id: Optional[str] = None
             # Charts and verification notes the turn produced. Kept for the whole
             # turn rather than per-message: the runtime flushes them after
@@ -1022,6 +1139,9 @@ class StreamingService:
                 # on one combined figure is off by that factor.
                 "cache_read": 0,
                 "cache_write": 0,
+                # The part of each tier above spent in calls whose prompt crossed
+                # the model's long-context threshold — a subset, not a fifth tier.
+                **{name: 0 for name in LONG_COUNTERS},
                 # How many model calls reported usage this turn. Not a token, but
                 # it rides in the same accumulator because it is zeroed with them.
                 "model_calls": 0,
@@ -1056,6 +1176,7 @@ class StreamingService:
             turn_started_at = datetime.utcnow().isoformat() + "Z"
             turn_id = ""
             turn_model_id: Optional[str] = None
+            long_threshold: Optional[int] = None
 
             # Gate for recording turns once per request, not once per flush.
             # A request may flush at messageStop, post-loop, and on cancellation,
@@ -1120,18 +1241,8 @@ class StreamingService:
                     if "messages" not in thread.values:
                         thread.values["messages"] = []
 
-                # Execute using Bedrock
-                # Convert config to dict, including extra fields
-                # The bound target wins over whatever the request carried.
-                if request.config:
-                    config_dict = {**request.config.dict(exclude_none=False), **requested_config}
-                    # Also include any extra fields that might not be in the model
-                    if hasattr(request.config, '__dict__'):
-                        for key, value in request.config.__dict__.items():
-                            if key not in config_dict and value is not None:
-                                config_dict[key] = value
-                else:
-                    config_dict = dict(requested_config)
+                # Execute with the config the binding returned — see execution_config.
+                config_dict = execution_config(request.config, requested_config)
                 last_update_time = asyncio.get_event_loop().time()
                 UPDATE_INTERVAL = 1.0  # Update DynamoDB at most once per second during streaming
                 
@@ -1158,6 +1269,7 @@ class StreamingService:
                         )
                     except Exception:
                         logger.warning("Could not resolve the turn's model", exc_info=True)
+                long_threshold = long_context_threshold(turn_model_id)
 
                 # Log configuration for debugging
                 logger.info(f"Streaming request config: agent_runtime_arn={config_dict.get('agent_runtime_arn')}, "
@@ -1283,6 +1395,21 @@ class StreamingService:
                         turn_usage["cache_write"] += int(
                             reported.get("cacheWriteInputTokens") or 0
                         )
+                        # A long-context card prices a *call* by that call's own
+                        # prompt, which is why this is decided here, per metadata
+                        # event: the turn's sums cannot tell one 150K-token call
+                        # from three 50K ones, and only the first is billed long.
+                        if reported and long_threshold is not None:
+                            call = {
+                                "input_tokens": int(reported.get("inputTokens") or 0),
+                                "output_tokens": int(reported.get("outputTokens") or 0),
+                                "cache_read_tokens": int(reported.get("cacheReadInputTokens") or 0),
+                                "cache_write_tokens": int(reported.get("cacheWriteInputTokens") or 0),
+                            }
+                            prompt = call["input_tokens"] + call["cache_read_tokens"] + call["cache_write_tokens"]
+                            if prompt > long_threshold:
+                                for name, tokens in call.items():
+                                    turn_usage[f"long_{name}"] += tokens
 
                         # Record guardrail interventions. Extract events from the metadata
                         # trace and record each independently. Silent on failure: a stream
@@ -1558,6 +1685,23 @@ class StreamingService:
                             # nothing must keep landing on it.
                             if result_info.get("status") == "error":
                                 current_tool_uses[result_tool_use_id]["status"] = "error"
+                                if (
+                                    self.usage_service
+                                    and result_tool_use_id not in denials_recorded
+                                    and is_policy_denial(result_info.get("result"))
+                                ):
+                                    denials_recorded.add(result_tool_use_id)
+                                    try:
+                                        self.usage_service.record_policy_denial(
+                                            agent_record_id=agent_record_id,
+                                            owner_sub=owner_sub,
+                                            team=turn_team,
+                                            tool_name=str(current_tool_uses[result_tool_use_id].get("name") or ""),
+                                            thread_id=thread_id,
+                                            turn_id=turn_id,
+                                        )
+                                    except Exception:
+                                        logger.warning("Policy denial not recorded", exc_info=True)
 
                     elif "chart" in event_dict or "verification" in event_dict:
                         # Both normally arrive *after* messageStop: the runtime ends
@@ -1690,6 +1834,7 @@ class StreamingService:
                                 turn_tool_names,
                                 agent_record_id=agent_record_id,
                                 owner_sub=owner_sub,
+                                team=turn_team,
                                 thread_id=thread_id,
                                 turn_id=turn_id,
                                 model_id=turn_model_id,
@@ -1778,6 +1923,7 @@ class StreamingService:
                         turn_tool_names,
                         agent_record_id=agent_record_id,
                         owner_sub=owner_sub,
+                        team=turn_team,
                         thread_id=thread_id,
                         turn_id=turn_id,
                         model_id=turn_model_id,
@@ -1881,6 +2027,7 @@ class StreamingService:
                         turn_tool_names,
                         agent_record_id=agent_record_id,
                         owner_sub=owner_sub,
+                        team=turn_team,
                         thread_id=thread_id,
                         turn_id=turn_id,
                         model_id=turn_model_id,
@@ -1963,6 +2110,7 @@ class StreamingService:
                         turn_tool_names,
                         agent_record_id=agent_record_id,
                         owner_sub=owner_sub,
+                        team=turn_team,
                         thread_id=thread_id,
                         turn_id=turn_id,
                         model_id=turn_model_id,
@@ -2002,16 +2150,14 @@ class StreamingService:
                 )
                 yield f"data: {json.dumps(error_event.model_dump(), default=str)}\n\n"
 
+        # The generator is drained by the broker's task, not by this response.
+        # Whatever happens to the connection below, the task runs the turn to
+        # its end and the generator's own handlers save it. The response is one
+        # subscriber: replay (empty for the starter) and live tail.
+        run = self.run_broker.launch(reservation, event_generator(), baseline_message_ids)
         return StreamingResponse(
-            event_generator(),
+            run.subscribe(heartbeat_interval=HEARTBEAT_INTERVAL_SECONDS),
             media_type="text/event-stream",
-            headers={
-                # `no-transform` keeps intermediate proxies from gzipping the
-                # stream. A compressor withholds each token until its buffer
-                # fills, which delivers the whole answer as one burst.
-                "Cache-Control": "no-cache, no-transform",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
+            headers=SSE_HEADERS,
         )
 

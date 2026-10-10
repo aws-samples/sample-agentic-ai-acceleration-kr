@@ -27,6 +27,12 @@ variable "harness_execution_role_arn" {
   description = "Role the ECS task may pass to AgentCore when creating a harness."
 }
 
+variable "team_harness_role_arns" {
+  type        = list(string)
+  description = "Per-team harness execution roles the ECS task may also pass to AgentCore."
+  default     = []
+}
+
 variable "knowledge_bucket_arn" {
   type = string
 }
@@ -74,6 +80,12 @@ variable "users_table_arn" {
 
 variable "user_pool_arn" {
   description = "Cognito user pool ARN. Grants the server ListUsers on it so the admin Insights views can show a sub as an email; empty grants nothing."
+  type        = string
+  default     = ""
+}
+
+variable "registry_sync_role_arn" {
+  description = "Role AWS Agent Registry assumes to SigV4-sign record synchronisation fetches (module agent_registry's sync role). Grants the server iam:PassRole on it so a record can be registered with an IAM-authenticated source; empty grants nothing."
   type        = string
   default     = ""
 }

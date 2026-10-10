@@ -14,6 +14,20 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.common import StreamRequest  # noqa: E402
 from services.streaming_service import StreamingService  # noqa: E402
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _allow_every_model_this_file_uses(monkeypatch):
+    """The override check reads ALLOWED_MODELS from the environment; a fresh
+    checkout has none, and these tests are about pricing, not the allow-list."""
+    import core.config as cfg
+    monkeypatch.setattr(cfg, "ALLOWED_MODELS", [
+        "global.anthropic.claude-haiku-5-5",
+        "global.anthropic.claude-sonnet-5-5",
+        "global.anthropic.claude-opus-5-5",
+    ])
+
 
 VALUES = {"messages": [{"id": "h-42", "type": "human", "content": "hello"}]}
 RUNTIME_ARN = "arn:aws:bedrock-agentcore:us-east-1:1:runtime/x-1"
@@ -30,6 +44,9 @@ class StubRegistry:
         return SimpleNamespace(
             status="APPROVED", agent_runtime_arn=RUNTIME_ARN, harness_arn=self.harness_arn, qualifier=None
         )
+    def chattable_record(self, record_id):
+        # The approval gate reads the chattable revision; these doubles have one.
+        return self.get_record(record_id)
 
 
 

@@ -1,15 +1,14 @@
 """
-Thread status when a stream does not finish normally.
+Thread status when a run does not finish normally.
 
-Stopping a run, closing the tab, or navigating away aborts the HTTP request,
-which cancels the generator. Cancellation raises asyncio.CancelledError — a
-BaseException, so `except Exception` never sees it. Without a finally the thread
-keeps the `busy` it was given at the start of the run, forever: every Stop click
-and every closed tab leaves a ghost that the busy filter then accumulates.
+A run is drained by the RunBroker's background task, not by the HTTP response.
+So a closed tab or a thread switch — which used to cancel the generator and
+leave the thread `busy` forever, then `interrupted` once that was fixed — now
+changes nothing: the run carries on and lands on `idle` like any other.
 
-Writing `interrupted` on cancellation clears the ghosts and gives that status its
-only writer, which is what makes the sidebar's warning dot and its status filter
-mean anything.
+What *does* interrupt a run is cancelling it through the broker, which is what
+the Stop button and server shutdown do. That path must still write
+`interrupted`, and never `idle`.
 """
 import asyncio
 import os
@@ -81,33 +80,22 @@ def service_with(client):
 
 
 def run_until_cancelled(service):
-    """Start the stream, take one chunk, then cancel — what Stop does."""
+    """Start the run, take one frame, then cancel it the way Stop does."""
 
     async def scenario():
         response = await service.stream_thread_execution("t-1", StreamRequest(values=VALUES))
         agen = response.body_iterator.__aiter__()
-
-        async def drain():
-            async for _ in agen:
-                pass
-
-        task = asyncio.ensure_future(drain())
-        # Let the generator start and emit before pulling the rug out.
-        await asyncio.sleep(0.05)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-        # aclose() runs the generator's finally, which is what a disconnecting
-        # client triggers in the ASGI server.
-        try:
-            await agen.aclose()
-        except (asyncio.CancelledError, RuntimeError):
+        await agen.__anext__()  # thread_created
+        await asyncio.sleep(0.05)  # let the client emit its partial token
+        assert service.run_broker.cancel("t-1") is True
+        # The subscriber ends on its own once the run is gone.
+        async for _ in agen:
             pass
 
     asyncio.run(scenario())
 
 
-def test_a_cancelled_stream_lands_on_interrupted():
+def test_a_cancelled_run_lands_on_interrupted():
     """Otherwise the thread keeps `busy` forever and the filter fills with ghosts."""
     service, threads = service_with(HangingClient())
 
@@ -117,27 +105,34 @@ def test_a_cancelled_stream_lands_on_interrupted():
     assert threads.statuses[-1] == ThreadStatus.INTERRUPTED
 
 
-def test_a_disconnected_client_lands_on_interrupted():
-    """The common case, and the one CancelledError alone does not cover.
+def test_a_disconnected_client_does_not_interrupt_the_run():
+    """The point of the broker: closing the tab is not a Stop.
 
-    A streaming generator sits suspended at a `yield` almost all the time. Closing
-    it there raises GeneratorExit, not CancelledError — and GeneratorExit is not an
-    `Exception` either, so handling only cancellation still left the thread busy.
+    The response generator is closed (GeneratorExit) exactly as the ASGI server
+    does on disconnect. The run behind it must still be registered and still
+    unfinished, with no `interrupted` written. Cancelled at the end only to let
+    the loop shut down cleanly.
     """
     service, threads = service_with(HangingClient())
 
     async def scenario():
         response = await service.stream_thread_execution("t-1", StreamRequest(values=VALUES))
         agen = response.body_iterator.__aiter__()
-        await agen.__anext__()  # generator is now parked at a yield
-        await agen.aclose()  # what the ASGI server does on disconnect
+        await agen.__anext__()
+        await agen.aclose()
+        await asyncio.sleep(0.1)
+        still_running = service.run_broker.get("t-1") is not None
+        statuses_after_disconnect = list(threads.statuses)
+        service.run_broker.cancel("t-1")
+        await asyncio.sleep(0.05)
+        return still_running, statuses_after_disconnect
 
-    asyncio.run(scenario())
+    still_running, statuses = asyncio.run(scenario())
+    assert still_running, "the run ended with its subscriber"
+    assert ThreadStatus.INTERRUPTED not in statuses
 
-    assert threads.statuses[-1] == ThreadStatus.INTERRUPTED
 
-
-def test_a_cancelled_stream_does_not_land_on_idle():
+def test_a_cancelled_run_does_not_land_on_idle():
     """`idle` would claim the turn completed; it did not."""
     service, threads = service_with(HangingClient())
 

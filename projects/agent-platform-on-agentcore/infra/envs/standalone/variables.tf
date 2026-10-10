@@ -41,17 +41,18 @@ variable "bedrock_model_id" {
   default = "global.anthropic.claude-sonnet-5-5"
 }
 
-# Basic chat: talk to the default runtime with one of these models without
-# picking a registry agent. Empty list = the option is not offered. Use
-# inference-profile ids (global.*): Claude 5 foundation-model ids are rejected
-# by ConverseStream with an on-demand-throughput ValidationException.
-variable "basic_chat_allowed_models" {
+# Models a per-thread override may pick, for every agent (runtime or harness),
+# in picker order. The server refuses any other; a team's list can only narrow
+# this one. Empty list = no model override is offered. Use inference-profile
+# ids (global.*): Claude 5 foundation-model ids are rejected by ConverseStream
+# with an on-demand-throughput ValidationException.
+variable "allowed_models" {
   type        = list(string)
-  description = "Models the basic chat (no registry agent) may use, in picker order. Empty disables basic chat."
+  description = "Models a per-thread override may pick, for every agent, in picker order. Empty disables model overrides."
   default = [
     "global.anthropic.claude-sonnet-5-5",
     "global.anthropic.claude-opus-5-5",
-    "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "global.anthropic.claude-haiku-5-5",
   ]
 }
 
@@ -215,6 +216,24 @@ variable "agent_runtime_discovery_regions" {
   default     = ""
 }
 
+variable "registry_custom_metadata_schema" {
+  description = "Custom metadata schema for registry records: record type (DEFAULT, MCP, AGENT, SKILL, CUSTOM, GATEWAY) => JSON Schema string. Empty uses the module default (owner, team, tier enum; all optional, owner filled by the server). AWS only lets a schema grow, so never remove or retype a saved field."
+  type        = map(string)
+  default     = {}
+}
+
+variable "registry_kms_key_arn" {
+  description = "Customer managed KMS key for the registry. Creation-time only: set it before the first apply; an existing registry keeps its key."
+  type        = string
+  default     = ""
+}
+
+variable "registry_tool_on_gateway" {
+  description = "Attach the registry's MCP endpoint to the platform gateway as the \"registry\" target, so agents and harnesses can search the catalog at run time."
+  type        = bool
+  default     = true
+}
+
 variable "registry_python_bin" {
   description = "Python interpreter for the agent_registry module's registry.py (needs botocore >= 1.43 with the agent-registry-control model). Defaults to system python3; override with a venv python where that is too old."
   type        = string
@@ -286,5 +305,70 @@ variable "hibernate" {
 variable "allow_destroy" {
   description = "Disable DynamoDB deletion protection before running destroy. Apply this first: `terraform apply -var allow_destroy=true`, then `terraform destroy`."
   type        = bool
+  default     = false
+}
+
+# Teams. Each name becomes a Cognito group `team:<name>`, a harness execution
+# role `${project}-harness-<name>`, and (with enable_gateway_policy) a set of
+# Cedar policies naming the tools that role may call. Empty = no team features.
+variable "teams" {
+  type        = list(string)
+  description = "Team names (lowercase, [a-z0-9-]). Empty disables every team feature."
+  default     = []
+
+  validation {
+    # "execution" would collide with the default harness role
+    # `${project}-harness-execution`; the length keeps the longest policy name
+    # (`<project>_team_<team>_expense_limit`) near the 48-char limit.
+    condition = alltrue([
+      for t in var.teams : can(regex("^[a-z0-9-]{1,16}$", t)) && t != "execution"
+    ])
+    error_message = "Each team name must match ^[a-z0-9-]+$ (at most 16 characters) and must not be \"execution\"."
+  }
+}
+
+variable "team_allowed_model_arns" {
+  type        = map(string)
+  description = "team name => comma-separated Bedrock model/inference-profile ARNs that team's harness role may invoke. A team not listed (or an empty value) may invoke any model."
+  default     = {}
+}
+
+variable "enable_gateway_policy" {
+  type        = bool
+  description = "Create an AgentCore policy engine and attach it to the Lambda tools gateway with per-team Cedar policies."
+  default     = false
+}
+
+variable "policy_mode" {
+  type        = string
+  description = "Gateway policy mode when enable_gateway_policy: LOG_ONLY (observe) or ENFORCE (deny)."
+  default     = "LOG_ONLY"
+}
+
+variable "team_shared_actions" {
+  type        = list(string)
+  description = "Fully-qualified Cedar actions (<target>___<tool>) every team harness role may call on the MCP gateway beyond its Lambda tools. Empty = the web-search connector's tool (<project>-web-search___WebSearch) when web_search_backend = agentcore, else none. Every entry must exist on the gateway: an unknown action fails the whole policy."
+  default     = []
+}
+
+variable "team_tools" {
+  type        = map(string)
+  description = "team => comma-separated tool names its harness role may call through the Lambda tools gateway. Teams not listed get no team policy (every call denied under ENFORCE)."
+  default = {
+    finance = "fetch_url,current_time,calculate,create_artifact,update_artifact,approve_expense"
+    hr      = "fetch_url,current_time,calculate,create_artifact,update_artifact,lookup_salary"
+    support = "fetch_url,current_time,calculate,create_artifact,update_artifact"
+  }
+}
+
+variable "extra_platform_role_names" {
+  type        = list(string)
+  description = "Additional IAM role names allowed to call every gateway tool under the policy engine, e.g. a hand-deployed runtime that runs as the toolkit's AmazonBedrockAgentCoreSDKRuntime-* role instead of <project>-agent-runtime. Under ENFORCE a caller without a permit sees no tools."
+  default     = []
+}
+
+variable "demo_tools" {
+  type        = bool
+  description = "Workshop mock tools (approve_expense, lookup_salary) on the Lambda tools target. They return canned results; leave off outside the workshop."
   default     = false
 }

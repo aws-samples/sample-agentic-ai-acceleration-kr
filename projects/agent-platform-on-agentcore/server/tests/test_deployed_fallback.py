@@ -56,3 +56,37 @@ def test_synthetic_ids_and_binding():
     assert solo.agent_runtime_arn == "arn:...:runtime/solo"
     assert solo.harness_arn is None
     assert solo.qualifier == "DEFAULT"
+
+
+class _TaggedHarness(_Harness):
+    def __init__(self, tags):
+        self.tags = tags
+
+    def team_tag_of(self, arn):
+        value = self.tags[arn]
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+
+def test_harness_record_carries_its_team_tag():
+    # Final review C1: without the team a teamed harness listed (and bound) as shared.
+    svc = AgentSyncService(registry=_Registry(), harness=_TaggedHarness({"arn:...:harness/hx": "finance"}))
+    records = {r.name: r for r in svc.deployed_agent_records()}
+    assert records["hx"].custom_metadata == {"team": "finance"}
+    assert records["hx"].visibility_known is True
+    assert records["solo"].visibility_known is True and records["solo"].custom_metadata is None
+
+
+def test_unreadable_tags_mark_the_harness_record_unknown():
+    svc = AgentSyncService(
+        registry=_Registry(), harness=_TaggedHarness({"arn:...:harness/hx": RuntimeError("AccessDenied")})
+    )
+    hx = {r.name: r for r in svc.deployed_agent_records()}["hx"]
+    assert hx.custom_metadata is None and hx.visibility_known is False
+
+
+def test_shared_harness_tag_is_known_and_teamless():
+    svc = AgentSyncService(registry=_Registry(), harness=_TaggedHarness({"arn:...:harness/hx": None}))
+    hx = {r.name: r for r in svc.deployed_agent_records()}["hx"]
+    assert hx.custom_metadata is None and hx.visibility_known is True

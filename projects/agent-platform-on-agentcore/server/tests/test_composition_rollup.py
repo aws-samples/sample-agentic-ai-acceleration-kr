@@ -44,15 +44,19 @@ class Harness:
 
 
 class StubHarness:
-    def __init__(self, harnesses, targets_by_arn=None):
+    def __init__(self, harnesses, targets_by_arn=None, endpoints_by_arn=None):
         self._harnesses = harnesses
         self._targets = targets_by_arn or {}
+        self._endpoints = endpoints_by_arn or {}
 
     def list_harnesses(self, with_tools=False):
         return self._harnesses
 
     def gateway_target_names(self, gateway_arn):
         return self._targets.get(gateway_arn, [])
+
+    def gateway_target_endpoints(self, gateway_arn):
+        return self._endpoints.get(gateway_arn, {})
 
 
 class StubRecord:
@@ -328,3 +332,246 @@ def test_a_harness_failure_yields_empty_sections_not_an_exception():
 
     assert composition["skills"] == []
     assert composition["mcp"] == []
+
+
+# --- record_reach: the Usage tab's one entry point for every record kind -------
+#
+# `record_insights` used to know one non-agent shape (a gateway) and fell back to
+# the record's own counters for everything else. A skill's own counters are zero
+# by construction — nothing records a turn under a skill id — so every skill's
+# Usage tab read 0/0/0 while the composition page, reading the same ledger through
+# the harnesses, showed its reach. These pin the per-kind answers.
+
+
+def test_record_reach_is_none_for_an_agent_record():
+    """An agent has counters of its own; the tab must show those, not a rollup."""
+    service = three_agents_sharing_one_skill()
+
+    assert service.record_reach("rec-1", "2026-08-15", "2026-08-15") is None
+
+
+def test_a_skills_reach_is_the_traffic_of_the_agents_that_attach_it():
+    """The same answer the composition page gives, with the agents named so the
+    tab can send the reader to them — evaluation lives on the agent, not here."""
+    reach = three_agents_sharing_one_skill().record_reach(
+        "skill-1", "2026-08-15", "2026-08-15"
+    )
+
+    assert reach["metric"] == "reach"
+    assert reach["agents"] == 3
+    assert reach["turns"] == 10
+    assert reach["tools"] == {}
+    assert [a["record_id"] for a in reach["agent_records"]] == ["rec-3", "rec-2", "rec-1"]
+    assert reach["agent_records"][0] == {"record_id": "rec-3", "name": "agent rec-3", "turns": 5}
+
+
+def test_a_skill_nobody_attaches_has_zero_reach_not_none():
+    """Zero is an answer ("approved, unused"); None would make the tab draw an
+    agent's empty counters and trend chart instead."""
+    service = UsageService(
+        repository=StubRepo({}),
+        registry=StubRegistry(
+            [StubRecord("skill-1", "Citation style", descriptor_type="AGENT_SKILLS")],
+            {"skill-1": skill_descriptor(SKILL_URI)},
+        ),
+        harness=StubHarness([]),
+    )
+
+    assert service.record_reach("skill-1", "2026-08-15", "2026-08-15") == {
+        "metric": "reach", "agents": 0, "turns": 0, "tools": {}, "agent_records": [],
+        "daily": [{"date": "2026-08-15", "turns": 0, "tool_calls": 0}],
+    }
+
+
+def test_a_gateway_record_reach_names_the_calling_agents():
+    """Same figures as `mcp_gateway_usage`, plus who called — the gateway's tab
+    links evaluation to those agents too."""
+    arn = "arn:aws:bedrock-agentcore:us-east-1:1:harness/rec-1"
+    service = UsageService(
+        repository=StubRepo({
+            "AGENTS#2026-08": [turns("rec-1", 4), turns("rec-2", 6)],
+            "AGENT#rec-1#TOOLS#2026-08": [
+                {"sk": "D#2026-08-15#T#platform-tools___current_time", "tool_calls": Decimal(3)},
+            ],
+        }),
+        registry=StubRegistry(
+            [
+                StubRecord("rec-1", "writer", harness_arn=arn),
+                StubRecord("rec-2", "editor"),
+                StubRecord("gw-1", "gateway", descriptor_type="MCP"),
+            ],
+            {"gw-1": {"server": {"gatewayArn": GATEWAY_ARN}}},
+        ),
+        harness=StubHarness([], targets_by_arn=GATEWAY_TARGETS),
+    )
+
+    reach = service.record_reach("gw-1", "2026-08-15", "2026-08-15")
+
+    assert reach["metric"] == "traffic"
+    assert reach["tools"] == {"current_time": 3}
+    assert reach["agents"] == 1 and reach["turns"] == 4
+    assert reach["agent_records"] == [{"record_id": "rec-1", "name": "writer", "turns": 4}]
+
+
+def test_a_runtime_hosted_mcp_server_is_credited_through_the_gateway_target_that_fronts_it():
+    """Live shape: the record describes a Runtime invocations URL, but no agent
+    attaches that URL — they call it through a gateway target whose
+    `mcpServer.endpoint` is that same URL (platform-status on bap-gateway). The
+    67 calls that went that way were credited to the gateway and the record
+    read 0. The target's endpoint is the link, so the calls land here too."""
+    arn = "arn:aws:bedrock-agentcore:us-east-1:1:harness/rec-1"
+    runtime_url = "https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/arn%3Aaws%3A...%2Fstatus-abc/invocations?qualifier=DEFAULT"
+    service = UsageService(
+        repository=StubRepo({
+            "AGENTS#2026-08": [turns("rec-1", 4), turns("rec-2", 6)],
+            "AGENT#rec-1#TOOLS#2026-08": [
+                {"sk": "D#2026-08-15#T#platform-status___get_platform_telemetry", "tool_calls": Decimal(3)},
+                {"sk": "D#2026-08-15#T#platform-status___show_content", "tool_calls": Decimal(2)},
+                # Another target on the same gateway — not this server's.
+                {"sk": "D#2026-08-15#T#platform-tools___current_time", "tool_calls": Decimal(9)},
+            ],
+            "AGENT#rec-2#TOOLS#2026-08": [
+                {"sk": "D#2026-08-15#T#platform-status___get_platform_telemetry", "tool_calls": Decimal(1)},
+            ],
+        }),
+        registry=StubRegistry(
+            [
+                StubRecord("rec-1", "writer", harness_arn=arn),
+                StubRecord("rec-2", "editor"),
+                StubRecord("gw-1", "gateway", descriptor_type="MCP"),
+                StubRecord("mcp-1", "platform status", descriptor_type="MCP"),
+            ],
+            {
+                "gw-1": {"server": {"gatewayArn": GATEWAY_ARN}},
+                "mcp-1": {"server": {"remotes": [{"url": runtime_url}]}},
+            },
+        ),
+        harness=StubHarness(
+            [],
+            targets_by_arn={GATEWAY_ARN: ["platform-tools", "platform-status"]},
+            endpoints_by_arn={GATEWAY_ARN: {"platform-status": runtime_url}},
+        ),
+    )
+
+    reach = service.record_reach("mcp-1", "2026-08-15", "2026-08-15")
+
+    assert reach["metric"] == "traffic"
+    assert reach["tools"] == {"get_platform_telemetry": 4, "show_content": 2}
+    assert reach["agents"] == 2
+    assert reach["turns"] == 10
+    assert [a["record_id"] for a in reach["agent_records"]] == ["rec-2", "rec-1"]
+
+
+def test_a_remote_mcp_server_attached_directly_counts_the_attaching_agents():
+    """The harness `remoteMcp` path still works on its own: an agent that attaches
+    the URL directly is reach even with no gateway in between. Its bare-name tool
+    calls cannot be told from built-ins, so `tools` stays empty rather than guessed."""
+    arn = "arn:aws:bedrock-agentcore:us-east-1:1:harness/rec-1"
+    service = UsageService(
+        repository=StubRepo({"AGENTS#2026-08": [turns("rec-1", 4)]}),
+        registry=StubRegistry(
+            [
+                StubRecord("rec-1", "writer", harness_arn=arn),
+                StubRecord("mcp-1", "example/tools", descriptor_type="MCP"),
+            ],
+            {"mcp-1": {"server": {"remotes": [{"url": MCP_URL}]}}},
+        ),
+        harness=StubHarness([
+            Harness("rec-1", arn, tools=[
+                {"type": "remote_mcp", "name": "tools",
+                 "config": {"remoteMcp": {"url": MCP_URL}}},
+            ])
+        ]),
+    )
+
+    reach = service.record_reach("mcp-1", "2026-08-15", "2026-08-15")
+
+    assert reach == {
+        "metric": "traffic", "agents": 1, "turns": 4, "tools": {},
+        "agent_records": [{"record_id": "rec-1", "name": "writer", "turns": 4}],
+        "daily": [{"date": "2026-08-15", "turns": 4, "tool_calls": 0}],
+    }
+
+
+def test_composition_credits_a_runtime_hosted_mcp_server_through_its_fronting_target():
+    """The Insights page and the record's Usage tab read the same ledger; after
+    the tab learned to follow the gateway target's endpoint, the page must agree
+    or the two numbers for one server disagree on one screen."""
+    arn = "arn:aws:bedrock-agentcore:us-east-1:1:harness/rec-1"
+    runtime_url = "https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/x/invocations?qualifier=DEFAULT"
+    service = UsageService(
+        repository=StubRepo({
+            "AGENTS#2026-08": [turns("rec-1", 4)],
+            "AGENT#rec-1#TOOLS#2026-08": [
+                {"sk": "D#2026-08-15#T#platform-status___get_platform_telemetry", "tool_calls": Decimal(3)},
+            ],
+        }),
+        registry=StubRegistry(
+            [
+                StubRecord("rec-1", "writer", harness_arn=arn),
+                StubRecord("gw-1", "gateway", descriptor_type="MCP"),
+                StubRecord("mcp-1", "platform status", descriptor_type="MCP"),
+            ],
+            {
+                "gw-1": {"server": {"gatewayArn": GATEWAY_ARN}},
+                "mcp-1": {"server": {"remotes": [{"url": runtime_url}]}},
+            },
+        ),
+        harness=StubHarness(
+            [Harness("rec-1", arn, tools=[
+                {"type": "agentcore_gateway", "name": "gw",
+                 "config": {"agentCoreGateway": {"gatewayArn": GATEWAY_ARN}}},
+            ])],
+            targets_by_arn={GATEWAY_ARN: ["platform-status"]},
+            endpoints_by_arn={GATEWAY_ARN: {"platform-status": runtime_url}},
+        ),
+    )
+
+    mcp = service.composition("2026-08-15", "2026-08-15")["mcp"]
+
+    assert [(e["name"], e["turns"], e["agents"]) for e in mcp] == [
+        ("platform status", 4, 1)
+    ]
+
+
+def test_reach_carries_a_dense_daily_series_of_the_agents_turns():
+    """The Usage tab draws a trend for an agent; a skill's trend is the same
+    quantity through the agents that attach it, day by day, idle days as zero."""
+    reach = three_agents_sharing_one_skill().record_reach(
+        "skill-1", "2026-08-14", "2026-08-15"
+    )
+
+    assert reach["daily"] == [
+        {"date": "2026-08-14", "turns": 0, "tool_calls": 0},
+        {"date": "2026-08-15", "turns": 10, "tool_calls": 0},
+    ]
+
+
+def test_a_gateways_daily_series_counts_only_its_own_targets_calls():
+    arn = "arn:aws:bedrock-agentcore:us-east-1:1:harness/rec-1"
+    service = UsageService(
+        repository=StubRepo({
+            "AGENTS#2026-08": [turns("rec-1", 4)],
+            "AGENT#rec-1#TOOLS#2026-08": [
+                {"sk": "D#2026-08-15#T#platform-tools___current_time", "tool_calls": Decimal(3)},
+                {"sk": "D#2026-08-14#T#platform-tools___current_time", "tool_calls": Decimal(2)},
+                {"sk": "D#2026-08-15#T#other-gw___thing", "tool_calls": Decimal(9)},
+                {"sk": "D#2026-08-15#T#calculator", "tool_calls": Decimal(5)},
+            ],
+        }),
+        registry=StubRegistry(
+            [
+                StubRecord("rec-1", "writer", harness_arn=arn),
+                StubRecord("gw-1", "gateway", descriptor_type="MCP"),
+            ],
+            {"gw-1": {"server": {"gatewayArn": GATEWAY_ARN}}},
+        ),
+        harness=StubHarness([], targets_by_arn=GATEWAY_TARGETS),
+    )
+
+    reach = service.record_reach("gw-1", "2026-08-14", "2026-08-15")
+
+    assert reach["daily"] == [
+        {"date": "2026-08-14", "turns": 0, "tool_calls": 2},
+        {"date": "2026-08-15", "turns": 4, "tool_calls": 3},
+    ]

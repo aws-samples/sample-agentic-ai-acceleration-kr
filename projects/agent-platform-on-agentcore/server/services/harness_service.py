@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import boto3
 from botocore.exceptions import ClientError
 
+from core.auth import AuthUser
 from core.config import (
     AWS_REGION,
     BEDROCK_MODEL_ID,
@@ -54,8 +55,10 @@ from services.registry_service import (
     skill_source_of,
     _iso,
     _slug,
+    owner_identity,
 )
 from services.skill_bundle_service import DiscoveredSkill, SkillBundleService
+from services.team_access import can_see, normalize_team, team_of, visibility_known
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +67,8 @@ _CONTROL_SERVICE = "bedrock-agentcore-control"
 # CreateHarness is asynchronous; harnesses pass through CREATING first.
 _CREATE_POLL_ATTEMPTS = 60
 _CREATE_POLL_INTERVAL_SECONDS = 2.0
+
+_TEAM_TAG_CACHE_SECONDS = 600.0
 
 # HarnessName is far stricter than registry record names: no hyphens or dots.
 _HARNESS_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]{0,39}$")
@@ -207,7 +212,9 @@ class HarnessService:
         execution_role_arn: Optional[str] = None,
         skills_bucket: Optional[str] = None,
         bedrock=None,
+        teams=None,
     ):
+        self.teams = teams
         self.registry = registry or RegistryService()
         self.region = region or AWS_REGION
         self.execution_role_arn = (
@@ -233,6 +240,13 @@ class HarnessService:
         # instance is process-wide (usage_service holds the one HarnessService),
         # so the cache is shared across requests.
         self._target_cache: Dict[str, Tuple[float, List[str]]] = {}
+        # gateway ARN -> (read at, {target name: MCP server endpoint}). Same
+        # lifetime and reason as `_target_cache`; read when a remote-MCP record's
+        # Usage opens, to find the gateway target that fronts its URL.
+        self._endpoint_cache: Dict[str, Tuple[float, Dict[str, str]]] = {}
+        # harness ARN -> (read at, Team tag or None). Only successful reads are
+        # cached: a failure must be retried, not remembered as "shared".
+        self._team_tag_cache: Dict[str, Tuple[float, Optional[str]]] = {}
         self._target_cache_seconds = 300.0
 
     @property
@@ -595,6 +609,30 @@ class HarnessService:
 
     # --- lifecycle ---------------------------------------------------------
 
+    def resolve_team(self, req: ComposeHarnessRequest, caller: Optional[AuthUser]) -> Optional[str]:
+        """Which team this harness is for. Raises ValueError (→ 400) when the
+        request names a team the caller is not in, or when a caller in several
+        teams did not say which one."""
+        teams = self.teams
+        wanted = normalize_team(req.team)
+        if teams is None or not teams.enabled:
+            if wanted:
+                raise ValueError("This deployment has no teams")
+            return None
+        known = {t.name for t in teams.list()}
+        if wanted and wanted not in known:
+            raise ValueError(f"Unknown team: {wanted}")
+        if caller is None or caller.is_admin:
+            return wanted
+        mine = [t for t in caller.teams if t in known]
+        if wanted:
+            if wanted not in mine:
+                raise ValueError(f"Not a member of team {wanted}")
+            return wanted
+        if len(mine) > 1:
+            raise ValueError("Choose a team: " + ", ".join(mine))
+        return mine[0] if mine else None
+
     def create_harness(self, req: ComposeHarnessRequest) -> HarnessSummary:
         self._require_configured()
 
@@ -609,9 +647,25 @@ class HarnessService:
             req.skill_record_ids, req.aws_skill_paths, req.skill_bucket_uris
         )
 
+        team = normalize_team(req.team)
+        execution_role_arn = self.execution_role_arn
+        allowed_tools = list(req.allowed_tools or [])
+        tags = {"Platform": PLATFORM, "AgentName": harness_name}
+        if team:
+            team_cfg = self.teams.get(team) if self.teams is not None else None
+            if team_cfg is None or not team_cfg.execution_role_arn:
+                raise ValueError(f"Team {team} has no execution role")
+            execution_role_arn = team_cfg.execution_role_arn
+            requested_model = req.model_id or BEDROCK_MODEL_ID
+            if team_cfg.allowed_models and requested_model not in team_cfg.allowed_models:
+                raise ValueError(f"Model {requested_model} is not allowed for team {team}")
+            if not allowed_tools and team_cfg.allowed_tools:
+                allowed_tools = list(team_cfg.allowed_tools)
+            tags["Team"] = team
+
         params: Dict[str, Any] = {
             "harnessName": harness_name,
-            "executionRoleArn": self.execution_role_arn,
+            "executionRoleArn": execution_role_arn,
             # Propagate to the managed Runtime, endpoint and Memory this harness
             # creates, so activating them as cost allocation tags splits Cost
             # Explorer per agent (`infra/modules/cost_allocation_tags`).
@@ -621,10 +675,7 @@ class HarnessService:
             # companion runtime — measured 2026-08-19, contrary to what this
             # comment used to claim — but the hours billed before the tag landed
             # stay in the untagged bucket forever.
-            "tags": {
-                "Platform": PLATFORM,
-                "AgentName": harness_name,
-            },
+            "tags": tags,
             "model": {
                 "bedrockModelConfig": {
                     "modelId": self._model_id_for(
@@ -662,8 +713,8 @@ class HarnessService:
             params["tools"] = tools
         if skills:
             params["skills"] = skills
-        if req.allowed_tools:
-            params["allowedTools"] = req.allowed_tools
+        if allowed_tools:
+            params["allowedTools"] = allowed_tools
         if req.max_iterations:
             params["maxIterations"] = req.max_iterations
         if req.timeout_seconds:
@@ -794,6 +845,66 @@ class HarnessService:
         self._target_cache[gateway_arn] = (time.monotonic(), names)
         return names
 
+    def gateway_target_endpoints(self, gateway_arn: str) -> Dict[str, str]:
+        """Target name -> the MCP server URL that target proxies, for one gateway.
+
+        Only `mcpServer` targets have an endpoint; Lambda, connector and OpenAPI
+        targets are left out. This is how a registry record that describes a
+        Runtime-hosted MCP server by its invocations URL is tied to the gateway
+        target agents actually call it through (see `usage_service.record_reach`):
+        `ListGatewayTargets` names the targets, `GetGatewayTarget` holds the URL.
+
+        One GetGatewayTarget per target, so cached like the names.
+        """
+        cached = self._endpoint_cache.get(gateway_arn)
+        if cached is not None and (
+            time.monotonic() - cached[0] < self._target_cache_seconds
+        ):
+            return cached[1]
+
+        gateway_id = gateway_arn.rsplit("/", 1)[-1]
+        endpoints: Dict[str, str] = {}
+        params: Dict[str, Any] = {"gatewayIdentifier": gateway_id, "maxResults": 100}
+        token: Optional[str] = None
+        while True:
+            if token:
+                params["nextToken"] = token
+            resp = self.control.list_gateway_targets(**params)
+            for target in resp.get("items", []):
+                name = target.get("name")
+                target_id = target.get("targetId")
+                if not name or not target_id:
+                    continue
+                detail = self.control.get_gateway_target(
+                    gatewayIdentifier=gateway_id, targetId=target_id
+                )
+                endpoint = (
+                    ((detail.get("targetConfiguration") or {}).get("mcp") or {})
+                    .get("mcpServer") or {}
+                ).get("endpoint")
+                if isinstance(endpoint, str) and endpoint:
+                    endpoints[name] = endpoint
+            token = resp.get("nextToken")
+            if not token:
+                break
+
+        self._endpoint_cache[gateway_arn] = (time.monotonic(), endpoints)
+        return endpoints
+
+    def team_tag_of(self, harness_arn: str) -> Optional[str]:
+        """The harness's `Team` tag (set at creation, see create_harness), or
+        None for a shared harness. Raises when the tags cannot be read — the
+        caller decides what an unknown team means (it hides the harness from
+        non-admins). Tags never change after creation, so the cache is long."""
+        hit = self._team_tag_cache.get(harness_arn)
+        now = time.monotonic()
+        if hit and now - hit[0] < _TEAM_TAG_CACHE_SECONDS:
+            return hit[1]
+        tags = self.control.list_tags_for_resource(resourceArn=harness_arn).get("tags") or {}
+        team = normalize_team(tags.get("Team"))
+        self._team_tag_cache[harness_arn] = (now, team)
+        return team
+
     def list_harnesses(self, with_tools: bool = False) -> List[HarnessSummary]:
         summaries: List[HarnessSummary] = []
         params: Dict[str, Any] = {"maxResults": 100}
@@ -867,7 +978,9 @@ class HarnessService:
         self.control.delete_harness(harnessId=harness_id)
         return self.registry.deprecate_records_for_arns(*arns)
 
-    def compose_and_register(self, req: ComposeHarnessRequest) -> ComposeHarnessResponse:
+    def compose_and_register(
+        self, req: ComposeHarnessRequest, caller: Optional[AuthUser] = None
+    ) -> ComposeHarnessResponse:
         """
         Create the harness and answer immediately; registration follows READY.
 
@@ -879,23 +992,67 @@ class HarnessService:
         as an A2A agent once it settles. The UI already knows how to show an
         unregistered harness and offer manual registration if this thread dies.
         """
+        req = req.model_copy(update={"team": self.resolve_team(req, caller)})
+        req = self._enforce_team_limits(req, caller)
         created = self.create_harness(req)
         # No registry, nothing to publish to: the harness is still chattable
         # through the deployed-resource fallback (`deployed_agent_records`).
         if registry_enabled():
-            self._spawn_registration(created.harness_id, req)
+            # The composer owns the record; the thread cannot read the request
+            # context later, so the identity is resolved here.
+            self._spawn_registration(created.harness_id, req, owner_identity(caller))
         return ComposeHarnessResponse(harness=created)
 
-    def _spawn_registration(self, harness_id: str, req: ComposeHarnessRequest) -> None:
+    def _enforce_team_limits(
+        self, req: ComposeHarnessRequest, caller: Optional[AuthUser]
+    ) -> ComposeHarnessRequest:
+        """What a non-admin may compose, decided here rather than trusted from
+        the form.
+
+        - The team's `allowed_tools`, when set, replace the request's: the
+          built-in tools gateway is LOG_ONLY by design, so that list (its
+          `@builtin` entry above all) is the only thing between a member and
+          tools the team admin withheld. Admins may still override.
+        - Every MCP/skill record the harness is composed from must be one the
+          caller can see; another team's record is refused by id (→ 400).
+        """
+        teams = self.teams
+        if caller is None or caller.is_admin or teams is None or not teams.enabled:
+            return req
+        if req.team:
+            team_cfg = teams.get(req.team)
+            if team_cfg is not None and team_cfg.allowed_tools:
+                req = req.model_copy(update={"allowed_tools": []})
+        record_ids = list(req.mcp_record_ids or []) + list(req.skill_record_ids or [])
+        if record_ids:
+            details = fan_out(self._record_or_none, record_ids)
+            for record_id, detail in zip(record_ids, details):
+                visible = detail is not None and can_see(
+                    team_of(detail), caller, teams_enabled=True, known=visibility_known(detail)
+                )
+                if not visible:
+                    raise ValueError(f"Record {record_id} is not available to you")
+        return req
+
+    def _record_or_none(self, record_id: str) -> Optional[Any]:
+        try:
+            return self.registry.get_record(record_id)
+        except Exception as exc:  # noqa: BLE001 — unreadable counts as not visible
+            logger.warning("Could not read record %s for a visibility check: %s", record_id, exc)
+            return None
+
+    def _spawn_registration(
+        self, harness_id: str, req: ComposeHarnessRequest, owner: Optional[str] = None
+    ) -> None:
         threading.Thread(
             target=self._register_when_ready,
-            args=(harness_id, req),
+            args=(harness_id, req, owner),
             name=f"harness-register-{harness_id}",
             daemon=True,
         ).start()
 
     def _register_when_ready(
-        self, harness_id: str, req: ComposeHarnessRequest
+        self, harness_id: str, req: ComposeHarnessRequest, owner: Optional[str] = None
     ) -> None:
         """Publish a settling harness to the registry. Never raises: this runs
         detached, so an exception would only kill its own thread silently."""
@@ -929,7 +1086,9 @@ class HarnessService:
                     harness_arn=summary.harness_arn,
                     agent_runtime_arn=summary.runtime_arn,
                     submit_for_approval=True,
-                )
+                    custom_metadata={"team": req.team} if req.team else None,
+                ),
+                owner=owner,
             )
         except Exception as exc:
             # The harness exists and is usable; the UI's deployed-targets view

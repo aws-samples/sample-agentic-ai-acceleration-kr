@@ -48,8 +48,8 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 | 인증(Cognito) | `COGNITO_USER_POOL_ID`, `COGNITO_USER_POOL_CLIENT_ID`, `COGNITO_REGION` | 비밀번호 로그인 없음. Entra 도 없으면 인증 라우트 503. 로컬은 `AUTH_ENFORCED=false`로 우회(배포 금지) |
 | 인증(Entra ID) | `OIDC_PROVIDERS_JSON`(terraform) 또는 `OIDC_ISSUER_URL`·`OIDC_CLIENT_ID`·`OIDC_REDIRECT_URIS`·`OIDC_ADMIN_GROUPS`, `USERS_TABLE` | SSO 버튼 없음. `USERS_TABLE` 없으면 Entra 사용자는 Insights 에 sub 로만 보임 |
 | 스레드 | `DYNAMODB_THREADS_TABLE`, `AWS_REGION` | 필수 |
-| 기본 런타임 | `AGENT_RUNTIME_ARN`, 선택 `AGENT_RUNTIME_DISCOVERY_REGIONS` | 레코드가 ARN 을 안 주는 채팅·기본 채팅의 실행 대상이 없음 |
-| 기본 채팅 | `BASIC_CHAT_ALLOWED_MODELS`(쉼표 구분 inference profile id), 선택 `BASIC_CHAT_RUNTIME_ARN` | 에이전트 없이 모델만 골라 대화하는 "기본 채팅" 항목이 안 보임. 런타임 ARN 을 비우면 `AGENT_RUNTIME_ARN` 의 기본 런타임이 답함 |
+| 기본 런타임 | `AGENT_RUNTIME_ARN`, 선택 `AGENT_RUNTIME_DISCOVERY_REGIONS` | 레코드가 ARN 을 안 주는 채팅의 실행 대상이 없고, 선택기에 기본 에이전트가 고정되지 않음(`is_default` 레코드 없음) |
+| 모델 오버라이드 | `ALLOWED_MODELS`(쉼표 구분 inference profile id) | 스레드 오버라이드의 모델 선택이 사라지고 `model_id` 를 보낸 턴은 403. 팀 허용 목록은 이 목록을 더 좁힐 수만 있다 |
 | Registry | `AGENT_REGISTRY_ID`, `AP_USE_REGISTRY`(`auto`/`true`/`false`) | Registry 페이지가 안내 표시. 채팅 바인딩·harness 조합은 배포된 AgentCore 리소스로 폴백 |
 | Harness | `HARNESS_EXECUTION_ROLE_ARN`, `SKILLS_BUCKET` | harness 조합 비활성(`/api/config` 의 `harnessEnabled` false) |
 | Artifacts | `ARTIFACTS_BUCKET`, `ARTIFACTS_TABLE` | 화면에만 표시(저장·공유 비활성) |
@@ -65,9 +65,9 @@ DynamoDB 테이블을 로컬/수동 생성: `python dynamodb_setup.py`.
 | 라우터 | 경로 | 요약 |
 | --- | --- | --- |
 | `health` | `/` | 헬스 체크 |
-| `config` | `/api/config` | 기능 플래그(`registryEnabled`·`harnessEnabled`·`basicChat` 허용 모델). 공개 |
+| `config` | `/api/config` | 기능 플래그(`registryEnabled`·`harnessEnabled`·`allowedModels` 오버라이드 허용 모델). 공개 |
 | `auth` | `/api/auth/*` | `config`(로그인 공급자 목록, 공개) · Cognito 로그인·리프레시(`USER_PASSWORD_AUTH`) · `session`(OIDC 로그인 직후 프로필·사용자 기록) |
-| `threads` | `/threads/*` | 스레드 CRUD, 첨부 업로드, `POST /threads/{id}/runs/stream`(SSE), browser 스크린샷 |
+| `threads` | `/threads/*` | 스레드 CRUD, 첨부 업로드, `POST /threads/{id}/runs/stream`(SSE 시작), `GET /threads/{id}/runs/stream`(진행 중 런에 재접속: 재생+라이브), `POST /threads/{id}/runs/cancel`(Stop), browser 스크린샷 |
 | `registry` | `/api/registry/*` | Agent Registry 조회·검색·등록·편집·상태변경·sync, 스킬 번들 검증·업로드·버킷 관리 (쓰기 admin) |
 | `harness` | `/api/harnesses/*` | 카탈로그·조회·조합(로그인), 수정(`PUT`)·삭제(admin) |
 | `knowledge` | `/api/knowledge/*` | 사용자별 지식 베이스 |

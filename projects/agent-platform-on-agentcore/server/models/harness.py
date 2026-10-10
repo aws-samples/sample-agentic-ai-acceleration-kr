@@ -121,6 +121,10 @@ class ComposeHarnessRequest(BaseModel):
     # How long AgentCore Memory keeps this harness's conversation events. Create
     # only: re-sending the memory block on update could recreate the Memory.
     memory_event_expiry_days: Optional[int] = None
+    # Team the harness belongs to: picks the execution role and the default
+    # allowed-tools list, and tags the harness and its registry record. None =
+    # shared (the deployment's single default role).
+    team: Optional[str] = None
 
 
 class UpdateHarnessRequest(BaseModel):

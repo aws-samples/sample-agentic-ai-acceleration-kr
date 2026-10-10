@@ -122,11 +122,57 @@ server/
 `ListRegistryRecords`(컨트롤 플레인)를 씁니다. 둘은 대체 관계가 아닙니다.
 
 - 검색은 APPROVED 승인본만, 관련도순, `maxResults` 상한 **20**, `nextToken` 없음.
-  타입 narrowing은 네이티브 메타데이터 필터(`descriptorType.$in`)로 넘깁니다 —
-  랭킹 전에 후보를 줄이고, AWS 문서가 쿼리 텍스트에 타입 조건을 섞지 말라고
-  명시합니다. 반환 순서는 재정렬하지 않습니다.
+  타입 narrowing은 네이티브 `filters`(`recordType.$in`)로, 메타데이터 narrowing은
+  `customMetadata.<field>.$eq`로 넘깁니다(`/search?meta=team=x`) — 랭킹 전에
+  후보를 줄이고, AWS 문서가 쿼리 텍스트에 타입 조건을 섞지 말라고 명시합니다.
+  반환 순서는 재정렬하지 않습니다. (2026-10-10 이전에는 클라이언트에서 걸러서
+  "20건 중 해당 타입만" 남는 결과가 났습니다.)
 - 검색 결과에는 descriptors가 포함되므로 hydrate가 필요 없습니다. list에는
-  없어서 A2A/CUSTOM 레코드를 개별 조회해 채웁니다.
+  없어서 A2A/CUSTOM 레코드는 채워 넣는데, 승인본이 있는 레코드는
+  `BatchGetDiscoverableRegistryRecord`(데이터 플레인, 100건/콜) 한 번으로, 승인된
+  적 없는 레코드만 `GetRegistryRecord`를 개별 호출합니다. 같은 호출이 요약의
+  `discoverable`(데이터 플레인이 이 레코드를 내놓는가)을 채웁니다.
+
+### 승인 리비전과 채팅 게이트
+
+승인된 레코드를 편집하면 AWS는 새 DRAFT 리비전을 열고 **승인본은 계속 데이터
+플레인에 제공**합니다(dual revision). 컨트롤 플레인(`GetRegistryRecord`)은 최신
+리비전만 돌려주므로 거기 상태만 보면 편집 직후 채팅이 403이 됩니다. 채팅 바인딩은
+`chattable_record`를 씁니다: 최신이 APPROVED면 그것, 아니면 데이터 플레인의 승인
+리비전(`revision="approved"`, 바인딩 ARN도 그 리비전의 것), 둘 다 없으면 최신을
+그대로 돌려 호출자가 거부합니다.
+
+### 커스텀 메타데이터·동기화·provenance
+
+- 레지스트리에 스키마(`customMetadataSchemaConfiguration`, 레코드 타입별 JSON
+  Schema)가 있으면 `/info.custom_metadata_schema`로 노출하고, 생성·편집 요청의
+  `custom_metadata`를 그대로(비어 있지 않을 때만) 보냅니다. 편집은 전체 맵 교체.
+  AWS는 스키마를 늘리기만 허용하고, `compliance_status`로 현 스키마 위반을 알립니다.
+  **`owner` 필드는 서버가 채웁니다** — 생성(Register·스킬 업로드·배포 동기화·
+  harness 등록)마다 호출자의 이메일을 `owner_identity` 로 써 넣고(Cognito access
+  token 엔 email 클레임이 없어 sub 를 디렉터리 ListUsers 스냅샷으로 풀며, 못 풀면
+  username·sub) 클라이언트가 보낸 값은 버립니다. 편집 때는 저장된 owner 를 유지하고 클라
+  이언트 값은 무시합니다(소유권 이전 API 없음). 스키마에 `owner` 가 없는 레지스트리
+  (메타데이터 거부)에서는 스탬프를 생략합니다. 모듈 기본 스키마는 owner·team·tier
+  세 필드이고, 2026-10-10 에 뺀 `docs_url` 은 AWS 가 필드 삭제를 허용하지 않아
+  기존 레지스트리에는 남습니다. 웹은 그 필드와 owner 를 폼에서 숨기기만 합니다.
+  **메타데이터만 바꾸면 승인 상태는 유지되지만(새 리비전 없음) 검색 색인은 갱신되지
+  않습니다** — 2026-10-10 스크래치 레지스트리 실측: 컨트롤 플레인은 즉시 새 값,
+  검색 결과·`customMetadata.<field>` 필터는 10분 뒤에도 이전 값. 필터에 반영되려면
+  디스크립터·설명을 바꾸는 편집(새 리비전) 뒤 재승인이 필요합니다. 정상 색인 지연은
+  승인 뒤 10~30초였고, 같은 날 `bap-registry` 는 몇 시간 동안 새 승인본을 하나도
+  색인하지 않았습니다(원인 미상, 다른 레지스트리는 정상). 검색 0건 안내문이 이 경우를
+  가리킵니다.
+- `sync_url`을 주면 디스크립터에 `source.fromUrl`을 붙여 AWS가 정의를 가져옵니다
+  (`sync_role_arn`이면 IAM 서명, 서비스명 `agent-registry`). 실측상 동기화는 레코드
+  `name`/`description`/`recordVersion`을 소스 값으로 **덮어쓰고** 미지 키(`gatewayArn`)
+  는 보존하므로, 게이트웨이 일괄 등록은 붙이지 않고 Register 대화상자의 옵션과
+  `POST /records/{id}/sync`(triggerSynchronization) 로만 제공합니다.
+- 조직 자동 탐지가 만든 레코드는 `provenance`(DETECTED_FROM, sourceId)와
+  `http`/`agui` 디스크립터(invocation URL만)로 옵니다. URL에서 런타임 ARN과
+  qualifier를 복원해 채팅 가능하게 하고, `source_arn`을 ARN 인덱스에 넣어 일괄 sync가
+  같은 런타임·게이트웨이를 두 번 등록하지 않게 합니다. 이런 레코드는 디스크립터를
+  재구성하지 않습니다(탐지기가 소유).
 
 ### 스킬 번들
 

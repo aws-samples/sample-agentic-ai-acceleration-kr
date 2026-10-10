@@ -17,6 +17,7 @@ export const WIDGET_IDS = [
   "reuse",
   "users",
   "guardrail",
+  "teams",
 ];
 const SPANS = ["half", "full"];
 

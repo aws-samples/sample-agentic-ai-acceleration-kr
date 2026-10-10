@@ -712,6 +712,10 @@ def _reprice_unresolved_events(usage_repo: Any, writer: "_Writer", timelines: Di
             targets.append((f"AGENT#{rid}#USERS#{shard}", f"D#{day}#U#{sub}", deltas))
         targets.append((f"AGENT_MODELS#{shard}", f"D#{day}#A#{rid}#M#{model_id}",
                         {**tokens, "turns": 1, "measured_turns": 1, "model_cost_micros": cost, "priced_turns": 1}))
+        # Same projection as UsageService.reprice_events: the team row moves too.
+        team = str(item.get("team") or "")
+        if team:
+            targets.append((f"TEAMS#{shard}", f"D#{day}#G#{team}", deltas))
         for tpk, tsk, counters in targets:
             writer.add(tpk, tsk, counters)
         repriced += 1

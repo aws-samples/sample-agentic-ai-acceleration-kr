@@ -38,6 +38,7 @@ class FakeRegistry:
         self._gateways = list(gateways or [])
         self._gateway_records = dict(gateway_records or {})
         self.created = []
+        self.owners = []
         self.status_updates = []
 
     def agent_records(self):
@@ -52,8 +53,9 @@ class FakeRegistry:
     def gateway_arns(self):
         return dict(self._gateway_records)
 
-    def create_record(self, req):
+    def create_record(self, req, owner=None):
         self.created.append(req)
+        self.owners.append(owner)
         record = RegistryRecordSummary(
             record_id=f"rec-{len(self.created)}",
             name=req.name,
@@ -279,10 +281,10 @@ def test_sync_reports_failures_without_aborting_the_rest():
     svc = service(runtimes=[runtime()], harnesses=[harness()])
     original = svc.registry.create_record
 
-    def flaky(req):
+    def flaky(req, owner=None):
         if req.harness_arn:
             raise RuntimeError("registry rejected the harness card")
-        return original(req)
+        return original(req, owner=owner)
 
     svc.registry.create_record = flaky
     result = svc.sync(SyncAgentsRequest())
@@ -631,3 +633,32 @@ def test_composable_gateways_without_the_knowledge_feature_are_unchanged():
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_sync_records_carry_the_platform_tag_and_an_mcp_path():
+    """Records created by the bulk sync are tagged like every other resource of
+    the stack, and a gateway whose GetGateway URL lacks `/mcp` (the live
+    bap-gateway does) is registered with the path MCP clients need."""
+    from core.config import PLATFORM
+    from services.agent_sync_service import AgentSyncService as Service
+
+    gateway = GatewaySummary(
+        name="bare", gateway_id="g", gateway_arn=GATEWAY_ARN,
+        gateway_url="https://bare.gateway.bedrock-agentcore.us-east-1.amazonaws.com",
+        status="READY", authorizer_type="AWS_IAM",
+    )
+    registry = FakeRegistry(gateways=[gateway])
+    service = Service(registry=registry, harness=FakeHarness())
+    service.sync(SyncAgentsRequest())
+
+    req = registry.created[0]
+    assert req.tags == {"Platform": PLATFORM}
+    assert req.remote_url.endswith("/mcp")
+    assert req.sync_url is None
+
+
+def test_sync_stamps_the_running_admin_as_owner_of_every_record():
+    svc = service(runtimes=[runtime()], harnesses=[harness()])
+    result = svc.sync(SyncAgentsRequest(), owner="admin@example.com")
+    assert len(result.registered) == 2
+    assert svc.registry.owners == ["admin@example.com", "admin@example.com"]

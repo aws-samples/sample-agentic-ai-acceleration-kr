@@ -27,7 +27,7 @@ LAYOUT_NAME = "insights-layout"
 # which is the whole reason `users` and `guardrail` needed no version bump. An id
 # dropped from here (the old `quality` widget, now folded into the leaderboard
 # drill-down; `rates`, now the Settings page) is silently removed from stored
-# layouts for the same reason.
+# layouts for the same reason. `teams` (per-team usage and policy denials) added 2026-10.
 WIDGET_IDS = (
     "kpi",
     "leaderboard",
@@ -38,6 +38,7 @@ WIDGET_IDS = (
     "reuse",
     "users",
     "guardrail",
+    "teams",
 )
 SPANS = ("half", "full")
 

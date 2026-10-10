@@ -22,6 +22,10 @@ router = APIRouter(prefix="/api/harnesses", tags=["harness"])
 
 _service = HarnessService()
 
+from core.dependencies import team_service  # noqa: E402 — after the singleton, like routes/registry.py
+
+_service.teams = team_service
+
 
 def _harness() -> HarnessService:
     return _service
@@ -70,7 +74,7 @@ def get_harness(harness_id: str, _: AuthUser = Depends(current_user)):
 
 @router.post("", response_model=ComposeHarnessResponse)
 def compose_harness(
-    req: ComposeHarnessRequest, _: AuthUser = Depends(current_user)
+    req: ComposeHarnessRequest, user: AuthUser = Depends(current_user)
 ):
     """Composing an agent is open to any signed-in user; deleting one is not.
 
@@ -78,9 +82,12 @@ def compose_harness(
     (`_spawn_registration`), so a non-admin's create still completes end to end
     without `POST /api/registry/sync`, which stays admin-only because it writes
     records for every unregistered runtime in the account, not just this one.
+
+    The team (and so the execution role) is decided server-side from the
+    caller's groups; see HarnessService.resolve_team.
     """
     try:
-        return _harness().compose_and_register(req)
+        return _harness().compose_and_register(req, caller=user)
     except Exception as exc:
         _fail(exc)
 

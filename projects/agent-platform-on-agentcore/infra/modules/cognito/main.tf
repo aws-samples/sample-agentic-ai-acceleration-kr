@@ -84,6 +84,15 @@ resource "aws_cognito_user_group" "user" {
   description  = "Regular users"
 }
 
+# One group per team. Membership is managed outside terraform (console, seed
+# script): the demo accounts are not terraform either (server/scripts/seed_demo_users.py).
+resource "aws_cognito_user_group" "team" {
+  for_each     = toset(var.teams)
+  name         = "team:${each.value}"
+  user_pool_id = aws_cognito_user_pool.this.id
+  description  = "Members of team ${each.value}"
+}
+
 resource "aws_cognito_user" "admin" {
   user_pool_id = aws_cognito_user_pool.this.id
   username     = var.admin_email

@@ -67,6 +67,7 @@ from pydantic import BaseModel
 
 from core import clock
 from core.auth import AuthUser, current_user
+from core.config import LEGACY_BASIC_CHAT_LABEL, LEGACY_BASIC_CHAT_RECORD_ID
 from core.dependencies import (
     billing_service,
     pricing_service,
@@ -78,6 +79,7 @@ from core.dependencies import (
     layout_service,
     collector_service,
     directory_service,
+    team_service,
     rate_card_service,
 )
 from services.billing_service import BillingUnavailable
@@ -91,6 +93,14 @@ from services.usage_service import guardrail_sum
 from data.model_rates import RATE_CARD_VERSION, resolve_rate
 
 logger = logging.getLogger(__name__)
+
+
+def _record_names(records) -> dict:
+    """record_id -> display name. The retired basic-chat path left usage rows
+    under an id no record ever had; name them so the table never prints it raw."""
+    names = {record.record_id: record.name for record in records}
+    names.setdefault(LEGACY_BASIC_CHAT_RECORD_ID, LEGACY_BASIC_CHAT_LABEL)
+    return names
 
 router = APIRouter(prefix="/api/insights", tags=["insights"])
 
@@ -165,6 +175,7 @@ _evaluations_override = None
 _layout_override = None
 _collector_override = None
 _directory_override = None
+_teams_override = None
 _rate_card_override = None
 
 
@@ -206,6 +217,10 @@ def _collector():
 
 def _directory():
     return _directory_override or directory_service
+
+
+def _teams():
+    return _teams_override or team_service
 
 
 def _rate_card():
@@ -280,18 +295,17 @@ def _trace_window(thread: Any) -> tuple:
 def _record_usage_view(usage: Any, record_id: str, window: Dict[str, Any]) -> tuple:
     """The Usage tab's two record-kind-dependent pieces: `(reach, tools)`.
 
-    An agent's tool calls are keyed to it directly. A gateway record has none of
-    its own — it is called *through*, not run — so `mcp_gateway_usage` rolls the
-    agents' calls back to it by target and returns the attaching agents too. That
-    method is `None` for anything that is not a gateway, which is the signal to
-    fall back to the record's own counters and show no `reach`.
+    An agent's tool calls are keyed to it directly, and `record_reach` is `None`
+    for it — the signal to show its own counters. A skill or MCP record is
+    reached, not run, so its own counters are zero by construction; for those
+    `record_reach` rolls the attaching/calling agents back to the record, and
+    its `tools` are the calls that went through it (empty for a skill, which no
+    telemetry counts).
     """
-    gateway = usage.mcp_gateway_usage(
-        record_id, window["start_date"], window["end_date"]
-    )
-    if gateway is not None:
-        reach = {"agents": gateway["agents"], "turns": gateway["turns"]}
-        return reach, gateway["tools"]
+    reach = usage.record_reach(record_id, window["start_date"], window["end_date"])
+    if reach is not None:
+        tools = reach.pop("tools")
+        return reach, tools
     tools = usage.tool_totals(record_id, window["start_date"], window["end_date"])
     return None, tools
 
@@ -831,7 +845,7 @@ def summary(
     usage.set_record_aliases(records)
     totals = usage.agent_totals(window["start_date"], window["end_date"])
     by_model = usage.agent_models(window["start_date"], window["end_date"])
-    names = {record.record_id: record.name for record in records}
+    names = _record_names(records)
     harness_runtimes = _harness_runtimes(usage) if any(
         getattr(r, "harness_arn", None) for r in records
     ) else {}
@@ -1096,7 +1110,7 @@ def telemetry(
         logger.warning("Could not read agent records", exc_info=True)
     usage.set_record_aliases(records)
 
-    names = {record.record_id: record.name for record in records}
+    names = _record_names(records)
     arns_by_record = _agent_arns(records)
     flat_arns = [arn for arns in arns_by_record.values() for arn in arns]
 
@@ -1316,7 +1330,7 @@ def user_leaderboard(
     except Exception:
         logger.warning("Could not read agent records", exc_info=True)
     usage.set_record_aliases(records)
-    names = {record.record_id: record.name for record in records}
+    names = _record_names(records)
     matrix = usage.agent_user_matrix([record.record_id for record in records], window["start_date"], window["end_date"])
     by_day = usage.daily_users(window["start_date"], window["end_date"])
     active_days: Dict[str, int] = {}
@@ -1420,6 +1434,81 @@ def user_leaderboard(
             "runtime_cost_micros": sum(runtime_priced) if runtime_priced else None,
             "guardrail_interventions": sum(row["guardrail_interventions"] for row in rows),
         },
+    }
+
+
+@router.get("/teams")
+def team_insights(days: int = Query(7), user: AuthUser = Depends(current_user)) -> Dict[str, Any]:
+    """Spend and policy denials per team. **Admin only.**
+
+    A turn is attributed to a team by the caller's groups at the time it ran
+    (services/policy_denial.resolve_turn_team); turns by admins and teamless
+    people are the `unattributed` row, and never spread across teams. Gateway
+    decisions come from the policy engine's own metrics, which carry no caller,
+    so they are a cross-check beside the ledger rather than a source of rows.
+    """
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required.")
+    _require_configured()
+    usage = _usage()
+    usage.begin_read()
+    window = _window(days)
+    start, end = window["start_date"], window["end_date"]
+    by_team = usage.team_totals(start, end)
+    denials = usage.policy_team_totals(start, end)
+    agents_total = usage.agent_totals(start, end)
+    policy_total = usage.policy_totals(start, end)
+
+    rows: List[Dict[str, Any]] = []
+    for team in _teams().list():
+        totals = by_team.get(team.name, usage._blank())
+        rows.append({
+            "team": team.name,
+            "label": team.label,
+            **{k: totals.get(k, 0) for k in ("turns", "input_tokens", "output_tokens", "failed_turns", "tool_calls",
+                                             "unmeasured_turns", "priced_turns", "unpriced_turns", "model_cost_micros")},
+            "policy_denials": denials.get(team.name, {}).get("denials", 0),
+            "denied_tools": denials.get(team.name, {}).get("tools", {}),
+            "daily_cost_alert_usd": team.daily_cost_alert_usd,
+        })
+
+    def _sum(key: str, buckets: Dict[str, Dict[str, Any]]) -> int:
+        return sum(int(b.get(key) or 0) for b in buckets.values())
+
+    unattributed = {
+        "turns": max(0, _sum("turns", agents_total) - _sum("turns", by_team)),
+        "model_cost_micros": max(0, _sum("model_cost_micros", agents_total) - _sum("model_cost_micros", by_team)),
+        "policy_denials": max(0, int(policy_total.get("denials") or 0) - sum(d.get("denials", 0) for t, d in denials.items() if t != "-")),
+    }
+
+    # by_mode keeps LOG_ONLY "would deny" apart from ENFORCE denials; the
+    # top-level allow/deny sum both and must not be read as "blocked".
+    decisions: Dict[str, Any] = {"allow": 0, "deny": 0, "by_tool": {}, "by_mode": {}}
+    collector = _collector()
+    policy_metrics = False
+    if collector is not None:
+        try:
+            for days_map in collector.policy_decisions(start, end).values():
+                for item in days_map.values():
+                    policy_metrics = True
+                    decisions["allow"] += int(item.get("allow_decisions") or 0)
+                    decisions["deny"] += int(item.get("deny_decisions") or 0)
+                    for tool, n in (item.get("deny_by_tool") or {}).items():
+                        decisions["by_tool"][tool] = decisions["by_tool"].get(tool, 0) + int(n or 0)
+                    for mode, counts in (item.get("by_mode") or {}).items():
+                        bucket = decisions["by_mode"].setdefault(mode, {"allow": 0, "deny": 0})
+                        bucket["allow"] += int((counts or {}).get("allow") or 0)
+                        bucket["deny"] += int((counts or {}).get("deny") or 0)
+        except Exception:
+            logger.warning("Policy decision read failed", exc_info=True)
+
+    return {
+        **_window_fields(window),
+        "sources": {"usage": usage.reads_complete(), "policy_metrics": policy_metrics},
+        "teams": rows,
+        "unattributed": unattributed,
+        "gateway_decisions": decisions,
+        "recent_denials": usage.policy_events(start, end, limit=20),
     }
 
 
@@ -1879,10 +1968,10 @@ def record_insights(
         runtime_cost = _sum_days(runtime_days, "runtime_cost_micros")
         invocations = _sum_days(runtime_days, "invocations")
 
-    # `reach` is present only for a gateway record, whose own turn/token counters
-    # are always zero — it is called *through*, not run. Its Usage tab shows the
-    # attaching agents and its per-tool calls instead. `tools` is the record's own
-    # calls for an agent, and the gateway's rolled-up calls for a gateway.
+    # `reach` is present for every non-agent record (skill, MCP server, gateway),
+    # whose own turn/token counters are always zero — it is reached, not run. Its
+    # Usage tab shows the agents that reach it and their traffic instead, and
+    # `tools` is the calls that went through it; for an agent, `tools` is its own.
     reach, tool_totals = _record_usage_view(usage, record_id, window)
 
     turns = usage.turn_events(

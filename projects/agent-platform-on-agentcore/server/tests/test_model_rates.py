@@ -389,7 +389,8 @@ def test_the_per_agent_breakdown_is_scoped_like_the_total_it_breaks_down():
     service.per_agent_costs("2026-08-01", "2026-08-16")
 
     filters = service._client.calls[0]["Filter"]["And"]
-    dimensions = {f["Dimensions"]["Key"]: f["Dimensions"]["Values"] for f in filters}
+    # The scope also carries a Platform tag clause; this test is about the dimensions.
+    dimensions = {f["Dimensions"]["Key"]: f["Dimensions"]["Values"] for f in filters if "Dimensions" in f}
     assert dimensions["REGION"] == ["us-east-1"]
     assert dimensions["SERVICE"] == ["Amazon Bedrock AgentCore"]
     assert dimensions["RECORD_TYPE"] == ["Usage"]

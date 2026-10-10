@@ -6,12 +6,6 @@ export type AgentChatConfig = {
   registryRecordId?: string;
   /** Sent so the server can label the thread without a registry lookup. */
   registryAgentName?: string;
-  /**
-   * Basic chat: the server binds the default runtime and the model itself and
-   * refuses a model outside its allow-list, so no ARN or record id is sent.
-   */
-  basicChat?: boolean;
-  basicChatModelId?: string;
 };
 
 /** Maps the selected agent onto the stream request config. */
@@ -36,40 +30,38 @@ export function applyAgentConfig(
   if (agentConfig?.registryAgentName) {
     config.registry_agent_name = agentConfig.registryAgentName;
   }
-  if (agentConfig?.basicChat) {
-    config.basic_chat = true;
-    config.basic_chat_model_id = agentConfig.basicChatModelId;
-  }
   return config;
 }
 
 /**
- * Per-thread overrides for a harness agent.
+ * Per-thread overrides for an agent.
  *
- * InvokeHarness accepts `model` and `systemPrompt` per request and applies them
- * to that turn only: the harness definition is untouched, no version is made.
- * That makes them the right tool for "try this agent on another model" without
- * recomposing it. Runtime agents have no such fields, so the control is only
- * offered when the chat is bound to a harness.
+ * The server forwards `model_id` / `system_prompt` per turn: InvokeHarness takes
+ * them as `model` / `systemPrompt`, and the runtime reads them from the invoke
+ * payload (agent-runtime/main.py), rebuilding its agent when the model changes.
+ * The agent definition is untouched either way. The model must be on the
+ * server's allow-list (GET /api/config → allowedModels) or the turn is refused.
  *
  * Kept per thread (Thread.metadata.harness_overrides) and resent on every turn,
- * so a reopened conversation keeps answering the way it was set up to.
+ * so a reopened conversation keeps answering the way it was set up to. The key
+ * name predates overrides on runtime agents and stays so existing threads keep
+ * their settings.
  */
-export type HarnessOverrides = {
+export type ThreadOverrides = {
   modelId?: string;
   systemPrompt?: string;
 };
 
 export const OVERRIDES_METADATA_KEY = "harness_overrides";
 
-export function hasOverrides(overrides?: HarnessOverrides | null): boolean {
+export function hasOverrides(overrides?: ThreadOverrides | null): boolean {
   return !!(overrides?.modelId?.trim() || overrides?.systemPrompt?.trim());
 }
 
 /** Maps the thread's overrides onto the stream request config. */
 export function applyOverrides(
   config: Record<string, any>,
-  overrides?: HarnessOverrides | null
+  overrides?: ThreadOverrides | null
 ) {
   const modelId = overrides?.modelId?.trim();
   const systemPrompt = overrides?.systemPrompt?.trim();
@@ -81,7 +73,7 @@ export function applyOverrides(
 /** Read overrides back out of thread metadata, ignoring anything malformed. */
 export function overridesFromMetadata(
   metadata?: Record<string, unknown> | null
-): HarnessOverrides {
+): ThreadOverrides {
   const raw = metadata?.[OVERRIDES_METADATA_KEY];
   if (!raw || typeof raw !== "object") return {};
   const { modelId, systemPrompt } = raw as Record<string, unknown>;

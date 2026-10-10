@@ -54,3 +54,33 @@ export function putNavVisibility(hidden: MenuKey[]): Promise<NavVisibility> {
     body: JSON.stringify({ hidden }),
   });
 }
+
+export interface TeamConfig {
+  name: string;
+  label: string;
+  /** Empty for non-admin readers. */
+  execution_role_arn: string;
+  allowed_models: string[];
+  allowed_tools: string[];
+  daily_cost_alert_usd: number | null;
+}
+
+export interface TeamsResponse {
+  teams: TeamConfig[];
+  persisted: boolean;
+}
+
+export type TeamConfigUpdate = Partial<
+  Pick<TeamConfig, "label" | "allowed_models" | "allowed_tools" | "daily_cost_alert_usd">
+>;
+
+export function fetchTeams(): Promise<TeamsResponse> {
+  return request<TeamsResponse>("/api/settings/teams");
+}
+
+export function putTeam(name: string, body: TeamConfigUpdate): Promise<TeamConfig> {
+  return request<TeamConfig>(`/api/settings/teams/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+}

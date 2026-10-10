@@ -33,6 +33,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.thread import Thread  # noqa: E402
+from services.run_broker import RunBroker  # noqa: E402
 from services.streaming_service import StreamingService  # noqa: E402
 
 
@@ -79,6 +80,9 @@ class RecordingRegistry:
             status = "APPROVED"
 
         return Record()
+    def chattable_record(self, record_id):
+        # The approval gate reads the chattable revision; these doubles have one.
+        return self.get_record(record_id)
 
 
 class StubAgentClient:
@@ -118,6 +122,7 @@ def _service(thread_service, registry):
     service.artifact_service = None
     service.mcp_apps_relay = None
     service.registry_service = registry
+    service.run_broker = RunBroker()
     return service
 
 
@@ -194,6 +199,9 @@ def test_setup_failures_still_reach_the_route(wiring):
                 status = "DRAFT"
 
             return Record()
+        def chattable_record(self, record_id):
+            # The approval gate reads the chattable revision; these doubles have one.
+            return self.get_record(record_id)
 
     service.registry_service = RejectingRegistry()
 
@@ -220,6 +228,9 @@ def test_the_loop_keeps_running_during_setup():
                 status = "APPROVED"
 
             return Record()
+        def chattable_record(self, record_id):
+            # The approval gate reads the chattable revision; these doubles have one.
+            return self.get_record(record_id)
 
     service = _service(RecordingThreadService(), SlowRegistry())
 

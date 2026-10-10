@@ -15,10 +15,12 @@ below own so the rest of the platform keeps its internal `descriptor_type`.
 """
 import json
 import logging
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Callable, Optional, List, Dict, Any, TypeVar
+from typing import Callable, Optional, List, Dict, Any, Tuple, TypeVar
+from urllib.parse import parse_qs, unquote, urlsplit, urlunsplit
 
 import boto3
 from botocore.config import Config as BotoConfig
@@ -29,6 +31,7 @@ from core.config import (
     AGENT_RUNTIME_DISCOVERY_REGIONS,
     AP_USE_REGISTRY,
     AWS_REGION,
+    REGISTRY_SYNC_ROLE_ARN,
 )
 from models.registry import (
     AgentRuntimeSummary,
@@ -78,9 +81,19 @@ _PRIMARY_KEY = {
     DESCRIPTOR_CUSTOM: "custom",
 }
 _KEY_TO_DESCRIPTOR = {v: k for k, v in _PRIMARY_KEY.items()}
+# Descriptors this platform never writes but does read: organisation-wide
+# auto-detection records an HTTP- or AG-UI-protocol runtime with only its
+# invocation endpoint (`source.fromUrl`, no data). Both describe an agent, so
+# they classify as A2A for the UI and bind chat through the endpoint URL.
+_ENDPOINT_ONLY_KEYS = ("http", "agui")
+for _key in _ENDPOINT_ONLY_KEYS:
+    _KEY_TO_DESCRIPTOR[_key] = DESCRIPTOR_A2A
 # Reverse of _RECORD_TYPE, for list summaries that carry recordType but no
-# descriptors (ListRegistryRecords omits descriptors).
+# descriptors (ListRegistryRecords omits descriptors). GATEWAY is what
+# auto-detection assigns a detected gateway; it is a tool surface like MCP.
 _DESCRIPTOR_FROM_RECORD_TYPE = {v: k for k, v in _RECORD_TYPE.items()}
+_DESCRIPTOR_FROM_RECORD_TYPE["GATEWAY"] = DESCRIPTOR_MCP
+_GATEWAY_RECORD_TYPE = "GATEWAY"
 
 
 def _record_type_of(descriptor_type: str) -> str:
@@ -99,6 +112,56 @@ def _endpoint(service: str, region: str) -> str:
     # not exist in DNS; the service is served at .api.aws (registry-faq). Still
     # true as of botocore 1.43.106 (checked 2026-10-01), so set it explicitly.
     return f"https://{service}.{region}.api.aws"
+
+
+def registry_mcp_endpoint(registry_id: str, region: str) -> str:
+    """The registry's own MCP server (spec 2025-11-25) on the data plane.
+
+    Exposes search/list/batch-get as MCP tools; authorised by the registry's
+    discovery configuration (SigV4 here) plus `agent-registry:InvokeRegistryMcp`.
+    """
+    return f"{_endpoint(_REGISTRY_DATA_SERVICE, region)}/registry/{registry_id}/mcp"
+
+
+# SigV4 service name AWS documents for synchronising from servers hosted on
+# AgentCore Runtime or Gateway (registry-sync-records). Not `bedrock-agentcore`.
+_SYNC_SIGNING_SERVICE = "agent-registry"
+
+_INVOCATION_PATH = re.compile(r"/runtimes/([^/]+)/invocations")
+
+
+def runtime_arn_from_invocation_url(url: str) -> tuple[Optional[str], Optional[str]]:
+    """(runtime ARN, qualifier) from an AgentCore invocation URL, else (None, None).
+
+    `https://bedrock-agentcore.<r>.amazonaws.com/runtimes/<url-encoded ARN>/invocations?qualifier=DEFAULT`
+    is what auto-detection writes into an `http`/`agui` descriptor's source, and
+    what the gateway module builds for runtime MCP targets.
+    """
+    if not isinstance(url, str):
+        return None, None
+    parts = urlsplit(url)
+    match = _INVOCATION_PATH.search(parts.path)
+    if not match:
+        return None, None
+    arn = unquote(match.group(1))
+    if not arn.startswith("arn:") or ":runtime/" not in arn:
+        return None, None
+    qualifier = (parse_qs(parts.query).get("qualifier") or [None])[0]
+    return arn, qualifier
+
+
+def mcp_endpoint_of(url: str) -> str:
+    """A gateway's MCP endpoint: GetGateway's `gatewayUrl` with `/mcp` ensured.
+
+    Older gateways report the bare host (the live `bap-gateway` does) while newer
+    ones include `/mcp`; MCP clients need the path, and a record carrying the
+    bare host hung the harness's app discovery.
+    """
+    parts = urlsplit(url)
+    path = parts.path.rstrip("/")
+    if not path.endswith("/mcp"):
+        path = f"{path}/mcp"
+    return urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
 
 # SearchRegistryRecords caps maxResults at 20 and returns no nextToken.
 _SEARCH_MAX_RESULTS = 20
@@ -135,8 +198,12 @@ _ACTION_TO_REASON = {
     "deprecate": "Retired by a curator.",
 }
 
-# ListRegistryRecords omits descriptors, so every listing that needs them fans
-# out one GetRegistryRecord per record.
+# ListRegistryRecords omits descriptors; approved records are recovered in bulk
+# (BatchGetDiscoverableRegistryRecord, this many ids per call) and only the rest
+# fan out one GetRegistryRecord each.
+_BATCH_GET_MAX = 100
+# How long a record's team is trusted when a pinned thread re-checks visibility.
+TEAM_CACHE_SECONDS = 60
 _FANOUT_WORKERS = 8
 
 # botocore's default pool (10) is smaller than the fan-out of a few concurrent
@@ -260,6 +327,11 @@ def _extract_descriptor_content(descriptors: Optional[Dict[str, Any]]) -> Option
             "skillMd": skill_md.get("data"),
             "skillDefinition": _parse_inline(skills.get("data")),
         }
+    for key in _ENDPOINT_ONLY_KEYS:
+        if key in descriptors:
+            # Endpoint-only descriptor: the URL is the whole definition.
+            url = ((descriptors[key].get("source") or {}).get("fromUrl") or {}).get("url")
+            return {"protocol": key, "url": url}
     return None
 
 
@@ -334,7 +406,17 @@ def _extract_runtime_binding(
     runtime_arn: Optional[str] = None
     harness_arn: Optional[str] = None
     for candidate in candidates:
-        if not isinstance(candidate, str) or not candidate.startswith("arn:"):
+        if not isinstance(candidate, str):
+            continue
+        if candidate.startswith("https://"):
+            # An invocation URL (auto-detected `http`/`agui` descriptors) names
+            # the runtime inside its path and the qualifier in its query.
+            from_url, url_qualifier = runtime_arn_from_invocation_url(candidate)
+            if from_url:
+                runtime_arn = runtime_arn or from_url
+                qualifier = qualifier or url_qualifier
+            continue
+        if not candidate.startswith("arn:"):
             continue
         if ":harness/" in candidate:
             harness_arn = harness_arn or candidate
@@ -344,9 +426,20 @@ def _extract_runtime_binding(
     return runtime_arn, harness_arn, qualifier
 
 
-def _to_summary(record: Dict[str, Any]) -> RegistryRecordSummary:
+def _provenance_source(record: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
+    """(sourceId, sourceType) of the DETECTED_FROM provenance entry, if any."""
+    for entry in record.get("provenance") or []:
+        if isinstance(entry, dict) and entry.get("relation") == "DETECTED_FROM":
+            return entry.get("sourceId"), entry.get("sourceType")
+    return None, None
+
+
+def _to_summary(
+    record: Dict[str, Any], discoverable: Optional[bool] = None
+) -> RegistryRecordSummary:
     content = _extract_descriptor_content(record.get("descriptors"))
     arn, harness_arn, qualifier = _extract_runtime_binding(content)
+    source_arn, source_type = _provenance_source(record)
     # ListRegistryRecords carries recordType but no descriptors; without the
     # fallback those summaries get descriptor_type=None, the hydration filter
     # in list_records never matches, and agent records lose their invoke ARN.
@@ -366,18 +459,58 @@ def _to_summary(record: Dict[str, Any]) -> RegistryRecordSummary:
         agent_runtime_arn=arn,
         harness_arn=harness_arn,
         qualifier=qualifier,
+        discoverable=discoverable,
+        custom_metadata=record.get("customMetadata") or None,
+        compliance_status=record.get("customMetadataSchemaComplianceStatus"),
+        auto_detected=bool(record.get("createdByAutoDetection")) or source_arn is not None,
+        source_arn=source_arn,
+        source_type=source_type,
     )
 
 
-def _to_detail(record: Dict[str, Any]) -> RegistryRecordDetail:
-    summary = _to_summary(record).model_dump()
+def _sync_source_of(descriptors: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The `source.fromUrl` of the primary descriptor, flattened for the UI."""
+    if not descriptors:
+        return None
+    for key in _KEY_TO_DESCRIPTOR:
+        descriptor = descriptors.get(key)
+        if not isinstance(descriptor, dict):
+            continue
+        from_url = (descriptor.get("source") or {}).get("fromUrl")
+        if not isinstance(from_url, dict) or not from_url.get("url"):
+            return None
+        summary: Dict[str, Any] = {"url": from_url["url"], "credential": "none"}
+        for config in from_url.get("credentialProviderConfigurations") or []:
+            kind = (config.get("credentialProviderType") or "").lower()
+            provider = config.get("credentialProvider") or {}
+            if kind == "iam":
+                summary["credential"] = "iam"
+                summary["role_arn"] = (provider.get("iamCredentialProvider") or {}).get("roleArn")
+            elif kind == "oauth":
+                summary["credential"] = "oauth"
+                summary["provider_arn"] = (provider.get("oauthCredentialProvider") or {}).get(
+                    "providerArn"
+                )
+        return summary
+    return None
+
+
+def _to_detail(
+    record: Dict[str, Any],
+    discoverable: Optional[bool] = None,
+    revision: Optional[str] = None,
+) -> RegistryRecordDetail:
+    summary = _to_summary(record, discoverable=discoverable).model_dump()
+    descriptors = record.get("descriptors")
     return RegistryRecordDetail(
         **summary,
-        descriptors=record.get("descriptors"),
-        descriptor_content=_extract_descriptor_content(record.get("descriptors")),
+        descriptors=descriptors,
+        descriptor_content=_extract_descriptor_content(descriptors),
         status_reason=record.get("statusReason"),
-        # Moved per-descriptor in the new schema; unused downstream.
         sync_config=None,
+        sync_source=_sync_source_of(descriptors),
+        provenance=record.get("provenance") or None,
+        revision=revision,
     )
 
 
@@ -473,7 +606,46 @@ def _merge_descriptor_content(
     )
 
 
+def _attach_sync_source(descriptors: Dict[str, Any], req: Any) -> Dict[str, Any]:
+    """
+    Add `source.fromUrl` to the primary descriptor when the request asks for
+    synchronisation. Only MCP and A2A descriptors can carry a source (AWS); the
+    data built alongside it is kept — AWS overlays what it fetches and preserves
+    keys it does not know, such as `gatewayArn` (verified live 2026-10-10).
+    """
+    sync_url = getattr(req, "sync_url", None)
+    if not sync_url:
+        return descriptors
+    key = next(iter(descriptors))
+    if key not in ("mcpServer", "a2aAgentCard"):
+        raise ValueError(
+            "Synchronisation from an endpoint is only supported for MCP and A2A records."
+        )
+    from_url: Dict[str, Any] = {"url": sync_url}
+    role_arn = getattr(req, "sync_role_arn", None)
+    if role_arn:
+        from_url["credentialProviderConfigurations"] = [
+            {
+                "credentialProviderType": "IAM",
+                "credentialProvider": {
+                    "iamCredentialProvider": {
+                        "roleArn": role_arn,
+                        "service": _SYNC_SIGNING_SERVICE,
+                    }
+                },
+            }
+        ]
+    descriptors[key]["source"] = {"fromUrl": from_url}
+    return descriptors
+
+
 def _build_descriptors(req: Any) -> Dict[str, Any]:
+    """Descriptors for a create/edit request: the per-type payload plus, when
+    asked, the synchronisation source."""
+    return _attach_sync_source(_build_primary_descriptors(req), req)
+
+
+def _build_primary_descriptors(req: Any) -> Dict[str, Any]:
     """
     Map a create or edit request onto the descriptor union AWS expects per type.
 
@@ -642,6 +814,98 @@ def _as_updated_descriptors(descriptors: Dict[str, Any]) -> Dict[str, Any]:
     )
 
 
+def _parse_metadata_schema(config: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """
+    GetRegistry's `customMetadataSchemaConfiguration` as parsed JSON Schema per
+    record type, the default under "DEFAULT". AWS stores each schema as a
+    string; a string that fails to parse is dropped rather than failing /info.
+    """
+    if not config:
+        return None
+    schemas: Dict[str, Any] = {}
+    default = config.get("defaultSchema")
+    if isinstance(default, str) and default.strip():
+        parsed = _parse_inline(default)
+        if isinstance(parsed, dict):
+            schemas["DEFAULT"] = parsed
+    for override in config.get("recordTypeSchemaOverrides") or []:
+        parsed = _parse_inline(override.get("schema"))
+        if override.get("recordType") and isinstance(parsed, dict):
+            schemas[override["recordType"]] = parsed
+    return schemas or None
+
+
+# The metadata field the server fills with the registering user. Named after the
+# field in the AWS documentation's example schema; the module's default schema
+# defines it as optional text.
+OWNER_FIELD = "owner"
+
+
+# sub -> e-mail, installed by core.dependencies from the directory service.
+# Module state rather than a constructor argument because owner_identity is
+# called from routes, the harness composer and the sync service alike.
+_owner_resolver: Optional[Callable[[str], Optional[str]]] = None
+
+
+def set_owner_resolver(resolver: Optional[Callable[[str], Optional[str]]]) -> None:
+    global _owner_resolver
+    _owner_resolver = resolver
+
+
+def owner_identity(user: Any) -> Optional[str]:
+    """The value written into a record's `owner` metadata for `user` (an AuthUser).
+
+    The e-mail: the Cognito pool here uses the e-mail as the sign-in name, so the
+    token's `username` is the opaque `sub` UUID, which tells a curator nothing on
+    a card. A Cognito *access* token carries no e-mail claim at all (measured
+    live 2026-10-10: the first deploy stamped the UUID), so when the token has
+    none the sub is looked up in the user directory. `username` and `sub` are
+    the last resorts for a sub the directory does not know.
+    """
+    if user is None:
+        return None
+    email = getattr(user, "email", None)
+    if isinstance(email, str) and email.strip():
+        return email.strip()
+    sub = getattr(user, "sub", None)
+    if _owner_resolver is not None and isinstance(sub, str) and sub.strip():
+        try:
+            resolved = _owner_resolver(sub.strip())
+        except Exception:
+            logger.info("Owner e-mail lookup failed for %s; stamping the sub", sub, exc_info=True)
+            resolved = None
+        if isinstance(resolved, str) and resolved.strip():
+            return resolved.strip()
+    for attr in ("username", "sub"):
+        value = getattr(user, attr, None)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _search_filters(
+    descriptor_types: Optional[List[str]], custom_metadata: Optional[Dict[str, str]]
+) -> Optional[Dict[str, Any]]:
+    """
+    The `filters` expression SearchDiscoverableRegistryRecords evaluates before
+    ranking. One clause comes back bare; several are joined with `$and`. Blank
+    metadata values are dropped rather than sent as `$eq ""`, which the UI emits
+    for an un-chosen filter chip.
+    """
+    clauses: List[Dict[str, Any]] = []
+    if descriptor_types:
+        clauses.append(
+            {"recordType": {"$in": [_record_type_of(t) for t in descriptor_types]}}
+        )
+    for key, value in (custom_metadata or {}).items():
+        if value is None or not str(value).strip() or not key.strip():
+            continue
+        clauses.append({f"customMetadata.{key.strip()}": {"$eq": str(value).strip()}})
+    if not clauses:
+        return None
+    return clauses[0] if len(clauses) == 1 else {"$and": clauses}
+
+
 class RegistryService:
     def __init__(self, registry_id: Optional[str] = None, region: Optional[str] = None):
         self.registry_id = registry_id if registry_id is not None else AGENT_REGISTRY_ID
@@ -656,6 +920,7 @@ class RegistryService:
         # boto3 clients are safe to call from several threads but not safe to
         # *create* concurrently, and listings now fan out across a threadpool.
         self._lock = threading.Lock()
+        self._team_cache: Dict[str, Tuple[float, Optional[str]]] = {}
 
     def _require_configured(self) -> None:
         if not self.registry_id:
@@ -705,25 +970,58 @@ class RegistryService:
         self._require_configured()
         resp = self.registry_control.get_registry(registryId=self.registry_id)
         rules = (resp.get("approvalConfiguration") or {}).get("autoApprovalRules") or []
+        auto_detection = resp.get("autoDetection") or {}
+        registry_id = resp.get("registryId", self.registry_id)
         return RegistryInfo(
-            registry_id=resp.get("registryId", self.registry_id),
+            registry_id=registry_id,
             name=resp.get("name"),
             description=resp.get("description"),
             status=resp.get("status"),
             auto_approval="APPROVE_ALL" in rules,
+            registry_arn=resp.get("registryArn"),
+            mcp_endpoint=registry_mcp_endpoint(registry_id, self.region),
+            custom_metadata_schema=_parse_metadata_schema(
+                resp.get("customMetadataSchemaConfiguration")
+            ),
+            auto_detection=(
+                {
+                    "enabled": bool((auto_detection.get("configuration") or {}).get("enabled")),
+                    "status": auto_detection.get("status"),
+                }
+                if auto_detection
+                else None
+            ),
+            kms_key_arn=(resp.get("encryptionConfiguration") or {}).get("kmsKeyArn"),
+            sync_role_arn=REGISTRY_SYNC_ROLE_ARN or None,
         )
+
+    def _schema_has_field(self, record_type: str, field: str) -> bool:
+        """Whether the registry's metadata schema for `record_type` (its own
+        override, else DEFAULT) defines `field`. False when there is no schema."""
+        schemas = self.get_registry_info().custom_metadata_schema or {}
+        schema = schemas.get(record_type) or schemas.get("DEFAULT") or {}
+        return field in (schema.get("properties") or {})
 
     def list_records(
         self,
         descriptor_type: Optional[str] = None,
         status: Optional[str] = None,
         name: Optional[str] = None,
+        record_type: Optional[str] = None,
     ) -> List[RegistryRecordSummary]:
+        """
+        Records by (one) type, status or exact name. `record_type` is the raw AWS
+        value for types this platform has no descriptor_type of its own for
+        (GATEWAY); each List filter takes exactly one value, so a multi-type
+        listing is several calls.
+        """
         self._require_configured()
         params: Dict[str, Any] = {"registryId": self.registry_id, "maxResults": 100}
         # The new List API takes structured filters instead of per-field params.
         filters: List[Dict[str, Any]] = []
-        if descriptor_type:
+        if record_type:
+            filters.append({"name": "recordType", "values": [record_type]})
+        elif descriptor_type:
             filters.append({"name": "recordType", "values": [_record_type_of(descriptor_type)]})
         if status:
             filters.append({"name": "status", "values": [status]})
@@ -742,31 +1040,118 @@ class RegistryService:
             token = resp.get("nextToken")
             if not token:
                 break
+        return self._hydrate_all(summaries)
 
-        # ListRegistryRecords omits descriptors, so the ARN needed for chat binding
-        # is only available per-record. Fetch it for agent records.
-        stale = [
-            index
-            for index, summary in enumerate(summaries)
+    def _hydrate_all(
+        self, summaries: List[RegistryRecordSummary]
+    ) -> List[RegistryRecordSummary]:
+        """
+        Fill in what ListRegistryRecords omits: descriptors (hence the invoke ARN
+        agent records are chattable through) and discoverability.
+
+        One BatchGetDiscoverableRegistryRecord covers every record with an
+        approved revision — 100 per call, descriptors included — so only records
+        the data plane does not serve (never approved) still cost a
+        GetRegistryRecord each. Before this the listing fanned out one Get per
+        agent record against a 10 TPS quota.
+
+        Metadata is attached to every record from its approved revision because
+        the team filter (services/team_access.py) reads it; never-approved
+        records cost one Get each, which is the only path that still does.
+        """
+        needs_descriptor = {
+            summary.record_id
+            for summary in summaries
             if summary.descriptor_type in (DESCRIPTOR_A2A, DESCRIPTOR_CUSTOM)
             and not (summary.agent_runtime_arn or summary.harness_arn)
-        ]
-        for index, hydrated in zip(
-            stale, fan_out(lambda i: self._hydrate(summaries[i]), stale)
-        ):
-            summaries[index] = hydrated
-        return summaries
-
-    def _hydrate(self, summary: RegistryRecordSummary) -> RegistryRecordSummary:
+        }
         try:
+            approved = self.batch_get_discoverable([s.record_id for s in summaries])
+        except Exception as exc:  # noqa: BLE001 — a listing beats a 500
+            # Without metadata the team of every record is unknown; flag it so
+            # the team filter fails closed instead of listing team records as shared.
+            logger.warning("BatchGetDiscoverable failed; listing without metadata: %s", exc)
+            return [s.model_copy(update={"visibility_known": False}) for s in summaries]
+
+        def hydrate(summary: RegistryRecordSummary) -> RegistryRecordSummary:
+            discoverable = summary.record_id in approved
+            if discoverable:
+                record = approved[summary.record_id]
+                if summary.record_id in needs_descriptor and summary.status == "APPROVED":
+                    # The approved revision *is* the latest one here.
+                    return _to_summary(record, discoverable=True)
+                # Metadata (team, tier, …) rides on the approved revision; the
+                # List summary has none. Keep the latest revision's fields, add it.
+                return summary.model_copy(update={
+                    "discoverable": True,
+                    "custom_metadata": record.get("customMetadata") or None,
+                    "compliance_status": summary.compliance_status
+                    or record.get("customMetadataSchemaComplianceStatus"),
+                })
+            # Never approved: only a Get knows its descriptors and metadata.
+            try:
+                detail = self.get_record(summary.record_id)
+            except Exception as exc:
+                logger.warning("Could not hydrate record %s: %s", summary.record_id, exc)
+                return summary.model_copy(update={"discoverable": False, "visibility_known": False})
             return RegistryRecordSummary(
-                **self.get_record(summary.record_id).model_dump(
-                    include=set(RegistryRecordSummary.model_fields)
-                )
+                **detail.model_dump(include=set(RegistryRecordSummary.model_fields))
+            ).model_copy(update={"discoverable": False})
+
+        # Only the never-approved leftovers actually reach the network here.
+        return fan_out(hydrate, summaries)
+
+    def batch_get_discoverable(self, record_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+        """
+        Approved revisions of the given records, keyed by record id.
+
+        The data plane answers only for records with an APPROVED revision, and
+        reports the rest in `errors` instead of failing the call — so a missing
+        key means "not discoverable", not "unknown". 100 ids per call is the API
+        cap; the single `entries` element is the registry.
+        """
+        found: Dict[str, Dict[str, Any]] = {}
+        ids = [rid for rid in record_ids if rid]
+        for start in range(0, len(ids), _BATCH_GET_MAX):
+            chunk = ids[start : start + _BATCH_GET_MAX]
+            resp = self.registry_data.batch_get_discoverable_registry_record(
+                entries=[{"registryId": self.registry_id, "recordIds": chunk}]
             )
+            for record in resp.get("registryRecords", []):
+                found[record.get("recordId", "")] = record
+        return found
+
+    def approved_revision(self, record_id: str) -> Optional[RegistryRecordDetail]:
+        """The discoverable (approved) revision of a record, or None."""
+        self._require_configured()
+        record = self.batch_get_discoverable([record_id]).get(record_id)
+        if record is None:
+            return None
+        return _to_detail(record, discoverable=True, revision="approved")
+
+    def chattable_record(self, record_id: str) -> RegistryRecordDetail:
+        """
+        The revision chat should bind to.
+
+        The latest revision when it is APPROVED. Otherwise the approved revision
+        AWS still serves to consumers (an edit of an approved record opens a
+        DRAFT alongside it, and the approved one stays discoverable until the
+        new one is approved) — so an edit never cuts off chat with an agent that
+        curation already signed off on, and the binding is that revision's, not
+        the unreviewed draft's. When nothing is discoverable the latest is
+        returned as-is, status and all, for the caller to refuse.
+        """
+        latest = self.get_record(record_id)
+        if (latest.status or "").upper() == "APPROVED":
+            return latest.model_copy(update={"discoverable": True})
+        try:
+            approved = self.approved_revision(record_id)
         except Exception as exc:
-            logger.warning("Could not hydrate record %s: %s", summary.record_id, exc)
-            return summary
+            logger.warning("Could not read approved revision of %s: %s", record_id, exc)
+            approved = None
+        if approved is not None:
+            return approved
+        return latest.model_copy(update={"discoverable": False})
 
     def get_record(self, record_id: str) -> RegistryRecordDetail:
         self._require_configured()
@@ -775,15 +1160,32 @@ class RegistryService:
         )
         return _to_detail(resp)
 
+    def team_of_record(self, record_id: str) -> Optional[str]:
+        """The team of the revision chat binds to, cached briefly: a pinned
+        thread re-checks visibility every turn (services/agent_access.py)."""
+        hit = self._team_cache.get(record_id)
+        now = time.monotonic()
+        if hit and now - hit[0] < TEAM_CACHE_SECONDS:
+            return hit[1]
+        team = self.chattable_record(record_id).team
+        self._team_cache[record_id] = (now, team)
+        return team
+
     def search_records(
-        self, query: str, descriptor_types: Optional[List[str]] = None
+        self,
+        query: str,
+        descriptor_types: Optional[List[str]] = None,
+        custom_metadata: Optional[Dict[str, str]] = None,
     ) -> List[RegistryRecordSummary]:
         """
         Hybrid (semantic + keyword) search over approved records.
 
-        SearchDiscoverableRegistryRecords takes no server-side type filter, so
-        the narrowing happens here, client-side, over whatever AWS ranks back.
-        The returned order is AWS's relevance ranking, so it is otherwise passed
+        Narrowing is done by AWS, before ranking: `filters` takes `$eq`/`$ne`/`$in`
+        over `recordType`, `name`, `recordVersion` and `customMetadata.<field>`,
+        joined with `$and`/`$or` (verified live 2026-10-10 — an earlier version of
+        this code filtered client-side on the belief that the API took no type
+        filter, which capped a typed search at "whatever of the 20 happened to
+        match"). The returned order is AWS's relevance ranking and is passed
         through untouched.
         """
         self._require_configured()
@@ -793,16 +1195,28 @@ class RegistryService:
             # The API rejects anything above 20, and offers no nextToken.
             "maxResults": _SEARCH_MAX_RESULTS,
         }
+        filters = _search_filters(descriptor_types, custom_metadata)
+        if filters:
+            params["filters"] = filters
         resp = self.registry_data.search_discoverable_registry_records(**params)
-        records = resp.get("registryRecords", [])
-        if descriptor_types:
-            wanted = {_record_type_of(t) for t in descriptor_types}
-            records = [r for r in records if r.get("recordType") in wanted]
-        return [_to_summary(r) for r in records]
+        return [_to_summary(r) for r in resp.get("registryRecords", [])]
 
-    def create_record(self, req: CreateRecordRequest) -> RegistryRecordSummary:
+    def create_record(
+        self, req: CreateRecordRequest, owner: Optional[str] = None
+    ) -> RegistryRecordSummary:
+        """
+        `owner` is the caller's identity (see `owner_identity`). It is written
+        into the `owner` metadata field over anything the client sent, so the
+        field is a fact about who registered the record rather than a form
+        value. Only when the registry's schema for the record type has that
+        field — a registry without it rejects the whole create.
+        """
         self._require_configured()
         descriptors = _build_descriptors(req)
+        if owner and self._schema_has_field(_record_type_of(req.descriptor_type), OWNER_FIELD):
+            req = req.model_copy(
+                update={"custom_metadata": {**(req.custom_metadata or {}), OWNER_FIELD: owner}}
+            )
         params: Dict[str, Any] = {
             "registryId": self.registry_id,
             "name": req.name,
@@ -814,6 +1228,12 @@ class RegistryService:
             params["description"] = req.description
         if req.version:
             params["recordVersion"] = req.version
+        # Both only when non-empty: a registry without a metadata schema rejects
+        # `customMetadata: {}`, and empty tags are noise.
+        if req.custom_metadata:
+            params["customMetadata"] = req.custom_metadata
+        if req.tags:
+            params["tags"] = req.tags
 
         resp = self.registry_control.create_registry_record(**params)
         record_id = resp.get("recordArn", "").rsplit("/", 1)[-1]
@@ -882,13 +1302,28 @@ class RegistryService:
             params["displayName"] = {"optionalValue": req.name}
         if req.description is not None:
             params["description"] = {"optionalValue": req.description}
+        if req.custom_metadata is not None:
+            # PATCH-style like every other field: the whole map replaces the
+            # stored one, and {} clears it. The owner is not the client's to
+            # set: whatever it sent for that key is dropped and the stored
+            # value, when there is one, is carried over.
+            metadata = {k: v for k, v in req.custom_metadata.items() if k != OWNER_FIELD}
+            stored_owner = (current.custom_metadata or {}).get(OWNER_FIELD)
+            if stored_owner:
+                metadata[OWNER_FIELD] = stored_owner
+            params["customMetadata"] = {"optionalValue": metadata}
 
         # Every field this endpoint exposes also appears inside the descriptor,
         # which is indexed for search — a rename that left the descriptor alone
         # would keep matching the old name. The merge is over the record's
         # current content, so it cannot drop the runtime binding that makes an
         # agent record chattable.
-        if (
+        #
+        # Endpoint-only descriptors (`http`/`agui`, written by auto-detection)
+        # have no payload to merge into and are owned by the detector, which
+        # refreshes them from the source resource — so they are left alone.
+        descriptor_key = next(iter(current.descriptors or {}), None)
+        if descriptor_key not in _ENDPOINT_ONLY_KEYS and (
             req.name is not None
             or req.description is not None
             or req.content is not None
@@ -899,6 +1334,22 @@ class RegistryService:
             params["descriptors"] = _as_updated_descriptors(_build_descriptors(merged))
 
         self.registry_control.update_registry_record(**params)
+        return self.get_record(record_id)
+
+    def trigger_sync(self, record_id: str) -> RegistryRecordDetail:
+        """
+        Re-fetch a record's definition from its `source.fromUrl`.
+
+        The record goes UPDATING, then back to DRAFT with descriptors rebuilt
+        from the endpoint (UPDATE_FAILED with a statusReason when the fetch
+        fails). Like any edit this opens a new revision: the approved one stays
+        discoverable until the refreshed one is submitted and approved. Only
+        meaningful for records that have a source; AWS rejects the rest.
+        """
+        self._require_configured()
+        self.registry_control.update_registry_record(
+            registryId=self.registry_id, recordId=record_id, triggerSynchronization=True
+        )
         return self.get_record(record_id)
 
     def update_status(
@@ -959,7 +1410,10 @@ class RegistryService:
         for record in self.agent_records():
             if not include_deprecated and is_deprecated(record):
                 continue
-            for arn in (record.harness_arn, record.agent_runtime_arn):
+            # `source_arn` is the resource an auto-detected record was cataloged
+            # from; indexing it keeps the bulk sync from registering that runtime
+            # a second time under this platform's own record shape.
+            for arn in (record.harness_arn, record.agent_runtime_arn, record.source_arn):
                 if arn:
                     index.setdefault(arn, record)
         return index
@@ -1019,7 +1473,17 @@ class RegistryService:
         advertise its gateway again.
         """
         index: Dict[str, RegistryRecordSummary] = {}
-        summaries = self.list_records(descriptor_type=DESCRIPTOR_MCP)
+        # Our own gateway records are MCP; auto-detection files a detected
+        # gateway as GATEWAY with the ARN in its provenance. Both count as
+        # "this gateway is already in the catalog".
+        listings = fan_out(
+            lambda call: call(),
+            [
+                lambda: self.list_records(descriptor_type=DESCRIPTOR_MCP),
+                lambda: self.list_records(record_type=_GATEWAY_RECORD_TYPE),
+            ],
+        )
+        summaries = [summary for listing in listings for summary in listing]
 
         def arn_of(summary: RegistryRecordSummary) -> Optional[str]:
             try:
@@ -1027,7 +1491,9 @@ class RegistryService:
             except Exception as exc:
                 logger.warning("Could not read MCP record %s: %s", summary.record_id, exc)
                 return None
-            return gateway_arn_of(detail.descriptor_content)
+            return gateway_arn_of(detail.descriptor_content) or (
+                detail.source_arn if ":gateway/" in (detail.source_arn or "") else None
+            )
 
         live = [s for s in summaries if not is_deprecated(s)]
         for summary, arn in zip(live, fan_out(arn_of, live)):
@@ -1065,7 +1531,10 @@ class RegistryService:
                 name=item.get("name") or gateway_id,
                 gateway_id=gateway_id,
                 gateway_arn=detail.get("gatewayArn", ""),
-                gateway_url=detail.get("gatewayUrl"),
+                # GetGateway reports some gateways without the `/mcp` path.
+                gateway_url=(
+                    mcp_endpoint_of(detail["gatewayUrl"]) if detail.get("gatewayUrl") else None
+                ),
                 status=item.get("status") or detail.get("status"),
                 description=item.get("description") or detail.get("description"),
                 authorizer_type=item.get("authorizerType")

@@ -30,6 +30,7 @@ test("the client's widget list matches the server's", () => {
     "reuse",
     "users",
     "guardrail",
+    "teams",
   ]);
 });
 

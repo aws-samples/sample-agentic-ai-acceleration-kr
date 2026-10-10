@@ -143,7 +143,7 @@ class StubStreamingService:
         self.calls = []
 
     async def stream_thread_execution(
-        self, thread_id, request, actor_id=None, owner_sub=""
+        self, thread_id, request, actor_id=None, owner_sub="", caller=None
     ):
         config = request.config
         self.thread_service.get_or_create_thread(
