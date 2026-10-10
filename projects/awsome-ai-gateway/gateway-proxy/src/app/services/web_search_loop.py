@@ -240,6 +240,44 @@ def _is_our_tool(tool: dict) -> bool:
     return isinstance(tool, dict) and tool.get("name") == GW_WEB_SEARCH_NAME
 
 
+# Anthropic 블록 / Responses 항목 중 **클라이언트가 실행해야 하는** 도구 호출 판정.
+#
+# ⚠️ 예전에는 각각 정확히 ``tool_use`` / ``function_call`` 만 셌다. 두 방언 모두 그것이
+#    도구 호출 항목의 전부가 아니다 — Responses 는 커스텀(freeform) 도구를
+#    ``custom_tool_call`` 로, 로컬 실행 도구를 ``local_shell_call`` / ``computer_call`` 로
+#    보내고, Anthropic 은 ``server_tool_use`` / ``mcp_tool_use`` 를 쓴다.
+#
+#    이 판정이 False 가 되면 ``is_search_turn`` 이 True 가 되어 게이트웨이가 검색을 돌리고
+#    루프를 한 바퀴 더 돈다 — 그 과정에서 **클라이언트의 도구 호출이 삼켜진다.** 클라이언트는
+#    자기가 실행해야 할 호출을 보지 못한 채 기다린다. 모델이 우리 web_search 와 자기 도구를
+#    같은 턴에 함께 호출하면(두 방언 모두 병렬 도구 호출을 지원한다) 바로 재현된다.
+#
+#    그래서 화이트리스트가 아니라 **접미사**로 판정한다: 새 호출 유형이 생겼을 때 삼키는
+#    쪽이 아니라 넘겨주는 쪽으로 틀리는 것이 안전하다(최악의 경우 한 턴 일찍 끝난다).
+def _is_client_tool_use_block(block: dict) -> bool:
+    """Anthropic: 우리 것이 아닌 도구 사용 블록인가."""
+    if not isinstance(block, dict):
+        return False
+    btype = block.get("type")
+    if not isinstance(btype, str) or "tool_use" not in btype:
+        return False
+    return block.get("name") != GW_WEB_SEARCH_NAME
+
+
+def _is_client_tool_call_item(item: dict, our_call_ids: set[str] | None = None) -> bool:
+    """Responses: 우리 것이 아닌 도구 호출 항목인가."""
+    if not isinstance(item, dict):
+        return False
+    itype = item.get("type")
+    if not isinstance(itype, str) or not itype.endswith("_call"):
+        return False
+    if item.get("name") == GW_WEB_SEARCH_NAME:
+        return False
+    if our_call_ids and item.get("call_id") in our_call_ids:
+        return False
+    return True
+
+
 def _client_declares_web_search(body: dict) -> bool:
     """True if the client's ORIGINAL request already declares a tool named web_search.
 
@@ -310,6 +348,30 @@ def _wire_input(usage: TokenUsage) -> int:
         + usage.cache_read_input_tokens
         + usage.cache_creation_input_tokens
     )
+
+
+def _prompt_snapshot(input_tokens: int, cache_creation: int, cache_read: int) -> TokenUsage:
+    """한 턴의 프롬프트 세 버킷을 얼려 둔다 — 클라이언트-facing usage 용."""
+    return TokenUsage(
+        input_tokens=int(input_tokens or 0),
+        cache_creation_input_tokens=int(cache_creation or 0),
+        cache_read_input_tokens=int(cache_read or 0),
+    )
+
+
+def _client_prompt_usage(first_turn: TokenUsage | None, merged: TokenUsage) -> TokenUsage:
+    """클라이언트가 보는 프롬프트 버킷 = **첫 턴**의 것(N턴 합산이 아니다).
+
+    ⚠️ Claude Code / Cowork / Codex 는 응답의 ``input + cache_read + cache_write`` 를
+       "내 컨텍스트 창이 얼마나 찼나" 로 읽고 한계 근처에서 auto-compact 한다. 첫 턴의
+       프롬프트가 곧 클라이언트의 대화이고, 이후 턴은 그 대화에 **우리** 검색결과를 더해
+       재전송한 것이라 클라이언트는 그 부분을 자기 컨텍스트로 갖고 있지 않다. N턴을
+       합산하면 실제 컨텍스트의 N배를 보고하게 된다(미국 dev 실측 2026-09-16: 실제
+       26.7k → 검색 3회 후 106.6k 보고; 55k Cowork 세션이 270k 로 보고돼 200k 창을 넘겨
+       매 검색 턴마다 compact). **청구는 무영향** — on_usage() 는 여전히 N턴 합산을 받는다.
+       완료된 턴이 없으면(스냅샷 대상 없음) merged 로 폴백해 payload 자기정합을 유지한다.
+    """
+    return first_turn if first_turn is not None else merged
 
 
 def _sse(event: str, data: dict) -> bytes:
@@ -414,6 +476,7 @@ async def _anthropic_stream(
     tool_use/tool_result plumbing; runs the search between turns.
     """
     merged = TokenUsage()
+    first_turn: TokenUsage | None = None  # 첫 턴 프롬프트 → 클라이언트 usage(컨텍스트 게이지)
     conversation: list[dict] = list(base_body.get("messages") or [])
     searches_done = 0        # successful searches → web_search_count (billing/attribution)
     search_attempts = 0      # ALL search rounds incl. failures → loop guard (F-5)
@@ -481,6 +544,12 @@ async def _anthropic_stream(
                     merged.input_tokens += int(u.get("input_tokens", 0) or 0)
                     merged.cache_creation_input_tokens += int(u.get("cache_creation_input_tokens", 0) or 0)
                     merged.cache_read_input_tokens += int(u.get("cache_read_input_tokens", 0) or 0)
+                    if first_turn is None:
+                        first_turn = _prompt_snapshot(
+                            u.get("input_tokens", 0),
+                            u.get("cache_creation_input_tokens", 0),
+                            u.get("cache_read_input_tokens", 0),
+                        )
                     if not envelope_open:
                         envelope_open = True
                         yield _sse("message_start", ev)
@@ -493,7 +562,7 @@ async def _anthropic_stream(
                         # OUR search — suppress, buffer input JSON.
                         suppressed[idx] = {"kind": "web_search", "buf": "",
                                            "id": block.get("id"), "name": block.get("name")}
-                    elif btype == "tool_use":
+                    elif _is_client_tool_use_block(block):
                         # CLIENT tool — terminal; forward re-indexed, buffer args to rebuild.
                         client_tool_present = True
                         gi = global_index
@@ -660,7 +729,13 @@ async def _anthropic_stream(
                              "error": {"type": "incomplete_stream",
                                        "message": "upstream ended without a terminal event"}},
                         )
-                    yield _sse("message_stop", {"type": "message_stop"})
+                    # ⚠️ 봉투를 한 번도 열지 않았으면(message_start 미전송) message_stop 을
+                    #    보내지 않는다. Anthropic SSE 계약은 message_start → … →
+                    #    message_stop 이고, start 없는 stop 은 SDK 파싱 오류가 된다 — 상류
+                    #    오류가 게이트웨이 버그처럼 보인다. 그때 종료 신호는 위 error
+                    #    프레임이다. _drain_error 와 아래 except 절은 이미 이 구분을 한다.
+                    if envelope_open:
+                        yield _sse("message_stop", {"type": "message_stop"})
                     break
 
                 # ⚠️ 클라이언트가 볼 수 없는 tool_use 로 끝났다고 말하지 않는다. 우리 검색의
@@ -671,13 +746,27 @@ async def _anthropic_stream(
                     emitted_stop_reason = "end_turn"
 
                 # Terminal: close the single envelope.
-                yield _sse(
-                    "message_delta",
-                    {"type": "message_delta",
-                     "delta": {"stop_reason": emitted_stop_reason, "stop_sequence": None},
-                     "usage": {"output_tokens": merged.output_tokens}},
-                )
-                yield _sse("message_stop", {"type": "message_stop"})
+                #
+                # ⚠️ 종료 프레임의 usage 는 **입력=첫 턴, 출력=합산**이다.
+                #    입력을 N턴 합산으로 실으면 클라이언트(Claude Code/Cowork)의 컨텍스트
+                #    게이지가 실제의 N배로 부풀어 매 검색 턴마다 auto-compact 가 돈다
+                #    (_client_prompt_usage 의 실측 근거 참조). 출력은 진짜로 N턴에 걸쳐
+                #    생성됐으니 합산이 맞다. 청구는 무영향 — on_usage 는 아래 finally 에서
+                #    여전히 merged(합산)를 받는다.
+                if envelope_open:
+                    gauge = _client_prompt_usage(first_turn, merged)
+                    yield _sse(
+                        "message_delta",
+                        {"type": "message_delta",
+                         "delta": {"stop_reason": emitted_stop_reason, "stop_sequence": None},
+                         "usage": {
+                             "input_tokens": gauge.input_tokens,
+                             "output_tokens": merged.output_tokens,
+                             "cache_creation_input_tokens": gauge.cache_creation_input_tokens,
+                             "cache_read_input_tokens": gauge.cache_read_input_tokens,
+                         }},
+                    )
+                    yield _sse("message_stop", {"type": "message_stop"})
                 break
 
             # Search turn: run ALL requested searches (F-3) → one tool_result per tool_use_id,
@@ -768,6 +857,7 @@ async def _anthropic_nonstream(
     from app.providers.bedrock_adapter import _extract_bedrock_usage
 
     merged = TokenUsage()
+    first_turn: TokenUsage | None = None  # 첫 턴 프롬프트 → 클라이언트 usage(컨텍스트 게이지)
     conversation: list[dict] = list(base_body.get("messages") or [])
     searches_done = 0
     search_attempts = 0      # loop guard incl. failures (F-5)
@@ -790,10 +880,20 @@ async def _anthropic_nonstream(
             if status != 200:
                 break
             _merge_usage(merged, usage)
+            if first_turn is None:
+                first_turn = _prompt_snapshot(
+                    usage.input_tokens, usage.cache_creation_input_tokens,
+                    usage.cache_read_input_tokens,
+                )
 
             content = final_body.get("content") or []
-            our_calls = [b for b in content if b.get("type") == "tool_use" and b.get("name") == GW_WEB_SEARCH_NAME]
-            client_calls = [b for b in content if b.get("type") == "tool_use" and b.get("name") != GW_WEB_SEARCH_NAME]
+            our_calls = [
+                b for b in content
+                if isinstance(b, dict)
+                and b.get("type") == "tool_use"
+                and b.get("name") == GW_WEB_SEARCH_NAME
+            ]
+            client_calls = [b for b in content if _is_client_tool_use_block(b)]
 
             if force_final or not our_calls or client_calls:
                 break  # terminal — return this body
@@ -837,26 +937,51 @@ async def _anthropic_nonstream(
         # Fire on_usage whenever any tokens accrued — even if a LATER turn failed after
         # earlier turns succeeded (tokens were consumed and must be accounted) (F-9).
         merged.web_search_count = searches_done
-        if (merged.input_tokens + merged.output_tokens) > 0:
-            try:
-                await on_usage(merged)
-            except Exception:
-                logger.warning("web_search.on_usage_failed")
+        merged.total_tokens = merged.input_tokens + merged.output_tokens
+        # ⚠️ 토큰이 0 이어도 **부른다.** 예전에는 `> 0` 조건이 걸려 있어서, 첫 턴이 상류
+        #    4xx/5xx 로 죽으면(토큰 0) on_usage 가 아예 불리지 않았다. 그 콜백이
+        #    ``cost_recorder.finalize`` 이고, finalize 의 zero-usage 경로가 RPM/TPM/비용
+        #    예약을 되돌리는 **유일한** 지점이다. 이 경로는 폴백 루프를 타지 않으므로
+        #    ``release_reservations`` 도 돌지 않는다 — 즉 400 을 받은 요청이 한 푼도 쓰지
+        #    않고 사용자의 분/시간 한도를 창이 끝날 때까지 물고 있었다.
+        #
+        #    토큰이 0 이면 finalize 는 usage_logs 행을 쓰지 않고 예약만 해제한다(그 경로의
+        #    조기 반환). 그래서 무조건 호출이 안전하다.
+        try:
+            await on_usage(merged)
+        except Exception:
+            logger.warning("web_search.on_usage_failed")
 
     if final_status == 200 and isinstance(final_body.get("usage"), dict):
-        # Overwrite the returned body's usage with the merged (multi-turn) totals so the
-        # client sees the full accounting; reasoning stays a submetric.
-        final_body["usage"]["input_tokens"] = merged.input_tokens
+        # 입력=첫 턴(클라이언트 컨텍스트 게이지), 출력=N턴 합산. 청구는 finally 의
+        # on_usage(merged) 가 별도 처리 — 근거는 _client_prompt_usage.
+        gauge = _client_prompt_usage(first_turn, merged)
+        final_body["usage"]["input_tokens"] = gauge.input_tokens
         final_body["usage"]["output_tokens"] = merged.output_tokens
     # Strip thinking/redacted_thinking from the CLIENT-returned body: the client replays
     # this (possibly stitched) assistant message on its next turn, and Bedrock rejects a
     # modified thinking block. Prior-turn thinking may be omitted on a new user turn, so
     # this is safe. (Mirrors the streaming path's client-side suppression.)
     if final_status == 200 and isinstance(final_body.get("content"), list):
+        # ⚠️ 우리 web_search tool_use 블록도 함께 걷어낸다. 클라이언트 도구 호출과 우리
+        #    검색이 **같은 턴**에 함께 오면(두 방언 모두 병렬 도구 호출을 지원한다) 그 턴은
+        #    terminal 이라 이 본문이 그대로 나가고, 클라이언트는 자기가 선언하지 않은
+        #    ``web_search`` 도구 호출을 받는다. Anthropic 계약상 모든 tool_use 는 tool_result
+        #    로 답해야 하므로, 클라이언트는 없는 도구를 실행하려 하거나(Claude Code 는 알 수
+        #    없는 도구로 보고한다) 다음 턴에서 400 을 받는다. 스트리밍 경로는 이 블록들을
+        #    이미 억제한다 — 비스트리밍만 빠져 있었다.
         final_body["content"] = [
             b for b in final_body["content"]
-            if not (isinstance(b, dict) and b.get("type") in ("thinking", "redacted_thinking"))
+            if isinstance(b, dict)
+            and b.get("type") not in ("thinking", "redacted_thinking")
+            and not (b.get("type") == "tool_use" and b.get("name") == GW_WEB_SEARCH_NAME)
         ]
+        # 우리 것만 지웠는데 stop_reason 이 tool_use 로 남으면 클라이언트는 보이지 않는
+        # 도구 호출을 기다린다 — 스트리밍 스티처의 같은 판단.
+        if final_body.get("stop_reason") == "tool_use" and not any(
+            _is_client_tool_use_block(b) for b in final_body["content"]
+        ):
+            final_body["stop_reason"] = "end_turn"
     return JSONResponse(status_code=final_status, content=final_body)
 
 
@@ -896,6 +1021,7 @@ async def _responses_stream(
     for our web_search; runs the search between turns.
     """
     merged = TokenUsage()
+    first_turn: TokenUsage | None = None  # 첫 턴 프롬프트 → 클라이언트 usage(컨텍스트 게이지)
     conv_input: list = _normalize_responses_input(base_body)
     searches_done = 0        # successful → web_search_count
     search_attempts = 0      # all rounds incl. failures → loop guard (F-5)
@@ -974,7 +1100,7 @@ async def _responses_stream(
                         fn_arg_buf[oidx] = ""
                         if item.get("call_id"):
                             our_call_ids.add(item["call_id"])  # strip from final output (F-3 Responses)
-                    elif itype == "function_call":
+                    elif _is_client_tool_call_item(item, our_call_ids):
                         client_tool_present = True
                         gi = global_out_index; global_out_index += 1
                         local_to_global[oidx] = gi
@@ -1041,6 +1167,12 @@ async def _responses_stream(
                     # turn caches a different amount, and typically exactly one turn of a
                     # search loop writes the cache while the rest read it.
                     _merge_usage(merged, extract_responses_usage(resp_obj))
+                    if first_turn is None:
+                        _t = extract_responses_usage(resp_obj)
+                        first_turn = _prompt_snapshot(
+                            _t.input_tokens, _t.cache_creation_input_tokens,
+                            _t.cache_read_input_tokens,
+                        )
                     # captured; emit our own terminal event at envelope close
                 elif etype == "error":
                     error_seen = True  # NEW round2 High-1: do not also emit a fake completed
@@ -1090,13 +1222,20 @@ async def _responses_stream(
                 # If a mid-stream `error` occurred, the error frame is the terminal signal —
                 # do NOT also emit a synthetic response.completed (NEW round2 High-1). Emit
                 # response.failed only if we never got a real terminal event.
+                # ⚠️ 봉투(response.created)를 한 번도 못 보냈으면 종료 객체도 만들지
+                #    않는다. created 없는 response.completed/failed 는 Responses SDK 가
+                #    상관지을 대상이 없어 파싱에서 실패한다 — 상류 오류가 게이트웨이 버그로
+                #    보인다. 그때 종료 신호는 이미 나간 error 프레임이다.
+                if not envelope_open:
+                    break
                 if error_seen and final_terminal_type == "response.completed":
                     yield _sse("response.failed",
                                {"type": "response.failed",
                                 "response": _finalize_responses_obj(
                                     final_response_obj, merged, global_out_index,
                                     "response.failed", our_call_ids,
-                                    envelope_id=envelope_response_id)})
+                                    envelope_id=envelope_response_id,
+                                    client_prompt=first_turn)})
                 else:
                     yield _sse(
                         final_terminal_type,
@@ -1104,7 +1243,8 @@ async def _responses_stream(
                          "response": _finalize_responses_obj(
                              final_response_obj, merged, global_out_index,
                              final_terminal_type, our_call_ids,
-                             envelope_id=envelope_response_id)},
+                             envelope_id=envelope_response_id,
+                             client_prompt=first_turn)},
                     )
                 break
 
@@ -1151,7 +1291,8 @@ async def _responses_stream(
             yield _sse("response.failed",
                        {"type": "response.failed",
                         "response": _finalize_responses_obj(
-                            final_response_obj, merged, global_out_index, "response.failed", our_call_ids)})
+                            final_response_obj, merged, global_out_index, "response.failed", our_call_ids,
+                            client_prompt=first_turn)})
         return
     finally:
         merged.web_search_count = searches_done
@@ -1167,6 +1308,7 @@ def _finalize_responses_obj(
     terminal_type: str = "response.completed",
     our_call_ids: Optional[set] = None,
     envelope_id: str | None = None,
+    client_prompt: TokenUsage | None = None,
 ) -> dict:
     """Build the terminal response object with merged usage (multi-turn totals).
 
@@ -1197,14 +1339,17 @@ def _finalize_responses_obj(
     # the non-cached billing bucket, so add both cache buckets back on the way out.
     # Emitting the billing value here would produce cached_tokens > input_tokens — an
     # impossible payload. Both sub-counters are echoed for the same reason.
-    wire_input = _wire_input(merged)
+    # 입력(및 캐시 세부)은 클라이언트 컨텍스트 게이지라 **첫 턴** 기준(합산 아님) —
+    # 근거는 _client_prompt_usage. 출력은 N턴 합산. 청구는 on_usage(merged) 별도.
+    gauge = _client_prompt_usage(client_prompt, merged)
+    wire_input = _wire_input(gauge)
     obj["usage"] = {
         "input_tokens": wire_input,
         "output_tokens": merged.output_tokens,
         "total_tokens": wire_input + merged.output_tokens,
         "input_tokens_details": {
-            "cached_tokens": merged.cache_read_input_tokens,
-            "cache_write_tokens": merged.cache_creation_input_tokens,
+            "cached_tokens": gauge.cache_read_input_tokens,
+            "cache_write_tokens": gauge.cache_creation_input_tokens,
         },
         "output_tokens_details": {"reasoning_tokens": merged.reasoning_tokens},
     }
@@ -1241,6 +1386,7 @@ async def _responses_nonstream(
     max_searches_per_turn: int = 0,
 ) -> JSONResponse:
     merged = TokenUsage()
+    first_turn: TokenUsage | None = None  # 첫 턴 프롬프트 → 클라이언트 usage(컨텍스트 게이지)
     conv_input: list = _normalize_responses_input(base_body)
     searches_done = 0
     search_attempts = 0      # loop guard incl. failures (F-5)
@@ -1263,10 +1409,20 @@ async def _responses_nonstream(
             if status != 200:
                 break
             _merge_usage(merged, usage)
+            if first_turn is None:
+                first_turn = _prompt_snapshot(
+                    usage.input_tokens, usage.cache_creation_input_tokens,
+                    usage.cache_read_input_tokens,
+                )
 
             output = final_body.get("output") or []
-            our_calls = [o for o in output if o.get("type") == "function_call" and o.get("name") == GW_WEB_SEARCH_NAME]
-            client_calls = [o for o in output if o.get("type") == "function_call" and o.get("name") != GW_WEB_SEARCH_NAME]
+            our_calls = [
+                o for o in output
+                if isinstance(o, dict)
+                and o.get("type") == "function_call"
+                and o.get("name") == GW_WEB_SEARCH_NAME
+            ]
+            client_calls = [o for o in output if _is_client_tool_call_item(o)]
 
             if force_final or not our_calls or client_calls:
                 break
@@ -1303,19 +1459,33 @@ async def _responses_nonstream(
             conv_input = conv_input + new_items
     finally:
         merged.web_search_count = searches_done  # fire on any accrued usage even on late failure (F-9)
-        if (merged.input_tokens + merged.output_tokens) > 0:
-            try:
-                await on_usage(merged)
-            except Exception:
-                logger.warning("web_search.on_usage_failed")
+        merged.total_tokens = merged.input_tokens + merged.output_tokens
+        # 토큰 0 에서도 호출하는 이유는 _anthropic_nonstream 의 같은 블록 주석 참조
+        # (예약 해제가 이 콜백에만 달려 있다).
+        try:
+            await on_usage(merged)
+        except Exception:
+            logger.warning("web_search.on_usage_failed")
 
     if final_status == 200 and isinstance(final_body.get("usage"), dict):
-        # Same wire-vs-billing split as _finalize_responses_obj: the client must see the
-        # cache-INCLUSIVE prompt count that the Responses spec defines.
-        wire_input = _wire_input(merged)
+        # 입력=첫 턴 wire(클라이언트 컨텍스트 게이지), 출력=N턴 합산 — _client_prompt_usage.
+        # cache-INCLUSIVE prompt count(Responses spec)이되 합산이 아니라 첫 턴 기준.
+        wire_input = _wire_input(_client_prompt_usage(first_turn, merged))
         final_body["usage"]["input_tokens"] = wire_input
         final_body["usage"]["output_tokens"] = merged.output_tokens
         final_body["usage"]["total_tokens"] = wire_input + merged.output_tokens
+    # ⚠️ 우리 web_search function_call 항목을 응답 output 에서 걷어낸다 — 근거는
+    #    _anthropic_nonstream 의 같은 블록 주석, 그리고 스트리밍 쪽
+    #    _finalize_responses_obj 가 이미 하고 있는 일과 동일하다. 비스트리밍만 빠져 있었다.
+    if final_status == 200 and isinstance(final_body.get("output"), list):
+        final_body["output"] = [
+            it for it in final_body["output"]
+            if not (
+                isinstance(it, dict)
+                and it.get("type") == "function_call"
+                and it.get("name") == GW_WEB_SEARCH_NAME
+            )
+        ]
     return JSONResponse(status_code=final_status, content=final_body)
 
 
