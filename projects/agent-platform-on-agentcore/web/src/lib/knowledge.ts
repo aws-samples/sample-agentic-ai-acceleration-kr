@@ -106,6 +106,17 @@ export interface KnowledgeDocument {
   updated_at?: string | null;
 }
 
+/**
+ * Card extras from `GET /api/knowledge/stats`. `null` means the server could
+ * not read the value — render nothing rather than a zero.
+ */
+export interface KnowledgeBaseStats {
+  documents: number | null;
+  failed_documents: number | null;
+  /** Names of the harnesses that attached this knowledge base. */
+  agents: string[] | null;
+}
+
 export interface SyncJob {
   job_id: string;
   /** STARTING, IN_PROGRESS, COMPLETE, FAILED, STOPPING, STOPPED. */
@@ -260,6 +271,14 @@ export async function listKnowledgeBases(
     `/api/knowledge${suffix}`
   );
   return data.knowledge_bases;
+}
+
+/** Keyed by kb_key. Separate from the listing, which is polled; ask once per page view. */
+export async function getKnowledgeStats(): Promise<Record<string, KnowledgeBaseStats>> {
+  const data = await request<{ stats: Record<string, KnowledgeBaseStats> }>(
+    "/api/knowledge/stats"
+  );
+  return data.stats;
 }
 
 export async function createKnowledgeBase(

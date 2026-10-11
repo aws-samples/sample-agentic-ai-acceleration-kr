@@ -81,6 +81,7 @@ module "dynamodb" {
   usage_table_name     = "${var.project}-usage"
   prefs_table_name     = "${var.project}-prefs"
   users_table_name     = "${var.project}-users"
+  teams_table_name     = "${var.project}-teams"
   allow_destroy        = var.allow_destroy
 }
 
@@ -101,7 +102,6 @@ module "cognito" {
   admin_password = var.admin_password
   user_email     = var.user_email
   user_password  = var.user_password
-  teams          = var.teams
 }
 
 # Agent Registry. Off (enable_agent_registry=false) where an org SCP blocks the
@@ -197,21 +197,7 @@ module "harness_role" {
   project           = var.project
   region            = var.region
   skills_bucket_arn = module.s3_skills.bucket_arn
-}
-
-# One execution role per team. The gateway policy engine tells teams apart by
-# the assumed-role ARN, so a shared role would make every team look alike.
-module "team_harness_roles" {
-  source            = "../../modules/harness_role"
-  for_each          = toset(var.teams)
-  project           = var.project
-  region            = var.region
-  skills_bucket_arn = module.s3_skills.bucket_arn
-  role_suffix       = each.key
-  allowed_model_arns = (
-    trimspace(lookup(var.team_allowed_model_arns, each.key, "")) == "" ?
-    ["*"] : [for a in split(",", var.team_allowed_model_arns[each.key]) : trimspace(a)]
-  )
+  create_boundary   = true
 }
 
 module "gateway_policies" {
@@ -230,23 +216,16 @@ module "gateway_policies" {
     # its tools/list.
     "${var.project}-ecs-task",
   ], var.extra_platform_role_names)
-  team_role_names = { for t, m in module.team_harness_roles : t => m.role_name }
   # The mock tools exist on the target only with demo_tools. A policy naming an
-  # action the gateway lacks fails validation, so both the platform forbid and
-  # the per-team permits (team_tools below, and the finance expense limit the
-  # module derives from it) drop these names when the mocks are off.
+  # action the gateway lacks fails validation, so the platform forbid drops
+  # these names when the mocks are off.
   team_only_actions = var.demo_tools ? local.demo_tool_names : []
-  # Default: the web-search connector's tool, which exists only with the
-  # agentcore backend. An action the gateway lacks fails the whole policy.
-  shared_actions = length(var.team_shared_actions) > 0 ? var.team_shared_actions : (
-    var.web_search_backend == "agentcore" ? ["${var.project}-web-search___WebSearch"] : []
-  )
-  team_tools = {
-    for t in var.teams : t => [
-      for n in split(",", lookup(var.team_tools, t, "")) : trimspace(n)
-      if trimspace(n) != "" && (var.demo_tools || !contains(local.demo_tool_names, trimspace(n)))
-    ]
-  }
+  # Same condition as mcp_gateway's attach_registry: the forbid may only name
+  # tools the gateway actually has.
+  registry_target_name = var.enable_agent_registry && var.registry_tool_on_gateway ? "registry" : ""
+  # Workshop demo: the amount cap on approve_expense, by role name. Team roles
+  # themselves are the Organization page's (`<project>-harness-<team>`).
+  demo_expense_role_names = var.demo_tools ? [for t in var.demo_expense_teams : "${var.project}-harness-${t}"] : []
 }
 
 # Execution role for the hand-deployed agent runtimes (agent-runtime/scripts/
@@ -274,7 +253,6 @@ module "iam" {
   artifacts_table_arn         = module.dynamodb.artifacts_table_arn
   artifacts_bucket_arn        = module.s3_artifacts.bucket_arn
   harness_execution_role_arn  = module.harness_role.role_arn
-  team_harness_role_arns      = [for t, m in module.team_harness_roles : m.role_arn]
   knowledge_bucket_arn        = module.s3_knowledge.bucket_arn
   knowledge_table_arn         = module.dynamodb.knowledge_table_arn
   kb_service_role_arn         = module.knowledge_roles.kb_service_role_arn
@@ -287,6 +265,10 @@ module "iam" {
   usage_table_arn        = module.dynamodb.usage_table_arn
   prefs_table_arn        = module.dynamodb.prefs_table_arn
   users_table_arn        = module.dynamodb.users_table_arn
+  teams_table_arn        = module.dynamodb.teams_table_arn
+  team_role_boundary_arn = module.harness_role.boundary_arn
+  policy_engine_arn      = var.enable_gateway_policy ? module.policy_engine[0].engine_arn : ""
+  gateway_arn            = module.mcp_gateway.gateway_arn
   user_pool_arn          = module.cognito.user_pool_arn
   registry_sync_role_arn = local.registry_sync_role
 }
@@ -334,13 +316,29 @@ module "ecs" {
     # Offered by the Register dialog as the IAM credential for record sync.
     REGISTRY_SYNC_ROLE_ARN     = local.registry_sync_role
     HARNESS_EXECUTION_ROLE_ARN = module.harness_role.role_arn
-    TEAM_EXECUTION_ROLES       = jsonencode({ for t, m in module.team_harness_roles : t => m.role_arn })
-    MCP_GATEWAY_ID             = module.mcp_gateway.gateway_id
-    SKILLS_BUCKET              = module.s3_skills.bucket_name
-    ARTIFACTS_BUCKET           = module.s3_artifacts.bucket_name
-    ARTIFACTS_TABLE            = module.dynamodb.artifacts_table_name
-    USAGE_TABLE                = module.dynamodb.usage_table_name
-    PREFS_TABLE                = module.dynamodb.prefs_table_name
+    # Organization page: teams the server creates at runtime live here; the
+    # server fences their roles with the boundary and writes their Cedar
+    # policies to the engine (empty when the stack has none).
+    TEAMS_TABLE            = module.dynamodb.teams_table_name
+    TEAM_ROLE_BOUNDARY_ARN = module.harness_role.boundary_arn
+    POLICY_ENGINE_ID       = var.enable_gateway_policy ? module.policy_engine[0].engine_id : ""
+    MCP_GATEWAY_ARN        = module.mcp_gateway.gateway_arn
+    # Actions the server adds to every team's Cedar policy. Default: the
+    # web-search connector's tool, which exists only with the agentcore backend.
+    TEAM_SHARED_ACTIONS = join(",", length(var.team_shared_actions) > 0 ? [
+      for a in var.team_shared_actions : a
+      if var.web_search_backend == "agentcore" || !startswith(a, "${var.project}-web-search___")
+    ] : (var.web_search_backend == "agentcore" ? ["${var.project}-web-search___WebSearch"] : []))
+    # Tools whose terraform Cedar policy carries an argument condition (the
+    # demo expense amount cap). The server refuses them in a team's tool list
+    # because its generated policies have no conditions.
+    TEAM_CONDITIONED_ACTIONS = var.demo_tools && length(var.demo_expense_teams) > 0 ? "${var.project}-platform-tools___approve_expense" : ""
+    MCP_GATEWAY_ID           = module.mcp_gateway.gateway_id
+    SKILLS_BUCKET            = module.s3_skills.bucket_name
+    ARTIFACTS_BUCKET         = module.s3_artifacts.bucket_name
+    ARTIFACTS_TABLE          = module.dynamodb.artifacts_table_name
+    USAGE_TABLE              = module.dynamodb.usage_table_name
+    PREFS_TABLE              = module.dynamodb.prefs_table_name
     # The insights collector runs inside the server task (one per stack; a DDB
     # lease guards a second replica) and reads per-session usage from the
     # vended log group below.

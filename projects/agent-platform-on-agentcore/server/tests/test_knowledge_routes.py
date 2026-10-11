@@ -23,6 +23,7 @@ from models.knowledge import (  # noqa: E402
     STATUS_READY,
     KnowledgeBaseDetail,
     KnowledgeBaseRecord,
+    KnowledgeBaseStats,
     KnowledgeDocument,
     SyncJob,
     now_iso,
@@ -69,6 +70,10 @@ class StubService:
         self._boom()
         self.list_status = status
         return list(self.records)
+
+    def stats(self, user):
+        self._boom()
+        return {KB_KEY: KnowledgeBaseStats(documents=3, failed_documents=1, agents=["support_bot"])}
 
     def stale_keys(self, records):
         return list(self.stale)
@@ -313,6 +318,24 @@ def test_the_source_bucket_listing_is_not_swallowed_by_the_key_route(client):
 
     assert response.status_code == 200
     assert response.json() == {"buckets": ["corp-docs", "team-exports"], "platform_available": True}
+
+
+def test_card_stats_are_not_swallowed_by_the_key_route(client):
+    """`/stats` sits where `/{kb_key}` would match it, like `/source-buckets`."""
+    http, _ = client()
+
+    response = http.get("/api/knowledge/stats")
+
+    assert response.status_code == 200
+    assert response.json() == {"stats": {KB_KEY: {
+        "documents": 3, "failed_documents": 1, "agents": ["support_bot"],
+    }}}
+
+
+def test_card_stats_are_501_when_unconfigured(client):
+    http, _ = client(error=KnowledgeNotConfigured("off"))
+
+    assert http.get("/api/knowledge/stats").status_code == 501
 
 
 def test_the_source_bucket_listing_is_empty_when_none_are_registered(client):

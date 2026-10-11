@@ -10,7 +10,6 @@ import {
   rateOf,
   shareOf,
   subjectLabel,
-  topNWithOther,
 } from "@/app/insights/insightsFormat.mjs";
 import {
   fetchUserLeaderboard,
@@ -19,7 +18,7 @@ import {
   type UserUsageRow,
 } from "@/lib/insights";
 import { METRIC_COLOR } from "@/app/components/chartTheme";
-import { DailyColumns, EmptyPlot, Plot, PlotCell, PlotGrid, RankedBars, type RankedEntry } from "./charts";
+import { DailyArea, EmptyPlot, Plot, PlotCell, PlotGrid, ScatterPlot, type ScatterEntry } from "./charts";
 
 /**
  * Usage per person — the chargeback question, finally rendered.
@@ -101,34 +100,22 @@ export function UserPanel({ days }: { days: number }) {
   // The email's local part when the server could name the sub, else the sub.
   const label = (sub: string) => subjectLabel(sub, data.subjects);
 
-  const byTurns = topNWithOther(
-    data.users.map((user: UserUsageRow) => ({
+  // One dot per person: turns across, tokens (input + output + cache, the count
+  // that tracks spend) up. The reader is looking for the person whose few
+  // conversations are expensive — the dot high and to the left — which two ranked
+  // lists side by side made them find by matching names across columns.
+  const perUser: ScatterEntry[] = data.users
+    .filter((user: UserUsageRow) => user.turns > 0)
+    .map((user: UserUsageRow) => ({
       name: label(user.sub),
-      value: user.turns,
-    })),
-    8,
-  ).map((entry: RankedEntry) => ({
-    ...entry,
-    display: `${entry.value.toLocaleString("ko-KR")}턴`,
-  })) as RankedEntry[];
-
-  // Prompt tokens, all tiers: the count that tracks spend rather than activity. A
-  // reader comparing this list against the turn list above is looking for the person
-  // whose few conversations are expensive, which is the whole reason both are drawn.
-  const byTokens = topNWithOther(
-    data.users.map((user: UserUsageRow) => ({
-      name: label(user.sub),
-      value:
+      x: user.turns,
+      y:
         user.input_tokens +
         user.output_tokens +
         user.cache_read_tokens +
         user.cache_write_tokens,
-    })),
-    8,
-  ).map((entry: RankedEntry) => ({
-    ...entry,
-    display: entry.value.toLocaleString("ko-KR"),
-  })) as RankedEntry[];
+      id: user.sub,
+    }));
 
   const maxTurns = data.users.reduce(
     (max: number, user: UserUsageRow) => Math.max(max, user.turns),
@@ -152,27 +139,25 @@ export function UserPanel({ days }: { days: number }) {
 
   return (
     <>
-      {dailyUsers.length > 1 && (
-        <PlotCell>
-          <Plot
-            title="일별 활성 사용자"
-            hint="그날 한 턴 이상 대화한 사람 수"
-          >
-            <DailyColumns data={dailyUsers} dataKey="users" name="사용자" colorIndex={METRIC_COLOR.turns} />
-          </Plot>
-        </PlotCell>
-      )}
       <PlotGrid>
         <PlotCell>
-          <Plot title="사용자별 턴">
-            <RankedBars entries={byTurns} colorIndex={METRIC_COLOR.turns} />
+          <Plot title="사용자별 턴과 토큰" hint="점 하나가 한 사람입니다. 가로는 턴, 세로는 토큰(입력 + 출력 + 캐시)이고, 왼쪽 위일수록 적은 턴에 토큰을 많이 썼습니다.">
+            <ScatterPlot
+              entries={perUser}
+              xName="턴"
+              yName="토큰"
+              colorIndex={METRIC_COLOR.input_tokens}
+              empty="이 기간에 대화한 사용자가 없습니다."
+            />
           </Plot>
         </PlotCell>
         <PlotCell>
-          <Plot title="사용자별 토큰" hint="입력 + 출력 + 캐시">
-            {/* Tokens, not turns — the token-family hue, so this list is not mistaken
-                for another turn count sitting beside 사용자별 턴. */}
-            <RankedBars entries={byTokens} colorIndex={METRIC_COLOR.input_tokens} />
+          <Plot title="일별 활성 사용자" hint="그날 한 턴 이상 대화한 사람 수">
+            {dailyUsers.length > 1 ? (
+              <DailyArea data={dailyUsers} dataKey="users" name="사용자" colorIndex={METRIC_COLOR.turns} />
+            ) : (
+              <EmptyPlot label="이틀 이상 기록이 쌓이면 추이를 그립니다." />
+            )}
           </Plot>
         </PlotCell>
       </PlotGrid>

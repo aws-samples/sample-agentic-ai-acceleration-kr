@@ -45,6 +45,10 @@ data "aws_iam_policy_document" "task" {
       # before it ever serves a request.
       "dynamodb:DescribeTable",
       "dynamodb:GetItem",
+      # The thread listing scans a projection and then batch-gets only the page
+      # (thread_repository._get_many). Without this the repository's ClientError
+      # handler turns the denial into an empty list: an empty sidebar, no error.
+      "dynamodb:BatchGetItem",
       "dynamodb:PutItem",
       "dynamodb:UpdateItem",
       "dynamodb:DeleteItem",
@@ -61,6 +65,7 @@ data "aws_iam_policy_document" "task" {
       var.usage_table_arn,
       "${var.usage_table_arn}/index/*",
       var.users_table_arn,
+      var.teams_table_arn,
     ]
   }
 
@@ -406,7 +411,7 @@ data "aws_iam_policy_document" "task" {
     sid       = "PassHarnessExecutionRole"
     effect    = "Allow"
     actions   = ["iam:PassRole"]
-    resources = concat([var.harness_execution_role_arn], var.team_harness_role_arns)
+    resources = [var.harness_execution_role_arn]
 
     condition {
       test     = "StringEquals"
@@ -414,6 +419,7 @@ data "aws_iam_policy_document" "task" {
       values   = ["bedrock-agentcore.amazonaws.com"]
     }
   }
+
 
   statement {
     sid    = "SkillsBucketWrite"
@@ -577,6 +583,145 @@ data "aws_iam_policy_document" "task" {
       resources = ["${var.browser_screenshot_bucket_arn}/screenshots/*"]
     }
   }
+}
+
+# Organization-page grants (team roles, pool writes, Cedar policies) live in
+# their own policy: the task role's inline policy is at IAM's 10240-byte limit
+# and PutRolePolicy fails with LimitExceeded when these are appended to it
+# (observed 2026-10-10 on the live apply).
+data "aws_iam_policy_document" "task_org" {
+  # Roles the Organization page creates for teams at runtime. Three fences, all
+  # required: the path (only roles under /<project>/teams/), the permissions
+  # boundary (only with the harness boundary attached, so the role can never
+  # exceed the default harness role), and PassRole restricted to AgentCore.
+  dynamic "statement" {
+    for_each = var.team_role_boundary_arn != "" ? [var.team_role_boundary_arn] : []
+    content {
+      sid    = "TeamRolesCreate"
+      effect = "Allow"
+      actions = [
+        "iam:CreateRole",
+        "iam:PutRolePolicy",
+        "iam:PutRolePermissionsBoundary",
+      ]
+      resources = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project}/teams/*"]
+      condition {
+        test     = "StringEquals"
+        variable = "iam:PermissionsBoundary"
+        values   = [statement.value]
+      }
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.team_role_boundary_arn != "" ? [1] : []
+    content {
+      sid    = "TeamRolesManage"
+      effect = "Allow"
+      actions = [
+        "iam:GetRole",
+        "iam:GetRolePolicy",
+        "iam:ListRolePolicies",
+        "iam:DeleteRolePolicy",
+        "iam:DeleteRole",
+        "iam:TagRole",
+      ]
+      resources = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project}/teams/*"]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.team_role_boundary_arn != "" ? [1] : []
+    content {
+      sid       = "PassTeamRoles"
+      effect    = "Allow"
+      actions   = ["iam:PassRole"]
+      resources = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project}/teams/*"]
+      condition {
+        test     = "StringEquals"
+        variable = "iam:PassedToService"
+        values   = ["bedrock-agentcore.amazonaws.com"]
+      }
+    }
+  }
+
+  # Organization page: users and group membership in the pool. Pool settings
+  # themselves (UpdateUserPool, clients) are deliberately not granted.
+  dynamic "statement" {
+    for_each = var.user_pool_arn != "" ? [var.user_pool_arn] : []
+    content {
+      sid    = "CognitoOrgManagement"
+      effect = "Allow"
+      actions = [
+        "cognito-idp:ListGroups",
+        "cognito-idp:GetGroup",
+        "cognito-idp:CreateGroup",
+        "cognito-idp:UpdateGroup",
+        "cognito-idp:DeleteGroup",
+        "cognito-idp:ListUsersInGroup",
+        "cognito-idp:AdminListGroupsForUser",
+        "cognito-idp:AdminAddUserToGroup",
+        "cognito-idp:AdminRemoveUserFromGroup",
+        "cognito-idp:AdminCreateUser",
+        "cognito-idp:AdminGetUser",
+        "cognito-idp:AdminDeleteUser",
+        "cognito-idp:AdminDisableUser",
+        "cognito-idp:AdminEnableUser",
+        "cognito-idp:AdminResetUserPassword",
+      ]
+      resources = [statement.value]
+    }
+  }
+
+  # A Cedar policy whose statement names a gateway resource is "resource
+  # scoped": CreatePolicy/UpdatePolicy then also authorise
+  # ManageResourceScopedPolicy against that gateway (live 2026-10-10: the
+  # engine grant alone left CreatePolicy with AccessDenied on the gateway ARN).
+  dynamic "statement" {
+    for_each = var.policy_engine_arn != "" && var.gateway_arn != "" ? [var.gateway_arn] : []
+    content {
+      sid       = "TeamCedarGatewayScope"
+      effect    = "Allow"
+      actions   = ["bedrock-agentcore:ManageResourceScopedPolicy"]
+      resources = [statement.value]
+    }
+  }
+
+  # Per-team Cedar policies on the gateway policy engine.
+  dynamic "statement" {
+    for_each = var.policy_engine_arn != "" ? [var.policy_engine_arn] : []
+    content {
+      sid    = "TeamCedarPolicies"
+      effect = "Allow"
+      actions = [
+        "bedrock-agentcore:CreatePolicy",
+        "bedrock-agentcore:UpdatePolicy",
+        "bedrock-agentcore:DeletePolicy",
+        "bedrock-agentcore:GetPolicy",
+        "bedrock-agentcore:ListPolicies",
+      ]
+      resources = [statement.value, "${statement.value}/*"]
+    }
+  }
+}
+
+# A customer managed policy, not a second inline one: IAM's 10240-byte limit is
+# the sum of all inline policies on the role, so splitting inline changed
+# nothing (LimitExceeded again, 2026-10-10). Managed policies have their own
+# 6144-character limit and do not count toward the inline total.
+resource "aws_iam_policy" "task_org" {
+  # A plain input, not a test on the three ARNs: those are module outputs that
+  # are unknown at plan time on a fresh state, and `count` on an unknown value
+  # fails with "Invalid count argument" (hit on a new-account rehearsal).
+  count  = var.create_org_policy ? 1 : 0
+  name   = "${var.project}-ecs-task-org-policy"
+  policy = data.aws_iam_policy_document.task_org.json
+}
+
+resource "aws_iam_role_policy_attachment" "task_org" {
+  count      = length(aws_iam_policy.task_org)
+  role       = aws_iam_role.task.name
+  policy_arn = aws_iam_policy.task_org[0].arn
 }
 
 resource "aws_iam_role_policy" "task" {

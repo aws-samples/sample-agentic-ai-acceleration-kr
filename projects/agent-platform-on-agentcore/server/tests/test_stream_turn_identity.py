@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from core import config as cfg  # noqa: E402
 from models.common import StreamRequest  # noqa: E402
 from services.streaming_service import StreamingService  # noqa: E402
 import pytest
@@ -149,9 +150,10 @@ def test_flush_passes_turn_identity_and_model():
     assert {call["turn_id"] for call in usage.calls} == {"t-1:h-42"}
 
 
-def test_a_thread_model_override_is_what_the_turn_is_priced_at():
+def test_a_thread_model_override_is_what_the_turn_is_priced_at(monkeypatch):
     """`config.model_id` is what InvokeHarness actually runs (harness_client sends it),
     so pricing at the harness's default model would store a permanently wrong figure."""
+    monkeypatch.setattr(cfg, "ALLOWED_MODELS", ["global.anthropic.claude-opus-5-5"])
     usage = RecordingUsage()
     client = TwoModelCallsClient()
     service = StreamingService(

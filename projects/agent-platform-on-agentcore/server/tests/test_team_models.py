@@ -14,26 +14,16 @@ from models.team import TeamConfigUpdate  # noqa: E402
 from services.agent_access import AgentTargetMismatch, bind_execution  # noqa: E402
 from services.harness_service import HarnessService  # noqa: E402
 from services.team_service import TeamService  # noqa: E402
+from team_table_stub import Table, seed  # noqa: E402
 
 SONNET, OPUS, HAIKU = "global.sonnet", "global.opus", "global.haiku"
 DEFAULT = SimpleNamespace(agent_runtime_arn="arn:aws:bedrock-agentcore:us-east-1:1:runtime/default", qualifier="DEFAULT")
 ROLES = {"finance": "arn:aws:iam::1:role/f", "hr": "arn:aws:iam::1:role/h"}
 
 
-class Prefs:
-    def __init__(self):
-        self.items = {}
-
-    def get(self, sub, name):
-        return self.items.get((sub, name))
-
-    def put(self, sub, name, value):
-        self.items[(sub, name)] = value
-
-
 @pytest.fixture
 def teams():
-    t = TeamService(Prefs(), ROLES)
+    t = TeamService(seed(Table(), ROLES))
     t.put("finance", TeamConfigUpdate(allowed_models=[SONNET]))
     return t
 
@@ -103,3 +93,24 @@ def test_a_legacy_pin_outside_the_team_list_is_dropped_not_refused(teams, monkey
     with pytest.raises(AgentTargetMismatch):
         bind_execution({"model_id": OPUS}, existing_thread=SimpleNamespace(agent_record_id="__basic_chat__", agent_target=None, basic_chat_model_id=SONNET, metadata=None),
                        registry_service=None, default_client=DEFAULT, caller=member("finance"), team_service=teams)
+
+
+# ── allowed_tools: patterns vs gateway names (final review C1) ─────────────
+from models.team import cedar_actions, harness_allowed_tools, is_tool_pattern  # noqa: E402
+
+
+def test_tool_pattern_is_at_prefixed_or_star():
+    assert is_tool_pattern("@builtin") and is_tool_pattern("@bap-platform-tools/approve_expense")
+    assert is_tool_pattern("*")
+    assert not is_tool_pattern("bap-platform-tools___calculate")
+
+
+def test_cedar_actions_keep_only_gateway_names():
+    tools = ["@builtin", "bap-platform-tools___calculate", "*", "web___search"]
+    assert cedar_actions(tools) == ["bap-platform-tools___calculate", "web___search"]
+    assert cedar_actions(["@builtin"]) == []
+
+
+def test_harness_allowed_tools_rewrites_gateway_names_and_keeps_order():
+    tools = ["@builtin", "bap-platform-tools___calculate", "@*/bap-platform-tools___calculate", "*"]
+    assert harness_allowed_tools(tools) == ["@builtin", "@*/bap-platform-tools___calculate", "*"]

@@ -10,14 +10,14 @@ variable "skills_bucket_arn" {
   type = string
 }
 
-variable "role_suffix" {
-  description = "Role name suffix: `$${project}-harness-$${role_suffix}`. The default keeps the original single role's name; team roles pass the team name."
-  type        = string
-  default     = "execution"
-}
-
 variable "allowed_model_arns" {
-  description = "Resources for bedrock:InvokeModel*. [\"*\"] = any model. A team role narrows this to the models the team may run — the IAM hard limit behind the server's allow-list."
+  description = "Resources for bedrock:InvokeModel*. [\"*\"] = any model."
   type        = list(string)
   default     = ["*"]
+}
+
+variable "create_boundary" {
+  description = "Also publish this role's policy document as a managed policy `$${project}-harness-boundary`. The server attaches it as the permissions boundary of every team role it creates, so a server-made role can never exceed what terraform grants a harness. The server narrows models per team inside that boundary."
+  type        = bool
+  default     = false
 }

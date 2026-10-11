@@ -78,12 +78,11 @@ web_search_backend = "agentcore"
 # oidc_required_group = ""          # empty = whole tenant may sign in
 # oidc_redirect_uris  = ["https://agents.example.com/auth/callback", "http://localhost:3000/auth/callback"]
 
-# ── Teams and gateway policy ─────────────────────────────────────────────────
-# One harness execution role + Cognito group `team:<name>` per team. With
-# enable_gateway_policy a Cedar policy engine guards the Lambda tools gateway.
-# The engine uses the hashicorp/time provider: an existing checkout must run
-# `terraform init` once before `plan`.
-# teams                 = ["finance", "hr", "support"]
+# ── Gateway policy ───────────────────────────────────────────────────────────
+# With enable_gateway_policy a Cedar policy engine guards the Lambda tools
+# gateway. Teams (Cognito group, execution role, Cedar permits) are created on
+# the Organization page (/org), not here. The engine uses the hashicorp/time
+# provider: an existing checkout must run `terraform init` once before `plan`.
 # enable_gateway_policy = true
 # policy_mode           = "LOG_ONLY"   # ENFORCE denies; LOG_ONLY only records
 # Roles that call the gateway but are not <project>-agent-runtime (e.g. a runtime
@@ -92,3 +91,5 @@ web_search_backend = "agentcore"
 # extra_platform_role_names = ["AmazonBedrockAgentCoreSDKRuntime-ap-northeast-1-xxxxxxxxxx"]
 # Workshop mock tools (approve_expense, lookup_salary); off outside the workshop.
 # demo_tools = true
+# Teams (made on /org) whose role may approve_expense below the amount cap.
+# demo_expense_teams = ["finance"]

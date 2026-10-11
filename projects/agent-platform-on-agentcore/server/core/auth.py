@@ -19,7 +19,7 @@ Either path yields the same AuthUser, so nothing downstream knows which IdP
 signed someone in — except `provider`, kept so per-user records can say so.
 """
 import logging
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 import jwt
 from fastapi import Depends, HTTPException, Request
@@ -36,6 +36,29 @@ ADMIN_GROUP = "admin"
 # role their harnesses run under, and which models they may pick.
 TEAM_GROUP_PREFIX = "team:"
 COGNITO_PROVIDER_ID = "cognito"
+
+# Entra puts group *object ids* in the token, not `team:` names. The team
+# service maps those ids to team names (TeamConfig.entra_group_ids); wired in
+# core/dependencies.py so this module stays free of storage. None = no mapping.
+entra_team_resolver: Optional[Callable[[List[str]], List[str]]] = None
+
+
+def with_entra_teams(groups: List[str]) -> List[str]:
+    """`groups` plus a `team:<name>` entry for every team the ids map to. A
+    failing resolver changes nothing: a directory blip must not log people out."""
+    if entra_team_resolver is None:
+        return list(groups)
+    try:
+        teams = entra_team_resolver([g for g in groups if isinstance(g, str)])
+    except Exception:
+        logger.warning("Entra team mapping failed; using token groups only", exc_info=True)
+        return list(groups)
+    out = list(groups)
+    for name in teams:
+        tag = f"{TEAM_GROUP_PREFIX}{name}"
+        if tag not in out:
+            out.append(tag)
+    return out
 
 
 class TokenInvalid(Exception):
@@ -161,6 +184,7 @@ def _user_from_oidc(token: str) -> AuthUser:
         raise HTTPException(status_code=503, detail="인증 서비스를 일시적으로 사용할 수 없습니다.")
 
     groups = provider.groups_of(claims)
+    groups = with_entra_teams(groups)
     if not provider.allows(groups):
         raise HTTPException(status_code=403, detail="이 애플리케이션에 대한 접근 권한이 없습니다.")
 

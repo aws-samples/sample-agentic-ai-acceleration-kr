@@ -18,7 +18,7 @@ of truth that drifts the first time an ingest fails.
 """
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import boto3
 from botocore.exceptions import ClientError
@@ -38,6 +38,7 @@ from models.knowledge import (
     CreateKnowledgeBaseRequest,
     KnowledgeBaseDetail,
     KnowledgeBaseRecord,
+    KnowledgeBaseStats,
     KnowledgeDocument,
     S3SourceConfig,
     SyncJob,
@@ -87,6 +88,9 @@ _FAILURE_REASON_MAX = 900
 # out. DELETE_IN_PROGRESS is deliberately kept: a delete still in flight is
 # something the user asked for and should watch finish.
 _STATUS_NOT_FOUND = "NOT_FOUND"
+
+# Document endings the detail sheet marks as failures; the card counts the same.
+_FAILED_DOCUMENT_STATUSES = {"FAILED", "IGNORED", "METADATA_UPDATE_FAILED"}
 
 
 class KnowledgeNotFound(Exception):
@@ -164,6 +168,7 @@ class KnowledgeService:
         harness: Optional[Any] = None,
         source_buckets: Optional[List[str]] = None,
         platform_source_bucket: Optional[str] = None,
+        owner_names: Optional[Callable[[Iterable[str]], Dict[str, str]]] = None,
     ):
         self.repository = repository
         self.provisioner = provisioner
@@ -187,6 +192,9 @@ class KnowledgeService:
         # Injected rather than constructed so a harness failure cannot break this
         # service's import, and so tests need no AgentCore client.
         self._harness = harness
+        # sub -> email (DirectoryService.emails). None resolves nothing, and the
+        # stored owner_name stands.
+        self._owner_names = owner_names
 
     @property
     def s3(self) -> Any:
@@ -262,7 +270,86 @@ class KnowledgeService:
         records = self.repository.visible_to(user.sub)
         if status:
             records = [r for r in records if r.status == status]
-        return records
+        return self._with_owner_names(records)
+
+    def _with_owner_names(
+        self, records: List[KnowledgeBaseRecord]
+    ) -> List[KnowledgeBaseRecord]:
+        """Name each owner by email, resolved now rather than stored.
+
+        The directory serves one cached snapshot of the pool, so this costs no AWS
+        call on the five-second provisioning poll. A miss keeps the stored value:
+        a UUID owner beats a listing that fails over a name.
+        """
+        if not self._owner_names or not records:
+            return records
+        try:
+            names = self._owner_names(r.owner_id for r in records)
+        except Exception:
+            logger.info("Could not resolve knowledge-base owners", exc_info=True)
+            return records
+        return [
+            r.model_copy(update={"owner_name": names[r.owner_id]})
+            if names.get(r.owner_id)
+            else r
+            for r in records
+        ]
+
+    def stats(self, user: AuthUser) -> Dict[str, KnowledgeBaseStats]:
+        """Document and agent counts for every knowledge base the caller sees.
+
+        Kept off the listing on purpose: it costs one ListKnowledgeBaseDocuments
+        per knowledge base plus a harness scan, and the listing is polled. The
+        harness scan is one ListHarnesses, with GetHarness only for harnesses that
+        changed since the last read (HarnessService's revision memo), and it runs
+        alongside the document counts rather than after them.
+        """
+        self._require_configured()
+        records = self.repository.visible_to(user.sub)
+        agents_by_gateway, counts = fan_out(
+            lambda task: task(),
+            [self._agents_by_gateway, lambda: fan_out(self._document_counts, records)],
+        )
+        stats: Dict[str, KnowledgeBaseStats] = {}
+        for record, (documents, failed) in zip(records, counts):
+            agents = None
+            if agents_by_gateway is not None:
+                agents = sorted(agents_by_gateway.get(record.gateway_arn or "", []))
+            stats[record.kb_key] = KnowledgeBaseStats(
+                documents=documents, failed_documents=failed, agents=agents
+            )
+        return stats
+
+    def _document_counts(
+        self, record: KnowledgeBaseRecord
+    ) -> Tuple[Optional[int], Optional[int]]:
+        if not (record.kb_id and record.data_source_id):
+            # Nothing to list yet; zero is the truth until provisioning finishes.
+            return (0, 0) if record.status == STATUS_READY else (None, None)
+        try:
+            documents = self._list_documents(record)
+        except ClientError as exc:
+            logger.warning("Could not count documents for %s: %s", record.kb_key, exc)
+            return None, None
+        failed = sum(
+            1
+            for d in documents
+            if (d.status or "").upper() in _FAILED_DOCUMENT_STATUSES
+        )
+        return len(documents), failed
+
+    def _agents_by_gateway(self) -> Optional[Dict[str, List[str]]]:
+        """Gateway ARN -> names of the harnesses attaching it; None if unreadable."""
+        try:
+            harnesses = self.harness.list_harnesses(with_tools=True)
+        except Exception as exc:
+            logger.warning("Could not list harnesses for knowledge stats: %s", exc)
+            return None
+        attached: Dict[str, List[str]] = {}
+        for harness in harnesses:
+            for arn in dict.fromkeys(_gateway_arns_of(harness)):
+                attached.setdefault(arn, []).append(harness.harness_name)
+        return attached
 
     def stale_keys(self, records: List[KnowledgeBaseRecord]) -> List[str]:
         """Provisioning records whose driver appears to have died.
@@ -436,36 +523,8 @@ class KnowledgeService:
     def _documents(self, record: KnowledgeBaseRecord) -> List[KnowledgeDocument]:
         if not (record.kb_id and record.data_source_id):
             return []
-        documents: List[KnowledgeDocument] = []
-        params: Dict[str, Any] = {
-            "knowledgeBaseId": record.kb_id,
-            "dataSourceId": record.data_source_id,
-            "maxResults": 100,
-        }
         try:
-            while True:
-                response = self.provisioner.agent.list_knowledge_base_documents(
-                    **params
-                )
-                for detail in response.get("documentDetails", []):
-                    doc_id = _document_id(detail)
-                    if not doc_id:
-                        continue
-                    if (detail.get("status") or "").upper() == _STATUS_NOT_FOUND:
-                        continue
-                    documents.append(
-                        KnowledgeDocument(
-                            doc_id=doc_id,
-                            filename=document_name_for(record.source_type, doc_id),
-                            status=detail.get("status"),
-                            status_reason=detail.get("statusReason"),
-                            updated_at=_iso(detail.get("updatedAt")),
-                        )
-                    )
-                token = response.get("nextToken")
-                if not token:
-                    break
-                params["nextToken"] = token
+            return self._list_documents(record)
         except ClientError as exc:
             # The knowledge base itself is still worth showing; an empty document
             # list with the panel visible beats a failed page.
@@ -473,6 +532,36 @@ class KnowledgeService:
                 "Could not list documents for %s: %s", record.kb_key, exc
             )
             return []
+
+    def _list_documents(self, record: KnowledgeBaseRecord) -> List[KnowledgeDocument]:
+        """Every live document; raises on AWS errors so callers choose the fallback."""
+        documents: List[KnowledgeDocument] = []
+        params: Dict[str, Any] = {
+            "knowledgeBaseId": record.kb_id,
+            "dataSourceId": record.data_source_id,
+            "maxResults": 100,
+        }
+        while True:
+            response = self.provisioner.agent.list_knowledge_base_documents(**params)
+            for detail in response.get("documentDetails", []):
+                doc_id = _document_id(detail)
+                if not doc_id:
+                    continue
+                if (detail.get("status") or "").upper() == _STATUS_NOT_FOUND:
+                    continue
+                documents.append(
+                    KnowledgeDocument(
+                        doc_id=doc_id,
+                        filename=document_name_for(record.source_type, doc_id),
+                        status=detail.get("status"),
+                        status_reason=detail.get("statusReason"),
+                        updated_at=_iso(detail.get("updatedAt")),
+                    )
+                )
+            token = response.get("nextToken")
+            if not token:
+                break
+            params["nextToken"] = token
         return documents
 
     def add_document(

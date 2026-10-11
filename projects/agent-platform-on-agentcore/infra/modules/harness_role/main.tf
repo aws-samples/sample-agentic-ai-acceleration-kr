@@ -30,7 +30,7 @@ data "aws_iam_policy_document" "harness_assume" {
 }
 
 resource "aws_iam_role" "harness_execution" {
-  name               = "${var.project}-harness-${var.role_suffix}"
+  name               = "${var.project}-harness-execution"
   assume_role_policy = data.aws_iam_policy_document.harness_assume.json
 }
 
@@ -154,7 +154,16 @@ data "aws_iam_policy_document" "harness_execution" {
 }
 
 resource "aws_iam_role_policy" "harness_execution" {
-  name   = "${var.project}-harness-${var.role_suffix}-policy"
+  name   = "${var.project}-harness-execution-policy"
   role   = aws_iam_role.harness_execution.id
+  policy = data.aws_iam_policy_document.harness_execution.json
+}
+
+# The ceiling for roles the server creates at runtime (Organization page). Same
+# document as the role above with allowed_model_arns = ["*"]; the server's inline
+# policy may narrow models, never widen anything.
+resource "aws_iam_policy" "boundary" {
+  count  = var.create_boundary ? 1 : 0
+  name   = "${var.project}-harness-boundary"
   policy = data.aws_iam_policy_document.harness_execution.json
 }

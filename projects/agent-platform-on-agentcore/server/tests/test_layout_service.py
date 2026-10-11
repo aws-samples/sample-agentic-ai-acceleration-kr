@@ -45,13 +45,13 @@ def test_no_stored_layout_yields_the_default():
 
 def test_a_stored_order_is_preserved():
     stored = {"version": 1, "widgets": [
-        {"id": "billed", "span": "full", "visible": True},
+        {"id": "trend", "span": "full", "visible": True},
         {"id": "kpi", "span": "half", "visible": False},
     ]}
     svc = LayoutService(repository=StubPrefs({(SUB, "insights-layout"): stored}))
     widgets = svc.get(SUB)["widgets"]
 
-    assert widgets[0] == {"id": "billed", "span": "full", "visible": True}
+    assert widgets[0] == {"id": "trend", "span": "full", "visible": True}
     assert widgets[1] == {"id": "kpi", "span": "half", "visible": False}
 
 
@@ -65,6 +65,38 @@ def test_a_widget_shipped_after_the_layout_was_saved_is_appended_visible():
     appended = {w["id"] for w in widgets[1:]}
     assert appended == set(WIDGET_IDS) - {"kpi"}
     assert all(w["visible"] for w in widgets[1:])
+
+
+def test_a_layout_saved_with_billed_is_laid_out_in_the_default_order():
+    """`billed` folded into `cost_composition` the day the order was regrouped; a
+    pre-merge layout was saved in the old order, so it takes the new one."""
+    stored = {"version": 1, "widgets": [
+        {"id": "kpi", "span": "full", "visible": True},
+        {"id": "cost_composition", "span": "half", "visible": False},
+        {"id": "billed", "span": "full", "visible": True},
+        {"id": "guardrail", "span": "half", "visible": True},
+        {"id": "users", "span": "full", "visible": True},
+    ]}
+    widgets = reconcile(stored)["widgets"]
+    ids = [w["id"] for w in widgets]
+
+    assert "billed" not in ids
+    assert ids == list(WIDGET_IDS)
+    assert widgets[ids.index("guardrail")]["span"] == "half"
+    assert widgets[ids.index("cost_composition")] == {
+        "id": "cost_composition", "span": "full", "visible": True,
+    }
+    # Saved again without `billed`, the stored order is respected as-is.
+    assert reconcile({"version": 1, "widgets": widgets})["widgets"] == widgets
+
+
+def test_both_old_cost_widgets_hidden_stays_hidden():
+    stored = {"version": 1, "widgets": [
+        {"id": "cost_composition", "span": "half", "visible": False},
+        {"id": "billed", "span": "full", "visible": False},
+    ]}
+    widgets = reconcile(stored)["widgets"]
+    assert next(w for w in widgets if w["id"] == "cost_composition")["visible"] is False
 
 
 def test_an_unknown_widget_id_is_dropped_not_fatal():

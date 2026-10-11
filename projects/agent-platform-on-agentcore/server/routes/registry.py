@@ -36,6 +36,7 @@ from services.registry_service import (
 )
 from services.team_access import can_see, filter_visible, team_of, visibility_known
 from services.default_agent import is_default_record, mark_default
+from services.agent_defaults import AgentDefaults, resolve_agent_defaults
 from services.skill_bundle_service import (
     DiscoveredSkill,
     SkillBundleService,
@@ -61,6 +62,8 @@ def _sync() -> AgentSyncService:
 
 
 from core.dependencies import team_service as _team_service  # noqa: E402 — after the singletons
+from core.dependencies import usage_service as _usage_service  # noqa: E402
+from routes.harness import _service as _harness_service  # noqa: E402
 
 # Tests swap this for a TeamService with or without declared teams.
 _teams_override = None
@@ -498,9 +501,8 @@ def list_skill_files(record_id: str, _: AuthUser = Depends(current_user)):
 # `{record_id:path}` on every record route: a deployed-fallback id is
 # `deployed:<arn>` and an ARN carries slashes (`…:harness/name`), which a plain
 # path segment stops at — the route 404s and the UI spins forever.
-@router.get("/records/{record_id:path}", response_model=RegistryRecordDetail)
-def get_record(record_id: str, user: AuthUser = Depends(current_user)):
-    """The list filters by the approved revision's team; this detail by the latest's."""
+def _record_detail(record_id: str, user: AuthUser) -> RegistryRecordDetail:
+    """Shared by the detail and defaults routes: same lookup, same visibility rule."""
     # A deployed-fallback id has no registry record to fetch; answer it from the
     # same synthesis the list route uses rather than 502 against the AWS API.
     if record_id.startswith("deployed:"):
@@ -513,6 +515,22 @@ def get_record(record_id: str, user: AuthUser = Depends(current_user)):
     # Deployed records too: a teamed harness carries its Team tag as metadata.
     if not _can_see_detail(detail, user):
         raise HTTPException(status_code=404, detail="Record not found")
+    return detail
+
+
+@router.get("/records/{record_id:path}/defaults", response_model=AgentDefaults)
+def get_record_defaults(record_id: str, user: AuthUser = Depends(current_user)):
+    """The model and system prompt this agent runs with when a thread overrides
+    neither — the baseline the override popover shows. See services/agent_defaults.
+    Null fields are unknowable (a runtime's prompt), not empty."""
+    detail = _record_detail(record_id, user)
+    return resolve_agent_defaults(detail, usage=_usage_service, harness=_harness_service)
+
+
+@router.get("/records/{record_id:path}", response_model=RegistryRecordDetail)
+def get_record(record_id: str, user: AuthUser = Depends(current_user)):
+    """The list filters by the approved revision's team; this detail by the latest's."""
+    detail = _record_detail(record_id, user)
     detail.is_default = is_default_record(detail)
     return detail
 

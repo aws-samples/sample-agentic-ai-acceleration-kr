@@ -14,6 +14,7 @@ import {
   cacheHitRate,
   costAnomalies,
   costComposition,
+  costBreakdown,
   dailyCostPoints,
   dailySeries,
   guardrailActionLabel,
@@ -25,6 +26,8 @@ import {
   formatErrorRate,
   formatLatency,
   billedGap,
+  billedComposition,
+  billedTrustNote,
   coverageHint,
   formatMicros,
   formatRate,
@@ -611,6 +614,44 @@ test("costComposition leaves out tiers that have nothing", () => {
   assert.deepEqual(rows.map((r) => r.key), ["model"]);
 });
 
+test("costBreakdown lists each component once: metered where metered, the bill for the rest", () => {
+  const rows = costBreakdown({
+    model: { micros: 2_000_000 },
+    runtime: { micros: 1_000_000, active_micros: 100_000, idle_micros: 900_000 },
+    gateway: { micros: 1_000 },
+    memory: { micros: null, billed_micros: 5_000 },
+    billed: {
+      component: { runtime: 700_000, gateway: 900, memory: 5_000, browser: 3_000, web_search: 2_000, policy: 1_000, evaluations: 0 },
+    },
+  });
+  assert.deepEqual(
+    rows.map((r) => [r.key, r.micros, r.source, r.colorIndex]),
+    [
+      ["model", 2_000_000, "ledger", 0],
+      ["runtime_active", 100_000, "metered", 1],
+      ["runtime_idle", 900_000, "metered", 2],
+      ["gateway", 1_000, "metered", 3],
+      ["memory", 5_000, "billed", 4],
+      ["browser", 3_000, "billed", 6],
+      ["other", 3_000, "billed", 7],
+    ],
+  );
+  assert.equal(rows.at(-1).label, "기타 (Web Search, Policy)");
+  assert.ok(Math.abs(rows.reduce((sum, r) => sum + r.share, 0) - 1) < 1e-9);
+});
+
+test("costBreakdown falls back to the bill for a metered component with no figure", () => {
+  const rows = costBreakdown({
+    model: { micros: 10 },
+    runtime: { micros: null },
+    gateway: { micros: null },
+    memory: { micros: null, billed_micros: null },
+    billed: { component: { runtime: 500, code_interpreter: 40 } },
+  });
+  assert.deepEqual(rows.map((r) => [r.key, r.source, r.colorIndex]), [["model", "ledger", 0], ["runtime", "billed", 1], ["code_interpreter", "billed", 5]]);
+  assert.deepEqual(costBreakdown(null), []);
+});
+
 test("idleShare is memory over runtime, absent without a runtime figure", () => {
   assert.equal(idleShare({ micros: 1_000_000, active_micros: 250_000, idle_micros: 750_000 }), 0.75);
   assert.equal(idleShare({ micros: null }), null);
@@ -747,4 +788,32 @@ test("the overlay summary names each source instead of calling everything the bi
     ]),
     "요율표에 추가된 요율 5개 (청구서 학습 2 · Price List 1 · 직접 입력 2) · claude-haiku-4-5, claude-opus-5-5, claude-sonnet-5",
   );
+});
+
+test("billedComposition lays the bill's components out largest first, dropping $0 lines", () => {
+  const rows = billedComposition({
+    runtime_micros: 700_000,
+    component: { gateway: 1_000, runtime: 700_000, memory: 5_000, policy: 0 },
+    total_micros: 706_000,
+    latest_day: "2026-10-09",
+    ce_estimated: true,
+    checked_at: null,
+  });
+  assert.deepEqual(
+    rows.map((row) => [row.key, row.label, row.micros, Number(row.share.toFixed(4))]),
+    [
+      ["runtime", "Runtime", 700_000, 0.9915],
+      ["memory", "Memory", 5_000, 0.0071],
+      ["gateway", "Gateway", 1_000, 0.0014],
+    ],
+  );
+  assert.deepEqual(billedComposition(null), []);
+});
+
+test("billedTrustNote is one line when the bill has been compared, nothing before", () => {
+  assert.equal(billedTrustNote(null), null);
+  assert.equal(billedTrustNote({ runtime_micros: 12, runtime_pct: 0.0001, days_compared: 5, through: "2026-10-08" }),
+    "AWS 청구서와 같은 날 Runtime 비용 5일 비교: 일치 (2026-10-08 까지)");
+  assert.equal(billedTrustNote({ runtime_micros: 250000, runtime_pct: 0.031, days_compared: 2, through: "2026-10-08" }),
+    "AWS 청구서와 같은 날 Runtime 비용 2일 비교: 청구서가 3.1% 많음 ($0.2500) (2026-10-08 까지)");
 });

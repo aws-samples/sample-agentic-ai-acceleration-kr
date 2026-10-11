@@ -76,7 +76,7 @@ def ensure_user(idp, pool_id: str, email: str, password: str, groups: list[str])
                 idp.admin_add_user_to_group(UserPoolId=pool_id, Username=email, GroupName=group)
             except ClientError as exc:
                 if exc.response["Error"]["Code"] == "ResourceNotFoundException":
-                    raise SystemExit(f"Group {group} does not exist; add the team to terraform `teams` and apply first")
+                    raise SystemExit(f"Group {group} does not exist; create the team on the Organization page (/org) first")
                 raise
 
     sub = next(
@@ -89,7 +89,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--password", help="Permanent password for every demo account (pool policy: 8+, upper, lower, digit).")
     parser.add_argument("--list", action="store_true", help="Print the pool's users and exit.")
-    parser.add_argument("--teams", default="", help="Comma-separated team names. Demo users are spread across them round-robin and one <team>-user@example.com is created per team; groups must exist (terraform `teams`).")
+    parser.add_argument("--teams", default="", help="Comma-separated team names. Demo users are spread across them round-robin and one <team>-user@example.com is created per team; groups must exist (teams made on /org).")
     args = parser.parse_args()
 
     load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"), override=True)

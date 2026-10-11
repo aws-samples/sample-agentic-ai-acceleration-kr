@@ -54,8 +54,8 @@ def resolve_turn_team(
     """The team a turn's spend belongs to: the record's team if the caller is in
     it, otherwise the caller's first team, otherwise nobody (admins, teamless).
 
-    `declared` (the deployment's teams) drops `team:` groups terraform never
-    declared: their TEAMS# rows are never rendered but would still be
+    `declared` (the deployment's teams) drops `team:` groups no team row
+    declares: their TEAMS# rows are never rendered but would still be
     subtracted from "unattributed", so those turns vanished from both."""
     teams = [t for t in (caller_teams or []) if t]
     if declared is not None:

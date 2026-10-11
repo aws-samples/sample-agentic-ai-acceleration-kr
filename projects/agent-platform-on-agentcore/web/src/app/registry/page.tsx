@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { AlertTriangle, Blocks, Cloud, Library, Loader2, Plus, Sparkles } from "lucide-react";
+import { AlertTriangle, Cloud, Library, Loader2, Plus, Sparkles } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -310,10 +310,6 @@ export default function RegistryPage() {
                     )}
                   </Button>
                 )}
-                <Button size="sm" variant="outline" onClick={() => router.push("/harness")}>
-                  <Blocks className="size-3.5" />
-                  Agent Harness
-                </Button>
                 {/* Registry-off has no Register dialog, so skill bundles have no
                     other home; this uploads them straight to the bucket the harness
                     picker reads. */}
@@ -357,20 +353,10 @@ export default function RegistryPage() {
           </Notice>
         )}
 
-        {registryEnabled && isAdmin && unregistered > 0 && (
-          <Notice
-            tone="warning"
-            icon={AlertTriangle}
-            action={
-              <Button size="sm" variant="outline" onClick={() => setShowDeployed(true)}>
-                확인하고 등록
-              </Button>
-            }
-          >
-            배포되었지만 Registry에 등록되지 않은 항목이 {unregistered}개
-            있습니다.
-          </Notice>
-        )}
+        {/* No banner for deployed-but-unregistered targets: the count sits as a
+            badge on "Sync deployed" above, which is where the fix happens, and a
+            warning strip on every visit shouted about a state that is routine
+            while a harness is being set up. */}
 
         {isAdmin && info?.auto_approval === false && !query.trim() && pendingCount > 0 && (
           <Notice tone="info">

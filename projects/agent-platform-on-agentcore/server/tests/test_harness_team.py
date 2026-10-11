@@ -11,20 +11,10 @@ from models.harness import ComposeHarnessRequest  # noqa: E402
 from models.team import TeamConfigUpdate  # noqa: E402
 from services.harness_service import HarnessService  # noqa: E402
 from services.team_service import TeamService  # noqa: E402
+from team_table_stub import Table, seed  # noqa: E402
 
 ROLES = {"finance": "arn:aws:iam::1:role/bap-harness-finance", "hr": "arn:aws:iam::1:role/bap-harness-hr"}
 DEFAULT_ROLE = "arn:aws:iam::1:role/bap-harness-execution"
-
-
-class Prefs:
-    def __init__(self):
-        self.items = {}
-
-    def get(self, sub, name):
-        return self.items.get((sub, name))
-
-    def put(self, sub, name, value):
-        self.items[(sub, name)] = value
 
 
 class RecordingControl:
@@ -48,7 +38,7 @@ def service(teams=None):
 
 
 def teams_with_finance_tools():
-    t = TeamService(Prefs(), ROLES)
+    t = TeamService(seed(Table(), ROLES))
     t.put("finance", TeamConfigUpdate(allowed_tools=["@builtin", "@bap-platform-tools/approve_expense"]))
     return t
 
@@ -81,7 +71,7 @@ def test_unknown_team_is_refused():
 
 
 def test_resolve_team_picks_the_only_team_requires_a_choice_otherwise_and_checks_membership():
-    svc, _ = service(TeamService(Prefs(), ROLES))
+    svc, _ = service(TeamService(seed(Table(), ROLES)))
     assert svc.resolve_team(ComposeHarnessRequest(name="x"), member("hr")) == "hr"
     assert svc.resolve_team(ComposeHarnessRequest(name="x"), member()) is None
     with pytest.raises(ValueError):
@@ -95,7 +85,7 @@ def test_resolve_team_picks_the_only_team_requires_a_choice_otherwise_and_checks
 
 
 def test_without_teams_configured_a_team_request_is_refused_and_plain_requests_pass():
-    svc, _ = service(TeamService(None, {}))
+    svc, _ = service(TeamService(None))
     assert svc.resolve_team(ComposeHarnessRequest(name="x"), member("hr")) is None
     with pytest.raises(ValueError):
         svc.resolve_team(ComposeHarnessRequest(name="x", team="hr"), member("hr"))
@@ -160,3 +150,14 @@ def test_unreadable_record_is_refused_to_members_and_admins_skip_the_check():
         composed(svc, ComposeHarnessRequest(name="hr_bot", skill_record_ids=["ghost"]), member("hr"))
     composed(svc, ComposeHarnessRequest(name="x", skill_record_ids=["ghost"]), AuthUser(username="a", groups=["admin"]))
     assert control.params is not None
+
+
+def test_team_gateway_names_become_harness_patterns():
+    # Final review C1: one field, two kinds — a gateway name is the Cedar action,
+    # and on the harness it is `@*/<name>` (the harness server is the gateway's
+    # harness tool name, not the target).
+    t = TeamService(seed(Table(), ROLES))
+    t.put("finance", TeamConfigUpdate(allowed_tools=["@builtin", "bap-platform-tools___calculate"]))
+    svc, control = service(t)
+    svc.create_harness(ComposeHarnessRequest(name="fin_bot", team="finance"))
+    assert control.params["allowedTools"] == ["@builtin", "@*/bap-platform-tools___calculate"]

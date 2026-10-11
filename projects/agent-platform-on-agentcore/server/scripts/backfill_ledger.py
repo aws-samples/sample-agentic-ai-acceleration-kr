@@ -858,7 +858,6 @@ def main() -> None:
         recon = collector_service.billing.reconcile(
             args.start, args.end, repository=usage_repo,
             ledger_agent_days=collector_service.ledger_inputs(args.start, args.end)[0],
-            ledger_components=collector_service.ledger_inputs(args.start, args.end)[1],
         )
         bad = [
             row for row in recon["agent_runtime"]

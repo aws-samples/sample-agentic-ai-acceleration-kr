@@ -15,6 +15,7 @@ from decimal import Decimal
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from core import config as cfg  # noqa: E402
 from data import model_rates  # noqa: E402
 from data.model_rates import cost_micros, long_context_threshold, resolve_rate, set_learned_rates  # noqa: E402
 from models.common import StreamConfig, StreamRequest  # noqa: E402
@@ -148,7 +149,7 @@ def test_two_days_billed_only_long_teach_the_long_card_not_the_plain_one():
         ("2026-10-08", [(H55_LONG_IN, 0.0005, 400.0), (H55_LONG_OUT, 0.0025, 4.0)]),
         ("2026-10-09", [(H55_LONG_IN, 0.0005, 300.0), (H55_LONG_OUT, 0.0025, 2.0)]),
         ("2026-10-10", []),
-    ])).reconcile("2026-10-01", "2026-10-10", repository=repo, ledger_agent_days={}, ledger_components={})
+    ])).reconcile("2026-10-01", "2026-10-10", repository=repo, ledger_agent_days={})
     learned = learned_items(repo)
     assert set(learned) == {
         "R#claude-haiku-5-5|global|long_input|2026-10-08",
@@ -164,7 +165,7 @@ def test_a_day_with_both_cards_keeps_each_rate_clean():
         ("2026-10-08", [(H55_IN, 0.0001, 100.0), (H55_LONG_IN, 0.0005, 300.0)]),
         ("2026-10-09", [(H55_IN, 0.0001, 200.0), (H55_LONG_IN, 0.0005, 300.0)]),
         ("2026-10-10", []),
-    ])).reconcile("2026-10-01", "2026-10-10", repository=repo, ledger_agent_days={}, ledger_components={})
+    ])).reconcile("2026-10-01", "2026-10-10", repository=repo, ledger_agent_days={})
     learned = learned_items(repo)
     assert learned["R#claude-haiku-5-5|global|input|2026-10-08"]["usd_per_1m"] == "0.1000"
     assert learned["R#claude-haiku-5-5|global|long_input|2026-10-08"]["usd_per_1m"] == "0.5000"
@@ -273,7 +274,9 @@ class TwoCallClient:
         yield {"event": {"messageStop": {"messageId": "m-1", "fullText": "Done"}}}
 
 
-def _drain(model_id):
+def _drain(monkeypatch, model_id):
+    # The override has to clear the operator's ceiling before the turn runs.
+    monkeypatch.setattr(cfg, "ALLOWED_MODELS", [model_id])
     threads = StubThreadService()
     usage = RecordingUsage()
     client = TwoCallClient()
@@ -292,8 +295,8 @@ def _drain(model_id):
     return usage.turns[0]
 
 
-def test_the_stream_counts_only_the_calls_whose_prompt_crossed_the_threshold():
-    turn = _drain(HAIKU55)
+def test_the_stream_counts_only_the_calls_whose_prompt_crossed_the_threshold(monkeypatch):
+    turn = _drain(monkeypatch, HAIKU55)
     assert turn["input_tokens"] == 70_000 and turn["cache_read_tokens"] == 100_000
     assert turn["long_tokens"] == {
         "long_input_tokens": 50_000, "long_output_tokens": 300,
@@ -301,6 +304,6 @@ def test_the_stream_counts_only_the_calls_whose_prompt_crossed_the_threshold():
     }
 
 
-def test_a_model_with_one_card_never_records_a_long_subset():
-    turn = _drain("global.anthropic.claude-sonnet-5-5")
+def test_a_model_with_one_card_never_records_a_long_subset(monkeypatch):
+    turn = _drain(monkeypatch, "global.anthropic.claude-sonnet-5-5")
     assert not any(turn["long_tokens"].values())

@@ -627,6 +627,19 @@ class UsageService:
                 self._fold_denials(out.setdefault(team, {"denials": 0, "tools": {}}), item)
         return out
 
+    def policy_team_daily(self, start_date: str, end_date: str) -> Dict[str, Dict[str, int]]:
+        """team -> `YYYY-MM-DD` -> denials, sparse; `-` is the unattributed bucket."""
+        out: Dict[str, Dict[str, int]] = {}
+        for item in self._items("POLICY_TEAMS#", start_date, end_date):
+            sort_key = str(item.get("sk", ""))
+            team = self._suffix(sort_key, "#G#")
+            prefix, _, _ = sort_key.partition("#G#")
+            if not team or not prefix.startswith("D#"):
+                continue
+            per_day = out.setdefault(team, {})
+            per_day[prefix[2:]] = per_day.get(prefix[2:], 0) + int(item.get("denials") or 0)
+        return out
+
     def policy_events(self, start_date: str, end_date: str, limit: int = 20) -> List[Dict[str, Any]]:
         events: List[Dict[str, Any]] = []
         for shard in month_shards(start_date, end_date):
@@ -853,6 +866,35 @@ class UsageService:
             if team:
                 self._fold(totals.setdefault(team, self._blank()), item)
         return totals
+
+    def team_daily_costs(self, start_date: str, end_date: str) -> Dict[str, Dict[str, int]]:
+        """team -> `YYYY-MM-DD` -> model_cost_micros, for the days a team has an item.
+
+        `team_totals` folds the window into one figure, which cannot answer
+        "did this team cross its *daily* alert"; a $7 week may be seven quiet days
+        or one $7 day. Read per item instead: the TEAMS# partition already holds
+        one item per (day, team), so no new counter is needed. Days without an
+        item are absent, not zero — the caller decides what an idle day means.
+        """
+        return {
+            team: {day: int(totals.get("model_cost_micros") or 0) for day, totals in days.items()}
+            for team, days in self.team_daily(start_date, end_date).items()
+        }
+
+    def team_daily(self, start_date: str, end_date: str) -> Dict[str, Dict[str, Dict[str, int]]]:
+        """team -> `YYYY-MM-DD` -> folded counters, for the days a team has an item.
+
+        The trend behind `team_totals`. Sparse like `team_daily_costs`: the
+        caller fills idle days, because only it knows the window's calendar."""
+        daily: Dict[str, Dict[str, Dict[str, int]]] = {}
+        for item in self._items("TEAMS#", start_date, end_date):
+            sort_key = str(item.get("sk", ""))
+            team = self._suffix(sort_key, "#G#")
+            prefix, _, _ = sort_key.partition("#G#")
+            if not team or not prefix.startswith("D#"):
+                continue
+            self._fold(daily.setdefault(team, {}).setdefault(prefix[2:], self._blank()), item)
+        return daily
 
     def distinct_users(self, record_id: str, start_date: str, end_date: str) -> int:
         """How many different people used this agent in the window.

@@ -83,3 +83,16 @@ class UserRepository(DynamoDBRepository):
             if not key:
                 return out
             kwargs["ExclusiveStartKey"] = key
+
+    def list_all(self) -> List[Dict[str, Any]]:
+        """Every sign-in row. A full scan, like `labels`, read once per directory
+        cache window by the Organization page."""
+        out: List[Dict[str, Any]] = []
+        kwargs: Dict[str, Any] = {}
+        while True:
+            resp = self.table.scan(**kwargs)
+            out.extend(dict(i) for i in resp.get("Items") or [])
+            key = resp.get("LastEvaluatedKey")
+            if not key:
+                return out
+            kwargs["ExclusiveStartKey"] = key

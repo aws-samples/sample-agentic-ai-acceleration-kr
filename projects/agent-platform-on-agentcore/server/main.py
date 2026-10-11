@@ -18,7 +18,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Import routers
-from routes import health, threads, mcp_apps, mcp, auth, registry, harness, artifacts, knowledge, insights, config, settings
+from routes import health, threads, mcp_apps, mcp, auth, registry, harness, artifacts, knowledge, insights, config, settings, org
 from core.config import COLLECTOR_ENABLED, COLLECTOR_INTERVAL_SECONDS
 from core.dependencies import collector_service, streaming_service
 
@@ -80,6 +80,7 @@ app.include_router(artifacts.router)
 app.include_router(knowledge.router)
 app.include_router(insights.router)
 app.include_router(settings.router)
+app.include_router(org.router)
 
 
 if __name__ == "__main__":

@@ -120,17 +120,12 @@ output "runtime_mcp_endpoints" {
   value       = module.mcp_gateway.runtime_mcp_endpoints
 }
 
-output "team_harness_role_arns" {
-  description = "team => harness execution role ARN; the server gets this as TEAM_EXECUTION_ROLES."
-  value       = { for t, m in module.team_harness_roles : t => m.role_arn }
-}
-
 output "mcp_gateway_id" {
   value = module.mcp_gateway.gateway_id
 }
 
 output "mcp_gateway_arn" {
-  description = "Resource of the Cedar policies in modules/gateway_policies."
+  description = "Resource the Cedar policies name (modules/gateway_policies and the Organization page's team policies)."
   value       = module.mcp_gateway.gateway_arn
 }
 

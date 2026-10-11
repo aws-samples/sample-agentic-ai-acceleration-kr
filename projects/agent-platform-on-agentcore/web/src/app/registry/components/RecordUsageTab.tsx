@@ -13,8 +13,13 @@ import {
   PlotGrid,
   RankedBars,
 } from "@/app/insights/components/charts";
+import { KpiTile, type PeriodDelta } from "@/app/insights/components/KpiTile";
 import { TrendCharts } from "@/app/insights/components/TrendCharts";
-import { dailySeries, formatTokens } from "@/app/insights/insightsFormat.mjs";
+import {
+  dailySeries,
+  formatTokens,
+  periodDelta,
+} from "@/app/insights/insightsFormat.mjs";
 import {
   fetchRecordInsights,
   fetchRecordEvaluation,
@@ -23,12 +28,7 @@ import {
   type RecordReach,
   type EvaluationRun,
 } from "@/lib/insights";
-import {
-  scoreLabel,
-  scoreTone,
-  sessionSummary,
-} from "@/app/components/evaluationSummary.mjs";
-import { EvaluationPanel } from "./EvaluationPanel";
+import { EvaluationScores } from "./EvaluationScores";
 import { cn } from "@/lib/utils";
 
 /**
@@ -128,9 +128,18 @@ export function RecordUsageTab({
     (sum, tool) => sum + tool.tool_calls,
     0,
   );
+  // The tiles' sparkline and delta read the same days the trend below draws:
+  // the record's own days for an agent, the reach days for a skill or server.
+  const partial = insights.partial_day ?? null;
+  const dayPoints = reach ? reach.daily : insights.daily;
+  const series = dailySeries(dayPoints, partial) as Array<Record<string, unknown>>;
+  const deltaOf = (field: string) => periodDelta(dayPoints, field, partial) as PeriodDelta;
+  const count = (value: number) => value.toLocaleString("ko-KR");
 
   return (
-    <div className="space-y-3">
+    // `@container` so the plots' container queries have a container: without it
+    // the donut never sits beside its legend and the grid never goes two-up.
+    <div className="@container space-y-3">
       <div className="flex items-center gap-2 text-xs">
         {[7, 30].map((window) => (
           <button
@@ -146,125 +155,64 @@ export function RecordUsageTab({
         ))}
       </div>
       {reach ? (
-        <div className="space-y-2">
-          <dl className="grid grid-cols-3 gap-2 text-xs">
-            <div>
-              <dt className="text-muted-foreground">연결된 에이전트</dt>
-              <dd className="tabular-nums">
-                {reach.agents.toLocaleString("ko-KR")}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-muted-foreground">
-                {isSkillReach ? "도달한 턴" : "처리한 턴"}
-              </dt>
-              <dd className="tabular-nums">
-                {reach.turns.toLocaleString("ko-KR")}
-              </dd>
-            </div>
-            {/* A skill has no call count — nothing counts it being read — so the
-                tile is left out rather than shown as a 0 that looks measured. */}
-            {!isSkillReach && (
-              <div>
-                <dt className="text-muted-foreground">툴 호출</dt>
-                <dd className="tabular-nums">
-                  {toolCallTotal.toLocaleString("ko-KR")}
-                </dd>
-              </div>
-            )}
-          </dl>
-          {isSkillReach && (
-            <p className="text-xxs text-muted-foreground">
-              스킬은 호출 카운트가 없어 이 스킬을 붙인 에이전트가 처리한 턴으로 셉니다.
-            </p>
+        <div className={cn("grid grid-cols-1 gap-2", isSkillReach ? "@md:grid-cols-2" : "@md:grid-cols-3")}>
+          <KpiTile
+            label="연결된 에이전트"
+            value={count(reach.agents)}
+            hint={
+              isSkillReach
+                ? "이 기간에 이 스킬을 붙이고 턴을 처리한 에이전트"
+                : "이 기간에 이 서버를 호출한 에이전트"
+            }
+          />
+          <KpiTile
+            label={isSkillReach ? "도달한 턴" : "처리한 턴"}
+            value={count(reach.turns)}
+            hint={isSkillReach ? "스킬은 호출 카운트가 없어 붙인 에이전트의 턴으로 셉니다" : undefined}
+            delta={deltaOf("turns")}
+            spark={{ data: series, dataKey: "turns", colorIndex: METRIC_COLOR.turns }}
+          />
+          {!isSkillReach && (
+            <KpiTile
+              label="툴 호출"
+              value={count(toolCallTotal)}
+              delta={deltaOf("tool_calls")}
+              spark={{ data: series, dataKey: "tool_calls", colorIndex: METRIC_COLOR.tool_calls }}
+            />
           )}
         </div>
       ) : (
-        <dl className="grid grid-cols-2 gap-2 text-xs lg:grid-cols-4">
-          <div>
-            <dt className="text-muted-foreground">턴</dt>
-            <dd className="tabular-nums">
-              {(totals.turns ?? 0).toLocaleString("ko-KR")}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-muted-foreground">사용자</dt>
-            <dd className="tabular-nums">{insights.distinct_users}</dd>
-          </div>
-          <div>
-            <dt className="text-muted-foreground">입력 토큰</dt>
-            <dd className="tabular-nums">
-              {formatTokens(totals.input_tokens, totals.unmeasured_turns)}
-            </dd>
-          </div>
+        <div className="grid grid-cols-2 gap-2 @xl:grid-cols-4">
+          <KpiTile
+            label="턴"
+            value={count(totals.turns ?? 0)}
+            delta={deltaOf("turns")}
+            spark={{ data: series, dataKey: "turns", colorIndex: METRIC_COLOR.turns }}
+          />
+          <KpiTile label="사용자" value={count(insights.distinct_users)} />
+          <KpiTile
+            label="입력 토큰"
+            value={formatTokens(totals.input_tokens, totals.unmeasured_turns)}
+            delta={deltaOf("input_tokens")}
+            spark={{ data: series, dataKey: "input_tokens", colorIndex: METRIC_COLOR.input_tokens }}
+          />
           {/* Tool calls, not a cost estimate: the per-token figure that used to
               sit here was built from hand-transcribed list prices for models the
               Price List API does not publish. */}
-          <div>
-            <dt className="text-muted-foreground">툴 호출</dt>
-            <dd className="tabular-nums">
-              {(totals.tool_calls ?? 0).toLocaleString("ko-KR")}
-            </dd>
-          </div>
-        </dl>
-      )}
-
-      {/* Evaluation scores */}
-      {run && (
-        <div className="rounded bg-muted p-2 space-y-2">
-          <div className="text-xs font-medium text-muted-foreground">
-            {sessionSummary(run.sessions)}
-          </div>
-          {run.scores && run.scores.length > 0 && (
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="border-b border-muted-foreground/20">
-                  <th className="text-left py-1 px-1 font-medium">평가자</th>
-                  <th className="text-right py-1 px-1 font-medium">점수</th>
-                  <th className="text-right py-1 px-1 font-medium">평가됨</th>
-                </tr>
-              </thead>
-              <tbody>
-                {run.scores.map((score) => {
-                  const tone = scoreTone(score.average_score);
-                  return (
-                    <tr key={score.evaluator_id} className="border-b border-muted-foreground/10">
-                      <td className="py-1 px-1 text-muted-foreground">
-                        {score.evaluator_id}
-                      </td>
-                      <td
-                        className={cn(
-                          "text-right py-1 px-1",
-                          tone === "good"
-                            ? "text-green-600"
-                            : tone === "warn"
-                              ? "text-yellow-600"
-                              : tone === "bad"
-                                ? "text-red-600"
-                                : "text-muted-foreground",
-                        )}
-                      >
-                        {scoreLabel(score.average_score)}
-                      </td>
-                      <td className="text-right py-1 px-1 text-muted-foreground">
-                        {score.evaluated}/{score.evaluated + score.failed}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          )}
+          <KpiTile
+            label="툴 호출"
+            value={count(totals.tool_calls ?? 0)}
+            delta={deltaOf("tool_calls")}
+            spark={{ data: series, dataKey: "tool_calls", colorIndex: METRIC_COLOR.tool_calls }}
+          />
         </div>
       )}
-      {evaluation && evaluation.status === "none" && (
-        <div className="text-xs text-muted-foreground">평가한 적 없음</div>
-      )}
-      {/* The launcher sits with the scores it produces. It used to live under
-          every assistant message in the chat, which repeated it once per turn and
-          started runs nothing attributed back to this record. */}
-      {isAgent && <EvaluationPanel recordId={recordId} />}
 
+      {/* One stack of bands below the tiles, ruled the way PlotGrid rules its own
+          cells (a hairline in the border colour): the tools grid, the trend grid
+          and the scores grid used to be separate grids with only a gap between
+          them, so the hairline appeared inside a grid and vanished between two. */}
+      <div className="divide-y divide-border">
       {/* Who reaches this record, and what was called through it. The agents are
           a ranked list because the question is "who, and how much" — and each row
           opens that agent, which is where evaluation lives (a batch runs over one
@@ -332,6 +280,32 @@ export function RecordUsageTab({
       ) : (
         <TrendCharts daily={insights.daily} />
       )}
+
+      {/* Evaluation is per agent: a batch runs over one agent's threads, so only
+          an agent record has scores. Read-only here — the run is started from
+          Insights → 품질 평가, where the threads and evaluators are chosen, so
+          the registry stays the place that shows what a record is and how it
+          did, not the place that spends money on it. Last on the tab: the usage
+          figures above are what the record did, the scores are a verdict on it. */}
+      {isAgent && (
+        <PlotGrid>
+          <PlotCell>
+            <Plot
+              title="평가 점수"
+              hint="가장 최근 배치 평가의 평가자별 평균 점수입니다. 평가는 Insights 의 품질 평가에서 실행합니다."
+            >
+              {run ? (
+                <EvaluationScores run={run} />
+              ) : evaluation === null ? (
+                <LoadingState label="평가를 읽고 있습니다" />
+              ) : (
+                <EmptyPlot label="평가한 적 없음" />
+              )}
+            </Plot>
+          </PlotCell>
+        </PlotGrid>
+      )}
+      </div>
     </div>
   );
 }

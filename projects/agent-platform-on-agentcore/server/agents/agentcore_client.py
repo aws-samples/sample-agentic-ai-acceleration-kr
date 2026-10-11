@@ -64,6 +64,21 @@ _stream_executor = ThreadPoolExecutor(
 _STREAM_END = object()
 
 
+async def call_off_loop(fn: Any, **kwargs: Any) -> Any:
+    """Run one blocking boto3 call on the stream executor.
+
+    The invoke that opens a stream blocks too, not just the reads after it:
+    botocore returns from `invoke_agent_runtime` / `invoke_harness` only once
+    the response headers arrive, and a cold harness sends none for 30s or more.
+    Called straight from `execute_stream`, that wait owned the event loop.
+    Measured on the deployed server: two `content_creator` harness invokes
+    left the log silent for 32s, and `GET /api/org/users` (0.22s idle) took
+    32.2s, as did every other request that arrived in the gap.
+    """
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_stream_executor, lambda: fn(**kwargs))
+
+
 async def iter_blocking_stream(blocking_iterable: Any) -> AsyncIterator[Any]:
     """Iterate a blocking stream without holding the event loop.
 
@@ -767,7 +782,7 @@ class AgentCoreClient(AgentClient):
             # Invoke AgentCore Runtime - this returns a streaming response
             logger.info(f"Invoking AgentCore with ARN: {agent_runtime_arn}, qualifier: {qualifier}")
 
-            response = self.agentcore_client.invoke_agent_runtime(**invoke_params)
+            response = await call_off_loop(self.agentcore_client.invoke_agent_runtime, **invoke_params)
 
             # Check content type
             content_type = response.get("contentType", "")

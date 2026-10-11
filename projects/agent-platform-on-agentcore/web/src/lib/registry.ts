@@ -269,6 +269,23 @@ export async function getRegistryRecord(id: string): Promise<RegistryRecordDetai
 }
 
 /**
+ * What an agent runs with when a thread overrides nothing. Null = not knowable,
+ * not empty: a runtime's prompt is a constant inside its container that no API
+ * reads, while a harness carries both in its definition. The model is resolved
+ * by the same code that prices turns, so this and the ledger always agree.
+ */
+export interface AgentDefaults {
+  model_id?: string | null;
+  system_prompt?: string | null;
+}
+
+export async function getRecordDefaults(id: string): Promise<AgentDefaults> {
+  return request<AgentDefaults>(
+    `/api/registry/records/${encodeURIComponent(id)}/defaults`
+  );
+}
+
+/**
  * Re-fetch a synced record's definition from its sync URL. The record goes UPDATING
  * and then DRAFT, so it must be submitted again before the new definition is served.
  */

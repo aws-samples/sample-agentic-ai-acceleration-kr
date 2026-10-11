@@ -1118,7 +1118,7 @@ export default function HarnessPage() {
                       <Label htmlFor="h-team">팀</Label>
                       <select
                         id="h-team"
-                        className="h-9 rounded-md border bg-background px-2 text-sm"
+                        className="h-9 rounded-md border bg-background pl-2 pr-8 text-sm"
                         value={team}
                         onChange={(e) => setTeam(e.target.value)}
                         disabled={!!editing}

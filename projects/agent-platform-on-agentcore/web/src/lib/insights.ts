@@ -378,7 +378,10 @@ export interface RepriceReport {
 
 export interface BilledSnapshot {
   runtime_micros: number | null;
+  /** Window sum per component (runtime, gateway, memory, …), partial day included. */
   component: Record<string, number>;
+  /** Sum of `component`; null when no per-day component row has been written yet. */
+  total_micros: number | null;
   latest_day: string | null;
   ce_estimated: boolean;
   checked_at: string | null;
@@ -397,8 +400,10 @@ export interface CostDiff {
 }
 
 /**
- * The page's cost section. Ledger and collector are the figures; the bill is the
- * check. Nothing here is estimated at read time.
+ * The page's cost section. Ledger and collector are the figures; `billed` is what
+ * AgentCore actually charged (shown as its own widget) and `diff` is the bill's
+ * check on the Runtime figure (shown as one footnote). Nothing here is estimated
+ * at read time.
  */
 export interface CostBlock {
   model: ModelCost;
@@ -429,7 +434,7 @@ export interface ModelRow {
 export interface InsightsSummary extends WindowFields {
   sources: InsightsSources;
   totals: InsightsTotals;
-  /** Ledger + collector figures, with the bill as the check. */
+  /** Ledger + collector figures, plus the bill. */
   cost: CostBlock;
   agents: AgentUsageRow[];
   /** One row per model across agents, for the mix panel. */
@@ -686,20 +691,57 @@ export interface TeamUsageRow {
   policy_denials: number;
   denied_tools: Record<string, number>;
   daily_cost_alert_usd: number | null;
+  today_cost_micros: number;
+  max_day_cost_micros: number;
+  /** Days in the window at or over the alert; null when the team has no alert. */
+  days_over_alert: number | null;
+  /** Live group size; null when the directory could not say. */
+  members: number | null;
+  /** Dense over the window, oldest first. */
+  daily: TeamDailyPoint[];
+}
+
+export interface TeamDailyPoint {
+  date: string;
+  turns: number;
+  model_cost_micros: number;
+  failed_turns: number;
+  tool_calls: number;
+  policy_denials: number;
+}
+
+export interface PolicyDenialEvent {
+  at: string;
+  day: string;
+  team: string;
+  tool_name: string;
+  agent_record_id: string;
+  owner_sub: string;
+  thread_id: string;
+  turn_id: string;
 }
 
 export interface TeamInsights extends WindowFields {
   sources: { usage: boolean; policy_metrics: boolean };
   teams: TeamUsageRow[];
-  unattributed: { turns: number; model_cost_micros: number; policy_denials: number };
+  unattributed: {
+    turns: number;
+    model_cost_micros: number;
+    policy_denials: number;
+    daily: Array<{ date: string; turns: number; model_cost_micros: number; policy_denials: number }>;
+  };
   gateway_decisions: {
     allow: number;
     deny: number;
     by_tool: Record<string, number>;
     /** LOG_ONLY counts what would have been denied; only ENFORCE blocked calls. */
     by_mode?: Record<string, { allow: number; deny: number }>;
+    /** Only the days the collector measured; a missing day is not a zero. */
+    daily: Array<{ date: string; by_mode: Record<string, { allow: number; deny: number }> }>;
   };
-  recent_denials: { at: string; team: string; tool_name: string; agent_record_id: string; thread_id: string }[];
+  recent_denials: PolicyDenialEvent[];
+  /** sub -> email for the people `recent_denials` names. */
+  subjects: Record<string, string>;
 }
 
 /** Per-team spend and policy denials. 403 for a plain user, rendered as "관리자만". */

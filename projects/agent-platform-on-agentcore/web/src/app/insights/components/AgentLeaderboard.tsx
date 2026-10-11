@@ -36,8 +36,9 @@ import type { LeaderboardRow } from "@/lib/insights";
  *
  * The cost columns are all filled on load and none is an estimate: 모델 비용 was
  * priced when each turn ended, Runtime 비용 is CloudWatch quantities at the
- * published rate. The bill is not a column — it lags two days and is a check
- * on the Runtime figure, which the 청구서 대조 widget does once for the page.
+ * published rate. The bill is not a column — it lags two days; the AgentCore
+ * 청구 비용 widget shows it per agent, and its check on the Runtime figure is a
+ * footnote under 비용 구성.
  * "요율 미등록" says why a cost cell has no number instead of showing $0; a dash
  * is a figure that could not be stated.
  */

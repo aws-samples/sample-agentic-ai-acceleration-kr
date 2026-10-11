@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { SlidersHorizontal } from "lucide-react";
 import {
   Popover,
@@ -21,6 +21,8 @@ import { cn } from "@/lib/utils";
 import { getCapabilities } from "@/lib/capabilities";
 import { modelLabel } from "@/lib/modelLabel.mjs";
 import { hasOverrides } from "@/lib/agent-config";
+import { getRecordDefaults, type AgentDefaults } from "@/lib/registry";
+import { normalizeOverrideDraft } from "@/lib/overrideDefaults.mjs";
 import { useChatContext } from "@/providers/ChatProvider";
 
 /** Select cannot hold "", so the agent's own default gets a sentinel value. */
@@ -35,6 +37,13 @@ const DEFAULT_MODEL = "__agent_default__";
  * conversation, or steer it with an extra instruction, without recomposing or
  * redeploying it for everyone.
  *
+ * The agent's own defaults (GET /api/registry/records/{id}/defaults) are shown
+ * as the baseline: the default model item names the actual model, and the
+ * prompt box is pre-filled with the agent's prompt so the user edits what runs
+ * rather than guessing at it. A runtime agent's prompt is not knowable (it is a
+ * constant in the container), and the box says so. Whatever the user leaves
+ * equal to the default is not stored — see normalizeOverrideDraft.
+ *
  * The model list is the server's allow-list (GET /api/config), fetched when the
  * popover opens so an operator change shows up: offering anything else would
  * only end in a 403. A stored model that has since left the list is still shown,
@@ -46,19 +55,39 @@ const DEFAULT_MODEL = "__agent_default__";
  * no sign of which model answered.
  */
 export function ThreadOverrides({ className }: { className?: string }) {
-  const { overrides, setOverrides, overridesSupported, isLoading } =
+  const { overrides, setOverrides, overridesSupported, isLoading, agentConfig } =
     useChatContext();
+  const recordId = agentConfig?.registryRecordId;
   const [open, setOpen] = useState(false);
   const [modelId, setModelId] = useState(overrides.modelId ?? "");
   const [systemPrompt, setSystemPrompt] = useState(overrides.systemPrompt ?? "");
   const [allowedModels, setAllowedModels] = useState<string[] | null>(null);
+  // null = not fetched yet (or no record to ask about); fields null = unknowable.
+  const [defaults, setDefaults] = useState<AgentDefaults | null>(null);
+  const [defaultsFailed, setDefaultsFailed] = useState(false);
+
+  // What the prompt box shows when the user has typed nothing: the stored
+  // override, else the agent's own prompt once it has arrived.
+  const defaultPrompt = defaults?.system_prompt ?? "";
+  const promptBaseline = overrides.systemPrompt ?? defaultPrompt;
+  const promptBaselineRef = useRef(promptBaseline);
 
   // Re-sync the drafts whenever the popover opens or the stored value changes
-  // underneath (thread switched), so it never shows a stale draft.
+  // underneath (thread switched), so it never shows a stale draft. The prompt
+  // baseline also moves when the defaults arrive after opening; the draft
+  // follows only if the user has not started editing it.
   useEffect(() => {
     setModelId(overrides.modelId ?? "");
-    setSystemPrompt(overrides.systemPrompt ?? "");
-  }, [overrides.modelId, overrides.systemPrompt, open]);
+    // Read the previous baseline into a local before the updater runs: React
+    // may call the updater lazily, after the ref below has already moved on,
+    // and comparing against the *new* baseline left the box empty on the live
+    // site (the draft "" never matched the prompt that had just arrived).
+    const previousBaseline = promptBaselineRef.current;
+    promptBaselineRef.current = promptBaseline;
+    setSystemPrompt((draft) =>
+      draft === previousBaseline || !open ? promptBaseline : draft
+    );
+  }, [overrides.modelId, overrides.systemPrompt, promptBaseline, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -70,33 +99,60 @@ export function ThreadOverrides({ className }: { className?: string }) {
       .catch(() => {
         if (!cancelled) setAllowedModels([]);
       });
+    if (recordId) {
+      setDefaultsFailed(false);
+      getRecordDefaults(recordId)
+        .then((d) => {
+          if (!cancelled) setDefaults(d);
+        })
+        .catch(() => {
+          // Shown as "unknown"; the override still works without a baseline.
+          if (!cancelled) setDefaultsFailed(true);
+        });
+    }
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, recordId]);
+
+  // A different agent means different defaults; drop the old ones at once so
+  // the first open after switching never shows another agent's prompt.
+  useEffect(() => {
+    setDefaults(null);
+    setDefaultsFailed(false);
+  }, [recordId]);
 
   if (!overridesSupported) return null;
 
   const active = hasOverrides(overrides);
+  const next = normalizeOverrideDraft({ modelId, systemPrompt }, defaults);
   const dirty =
-    (modelId || "") !== (overrides.modelId ?? "") ||
-    (systemPrompt || "") !== (overrides.systemPrompt ?? "");
+    (next.modelId ?? "") !== (overrides.modelId ?? "") ||
+    (next.systemPrompt ?? "") !== (overrides.systemPrompt ?? "");
   const models = allowedModels ?? [];
   const storedUnlisted =
     !!modelId && allowedModels !== null && !models.includes(modelId);
   const showModel = allowedModels === null || models.length > 0 || storedUnlisted;
 
+  const defaultModelLabel = defaults?.model_id
+    ? `에이전트 기본 모델 · ${modelLabel(defaults.model_id)}`
+    : "에이전트 기본 모델";
+  const promptPlaceholder = !recordId || defaultsFailed
+    ? "비우면 에이전트의 프롬프트를 씁니다. 채우면 그것을 대체합니다."
+    : defaults === null
+      ? "기본 프롬프트를 불러오는 중…"
+      : defaults.system_prompt
+        ? "비우면 에이전트의 프롬프트를 씁니다."
+        : "이 에이전트의 기본 프롬프트는 런타임에 내장되어 조회할 수 없습니다. 비우면 그 프롬프트를, 채우면 이 내용을 씁니다.";
+
   const apply = () => {
-    setOverrides({
-      modelId: modelId.trim() || undefined,
-      systemPrompt: systemPrompt.trim() || undefined,
-    });
+    setOverrides(next);
     setOpen(false);
   };
 
   const reset = () => {
     setModelId("");
-    setSystemPrompt("");
+    setSystemPrompt(defaultPrompt);
     setOverrides({});
     setOpen(false);
   };
@@ -134,7 +190,7 @@ export function ThreadOverrides({ className }: { className?: string }) {
           <p className="text-xs font-semibold">이 대화만 덮어쓰기</p>
           <p className="mt-0.5 text-xxs leading-normal text-muted-foreground">
             에이전트 정의는 그대로 두고, 이 스레드의 턴에만 적용됩니다. 대화
-            메모리는 이어집니다.
+            메모리는 이어집니다. 기본값과 같게 두면 저장되지 않습니다.
           </p>
         </div>
 
@@ -151,10 +207,13 @@ export function ThreadOverrides({ className }: { className?: string }) {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value={DEFAULT_MODEL}>에이전트 기본 모델</SelectItem>
+                <SelectItem value={DEFAULT_MODEL} data-default-model={defaults?.model_id ?? ""}>
+                  {defaultModelLabel}
+                </SelectItem>
                 {models.map((id) => (
                   <SelectItem key={id} value={id}>
                     {modelLabel(id)}
+                    {id === defaults?.model_id && " · 기본"}
                   </SelectItem>
                 ))}
                 {storedUnlisted && (
@@ -170,14 +229,20 @@ export function ThreadOverrides({ className }: { className?: string }) {
         <div className="grid gap-1.5">
           <Label htmlFor="ov-prompt" className="text-xs">
             System prompt
+            {defaults?.system_prompt && !overrides.systemPrompt && (
+              <span className="ml-1.5 font-normal text-muted-foreground">
+                에이전트 기본값
+              </span>
+            )}
           </Label>
           <Textarea
             id="ov-prompt"
-            rows={4}
+            rows={6}
             value={systemPrompt}
             onChange={(e) => setSystemPrompt(e.target.value)}
-            placeholder="비우면 에이전트의 프롬프트를 씁니다. 채우면 그것을 대체합니다."
-            className="text-xs"
+            placeholder={promptPlaceholder}
+            data-default-prompt={defaults?.system_prompt ? "true" : "false"}
+            className="max-h-64 text-xs"
           />
         </div>
 

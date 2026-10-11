@@ -14,10 +14,15 @@ import {
   LineChart,
   Pie,
   PieChart,
+  ReferenceLine,
   ResponsiveContainer,
+  Scatter,
+  ScatterChart,
   Tooltip,
+  Treemap,
   XAxis,
   YAxis,
+  ZAxis,
 } from "recharts";
 
 import {
@@ -30,6 +35,7 @@ import {
   compactNumber,
   COST_COLOR,
   GRID,
+  METRIC_COLOR,
   MUTED_MARK,
   SERIES_CAP,
   SERIES_COLORS,
@@ -212,6 +218,62 @@ export function DailyColumns({
 }
 
 /**
+ * One series over time as a filled line, for a count that is read as a trend
+ * — how many people, how many interventions — rather than day against day.
+ *
+ * A line rather than columns: the reader asks "rising or falling", and thirty
+ * columns spend their ink on the gaps between days. The fill is faint so the
+ * line stays the mark; a day with no value is a hole, not a line drawn through.
+ */
+export function DailyArea({
+  data,
+  dataKey,
+  name,
+  colorIndex = 0,
+}: {
+  data: Array<Record<string, unknown>>;
+  dataKey: string;
+  name: string;
+  colorIndex?: number;
+}) {
+  const color = SERIES_COLORS[colorIndex];
+  return (
+    <div className="h-52 w-full">
+      <ResponsiveContainer width="100%" height="100%" minWidth={0}>
+        <AreaChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+          <CartesianGrid {...GRID} vertical={false} />
+          <XAxis dataKey="label" {...AXIS} interval="preserveStartEnd" />
+          <YAxis {...AXIS} width={56} tickFormatter={compactNumber} allowDecimals={false} />
+          <Tooltip
+            cursor={AXIS_CURSOR}
+            contentStyle={TOOLTIP_CONTENT}
+            labelStyle={TOOLTIP_LABEL}
+            itemStyle={TOOLTIP_ITEM}
+            formatter={tooltipValue}
+            labelFormatter={(_, payload) => tooltipDate(payload)}
+          />
+          {/* Straight segments with a dot per day: a smoothed curve between two
+              whole counts draws a hump that no day had. */}
+          <Area
+            type="linear"
+            dataKey={dataKey}
+            name={name}
+            stroke={color}
+            strokeWidth={2}
+            fill={color}
+            fillOpacity={AREA_OPACITY}
+            connectNulls={false}
+            dot={{ r: 3, fill: color, strokeWidth: 2, stroke: "hsl(var(--card))" }}
+            activeDot={{ r: 5, strokeWidth: 2, stroke: "hsl(var(--card))" }}
+            isAnimationActive={false}
+          />
+        </AreaChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+/**
  * Several series over time, overlaid on one shared axis — deliberately *not*
  * stacked.
  *
@@ -314,6 +376,127 @@ export function StackedDailyArea({
             />
           ))}
         </AreaChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+/**
+ * Counts or dollars per day, stacked by entity — for quantities that genuinely
+ * sum: every team's spend plus the unattributed remainder is the day's spend.
+ *
+ * A series carries either a palette slot or an explicit colour, so the
+ * remainder can wear `MUTED_MARK` and never read as one more team. Only the top
+ * segment of a day is rounded, which recharts cannot know, so none is.
+ */
+export function StackedDailyColumns({
+  data,
+  series,
+  format,
+  empty = "이 기간 기록이 없습니다.",
+  integer = false,
+}: {
+  data: Array<Record<string, unknown>>;
+  series: Array<{ key: string; name: string; colorIndex?: number | null; color?: string }>;
+  /** Tooltip formatter for one value, e.g. dollars; axis stays compact. */
+  format?: (value: number) => string;
+  empty?: string;
+  /** Counts: whole-number ticks only, so a 3-denial day is not read on a 0.75 grid. */
+  integer?: boolean;
+}) {
+  const total = data.reduce(
+    (sum, row) => sum + series.reduce((n, s) => n + Number(row[s.key] || 0), 0),
+    0,
+  );
+  if (data.length === 0 || total <= 0) return <EmptyPlot label={empty} />;
+  return (
+    <div className="h-52 w-full">
+      <ResponsiveContainer width="100%" height="100%" minWidth={0}>
+        <BarChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+          <CartesianGrid {...GRID} vertical={false} />
+          <XAxis dataKey="label" {...AXIS} interval="preserveStartEnd" />
+          <YAxis {...AXIS} width={56} tickFormatter={compactNumber} allowDecimals={!integer} />
+          <Tooltip
+            cursor={BAR_CURSOR}
+            contentStyle={TOOLTIP_CONTENT}
+            labelStyle={TOOLTIP_LABEL}
+            itemStyle={TOOLTIP_ITEM}
+            formatter={(value, name) =>
+              format ? [format(Number(value)), String(name)] : tooltipValue(value, name)
+            }
+            labelFormatter={(_, payload) => tooltipDate(payload)}
+          />
+          <Legend wrapperStyle={{ fontSize: "0.75rem" }} />
+          {series.map((entry) => (
+            <Bar
+              key={entry.key}
+              dataKey={entry.key}
+              name={entry.name}
+              stackId="day"
+              fill={entry.color ?? SERIES_COLORS[(entry.colorIndex ?? 0) % SERIES_CAP]}
+              maxBarSize={BAR_MAX_SIZE}
+              isAnimationActive={false}
+            />
+          ))}
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+/**
+ * One entity's daily value against a line it should stay under — a team's
+ * spend against its daily alert — at small-multiple size.
+ *
+ * Columns, not a line: each day is judged on its own, and a line between two
+ * days would draw a slope through a threshold neither day crossed. A column
+ * that reached the line takes the alert hue; the rest stay in the series hue.
+ * No y-axis: the threshold is the scale, stated in the caption.
+ */
+export function ThresholdColumns({
+  data,
+  threshold,
+  colorIndex = 0,
+  format,
+}: {
+  data: Array<{ label: string; date: string; cost: number; over: boolean }>;
+  threshold: number | null;
+  colorIndex?: number;
+  format: (value: number) => string;
+}) {
+  return (
+    <div className="h-20 w-full">
+      <ResponsiveContainer width="100%" height="100%" minWidth={0}>
+        <BarChart data={data} margin={{ top: 6, right: 2, bottom: 0, left: 2 }}>
+          <XAxis dataKey="label" hide />
+          {/* The domain reaches the threshold, so an idle team still shows where its line sits. */}
+          <YAxis hide domain={[0, (max: number) => Math.max(max, threshold ?? 0) * 1.1 || 1]} />
+          <Tooltip
+            cursor={BAR_CURSOR}
+            contentStyle={TOOLTIP_CONTENT}
+            labelStyle={TOOLTIP_LABEL}
+            itemStyle={TOOLTIP_ITEM}
+            allowEscapeViewBox={{ x: false, y: true }}
+            formatter={(value) => [format(Number(value)), "모델 비용"]}
+            labelFormatter={(_, payload) => tooltipDate(payload)}
+          />
+          {threshold !== null && (
+            <ReferenceLine
+              y={threshold}
+              stroke={SERIES_COLORS[METRIC_COLOR.failed_turns]}
+              strokeDasharray="4 3"
+              ifOverflow="extendDomain"
+            />
+          )}
+          <Bar dataKey="cost" maxBarSize={14} radius={[2, 2, 0, 0]} isAnimationActive={false}>
+            {data.map((point) => (
+              <Cell
+                key={point.date}
+                fill={point.over ? SERIES_COLORS[METRIC_COLOR.failed_turns] : SERIES_COLORS[colorIndex % SERIES_CAP]}
+              />
+            ))}
+          </Bar>
+        </BarChart>
       </ResponsiveContainer>
     </div>
   );
@@ -471,6 +654,10 @@ export function ShareBar({
   );
 }
 
+/** A share as a whole percent, with "<1%" so a real sliver never reads as none. */
+const shareLabel = (share: number) =>
+  share > 0 && share < 0.005 ? "<1%" : `${Math.round(share * 100)}%`;
+
 /**
  * Part-to-whole as a donut plus the same legend `ShareBar` carries.
  *
@@ -487,20 +674,34 @@ export function ShareBar({
 export function DonutShare({
   segments,
   totalLabel,
+  format,
   empty = "이 기간에 호출된 툴이 없습니다.",
 }: {
-  segments: Array<{ name: string; value: number }>;
+  /**
+   * With `colorIndex` on every segment the caller owns order, folding and hue —
+   * for a fixed set of entities whose colour must not move when a window change
+   * reorders them by size. Without it the tail folds by size here.
+   */
+  segments: Array<{ name: string; value: number; colorIndex?: number }>;
   /** Unit for the centre total, e.g. "회". */
   totalLabel?: string;
+  /** Formats the centre total, legend values and tooltip, e.g. dollars. */
+  format?: (value: number) => string;
   empty?: string;
 }) {
   const total = segments.reduce((sum, segment) => sum + segment.value, 0);
   if (segments.length === 0 || total <= 0) return <EmptyPlot label={empty} />;
-  const data = topNWithOther(segments, SERIES_CAP) as Array<{
+  const fixed = segments.every((segment) => segment.colorIndex !== undefined);
+  const data = (fixed ? segments : topNWithOther(segments, SERIES_CAP)) as Array<{
     name: string;
     value: number;
     folded?: number;
+    colorIndex?: number;
   }>;
+  const colorOf = (index: number) =>
+    SERIES_COLORS[(data[index].colorIndex ?? index) % SERIES_CAP];
+  const show = (value: number) =>
+    format ? format(value) : `${value.toLocaleString("ko-KR")}${totalLabel ?? ""}`;
 
   return (
     <div className="flex flex-col gap-2 @md:flex-row @md:items-center">
@@ -513,26 +714,29 @@ export function DonutShare({
               nameKey="name"
               innerRadius={52}
               outerRadius={76}
-              paddingAngle={2}
-              stroke="hsl(var(--card))"
+              // One slice is the whole ring; a gap would cut it at 3 o'clock.
+              paddingAngle={data.length > 1 ? 2 : 0}
+              stroke={data.length > 1 ? "hsl(var(--card))" : "none"}
               strokeWidth={BAR_GAP}
               isAnimationActive={false}
             >
               {data.map((segment, index) => (
-                <Cell key={segment.name} fill={SERIES_COLORS[index % SERIES_CAP]} />
+                <Cell key={segment.name} fill={colorOf(index)} />
               ))}
             </Pie>
             <Tooltip
               contentStyle={TOOLTIP_CONTENT}
               labelStyle={TOOLTIP_LABEL}
               itemStyle={TOOLTIP_ITEM}
-              formatter={(value) => [`${Number(value).toLocaleString("ko-KR")}${totalLabel ?? ""}`, ""]}
+              // Value and the slice's name: returning an empty second element
+              // dropped the tool name and left a bare count on hover.
+              formatter={(value, name) => [show(Number(value)), String(name)]}
             />
           </PieChart>
         </ResponsiveContainer>
         <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
           <span className="text-base font-semibold tabular-nums">
-            {total.toLocaleString("ko-KR")}
+            {format ? format(total) : total.toLocaleString("ko-KR")}
           </span>
           {totalLabel && <span className="text-xxs text-muted-foreground">{totalLabel}</span>}
         </div>
@@ -542,21 +746,237 @@ export function DonutShare({
           <li key={segment.name} className="flex min-w-0 items-center gap-1.5 text-xs">
             <span
               className="size-2 shrink-0 rounded-sm"
-              style={{ backgroundColor: SERIES_COLORS[index % SERIES_CAP] }}
+              style={{ backgroundColor: colorOf(index) }}
             />
             <span className="min-w-0 truncate text-muted-foreground" title={segment.name}>
               {segment.name}
               {segment.folded ? ` (${segment.folded}개)` : ""}
             </span>
             <span className="ml-auto shrink-0 tabular-nums">
-              {segment.value.toLocaleString("ko-KR")}
+              {format ? format(segment.value) : segment.value.toLocaleString("ko-KR")}
             </span>
             <span className="w-9 shrink-0 text-right text-xxs tabular-nums text-muted-foreground">
-              {Math.round(shareOf(segment.value, total) * 100)}%
+              {shareLabel(shareOf(segment.value, total))}
             </span>
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+export interface TreemapEntry {
+  [key: string]: unknown;
+  name: string;
+  value: number;
+  /** Shown under the name inside the tile, pre-formatted. */
+  display: string;
+  id?: string;
+  /** Grey instead of the hue: a remainder that is no one entity (e.g. unattributed). */
+  muted?: boolean;
+}
+
+/**
+ * Part-to-whole across many named entities, as area.
+ *
+ * For a list too long for a donut's eight hues — every agent on the platform —
+ * where the question is still "who is the bulk of it". One hue: the tile's area
+ * is the value, so colouring by entity would spend a channel on identity the
+ * label inside the tile already carries. The 2px surface gap separates tiles.
+ * Tiles too small for their label are left unlabelled and named on hover; the
+ * table beside it (leaderboard) carries every exact figure.
+ */
+export function TreemapShare({
+  entries,
+  color = COST_COLOR,
+  empty = "이 기간에 비용이 기록된 에이전트가 없습니다.",
+}: {
+  entries: TreemapEntry[];
+  color?: string;
+  empty?: string;
+}) {
+  const data = entries.filter((entry) => entry.value > 0);
+  if (data.length === 0) return <EmptyPlot label={empty} />;
+  const total = data.reduce((sum, entry) => sum + entry.value, 0);
+
+  return (
+    <div className="h-64 w-full">
+      <ResponsiveContainer width="100%" height="100%" minWidth={0}>
+        <Treemap
+          data={data}
+          dataKey="value"
+          nameKey="name"
+          aspectRatio={4 / 3}
+          isAnimationActive={false}
+          content={(props: TreemapTileProps) => (
+            <TreemapTile {...props} color={color} total={total} />
+          )}
+        >
+          <Tooltip
+            contentStyle={TOOLTIP_CONTENT}
+            labelStyle={TOOLTIP_LABEL}
+            itemStyle={TOOLTIP_ITEM}
+            formatter={(_value, _name, item) => {
+              const entry = item?.payload as TreemapEntry | undefined;
+              return [
+                `${entry?.display ?? ""} · ${shareLabel(shareOf(entry?.value ?? 0, total))}`,
+                entry?.name ?? "",
+              ];
+            }}
+          />
+        </Treemap>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+interface TreemapTileProps {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  depth?: number;
+  name?: string;
+  value?: number;
+  display?: string;
+  muted?: boolean;
+}
+
+function TreemapTile({
+  x = 0,
+  y = 0,
+  width = 0,
+  height = 0,
+  depth,
+  name,
+  value = 0,
+  display,
+  muted,
+  color,
+  total,
+}: TreemapTileProps & { color: string; total: number }) {
+  // The root node spans the whole plot; only leaves are drawn.
+  if (depth === 0) return null;
+  const roomy = width > 72 && height > 36;
+  return (
+    <g>
+      <rect
+        x={x}
+        y={y}
+        width={width}
+        height={height}
+        rx={4}
+        fill={muted ? MUTED_MARK : color}
+        // A tint, so the label inside can wear text ink in both themes rather
+        // than white on a hue that is light in dark mode. One opacity for all:
+        // bigger tiles a step darker would restate the area.
+        fillOpacity={0.3}
+        stroke="hsl(var(--card))"
+        strokeWidth={BAR_GAP}
+      />
+      {roomy && (
+        <>
+          <text x={x + 8} y={y + 18} fill="hsl(var(--foreground))" fontSize={12} fontWeight={600}>
+            {clip(name ?? "", width)}
+          </text>
+          <text x={x + 8} y={y + 34} fill="hsl(var(--muted-foreground))" fontSize={11}>
+            {display} · {shareLabel(shareOf(value, total))}
+          </text>
+        </>
+      )}
+    </g>
+  );
+}
+
+/** A label cut to what fits a tile, at ~7px a character. */
+const clip = (text: string, width: number) => {
+  const fits = Math.max(Math.floor((width - 16) / 7), 1);
+  return text.length > fits ? `${text.slice(0, Math.max(fits - 1, 1))}…` : text;
+};
+
+export interface ScatterEntry {
+  name: string;
+  x: number;
+  y: number;
+  id?: string;
+}
+
+/**
+ * Two measures of the same entity against each other, one dot per entity.
+ *
+ * For the question two ranked lists side by side make the reader answer by eye
+ * — whose few turns are expensive — the dot above the crowd answers it. Each
+ * axis has its own scale and unit; neither is a second y-axis over one x.
+ */
+export function ScatterPlot({
+  entries,
+  xName,
+  yName,
+  colorIndex = 0,
+  empty = "표시할 값이 없습니다.",
+}: {
+  entries: ScatterEntry[];
+  xName: string;
+  yName: string;
+  colorIndex?: number;
+  empty?: string;
+}) {
+  if (entries.length === 0) return <EmptyPlot label={empty} />;
+  return (
+    <div className="h-64 w-full">
+      <ResponsiveContainer width="100%" height="100%" minWidth={0}>
+        <ScatterChart margin={{ top: 8, right: 12, bottom: 16, left: 0 }}>
+          <CartesianGrid {...GRID} />
+          <XAxis
+            type="number"
+            dataKey="x"
+            name={xName}
+            {...AXIS}
+            tickFormatter={compactNumber}
+            label={{ value: xName, position: "insideBottom", offset: -8, fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
+          />
+          <YAxis
+            type="number"
+            dataKey="y"
+            name={yName}
+            {...AXIS}
+            width={56}
+            tickFormatter={compactNumber}
+          />
+          {/* A fixed dot size: a third channel by area would be a bubble chart,
+              and this has no third measure. */}
+          <ZAxis range={[64, 64]} />
+          <Tooltip
+            cursor={AXIS_CURSOR}
+            contentStyle={TOOLTIP_CONTENT}
+            labelStyle={TOOLTIP_LABEL}
+            itemStyle={TOOLTIP_ITEM}
+            content={({ active, payload }) => {
+              const entry = payload?.[0]?.payload as ScatterEntry | undefined;
+              if (!active || !entry) return null;
+              return (
+                <div style={{ ...TOOLTIP_CONTENT, padding: "8px 10px" }}>
+                  <div style={TOOLTIP_LABEL}>{entry.name}</div>
+                  <div style={TOOLTIP_ITEM}>
+                    {xName} {entry.x.toLocaleString("ko-KR")}
+                  </div>
+                  <div style={TOOLTIP_ITEM}>
+                    {yName} {entry.y.toLocaleString("ko-KR")}
+                  </div>
+                </div>
+              );
+            }}
+          />
+          <Scatter
+            data={entries}
+            fill={SERIES_COLORS[colorIndex]}
+            fillOpacity={0.8}
+            stroke="hsl(var(--card))"
+            strokeWidth={2}
+            isAnimationActive={false}
+          />
+        </ScatterChart>
+      </ResponsiveContainer>
     </div>
   );
 }
@@ -607,109 +1027,6 @@ export function CostColumns({
           />
         </BarChart>
       </ResponsiveContainer>
-    </div>
-  );
-}
-
-/**
- * Two values that measure the same thing, on one axis.
- *
- * This replaces a two-bar bar chart. Two bars put the reader's work in comparing
- * two lengths from a shared baseline, and the quantity actually being audited here
- * is neither length — it is the *gap*: an estimate is only interesting to the
- * extent it misses. A dumbbell draws that gap as the mark between the two points
- * and states it as a figure, so "얼마나 빗나갔나" is read rather than derived.
- *
- * One hue in two treatments, per the mark spec: the measured value is a filled dot
- * and the estimate is a ring. Shape, not just colour, so the two are still
- * distinguishable where the hue is not.
- */
-export function Dumbbell({
-  reference,
-  actual,
-  format,
-}: {
-  /** The value being checked — drawn as a ring. */
-  reference: { name: string; value: number };
-  /** The value doing the checking — drawn filled, because it is the authority. */
-  actual: { name: string; value: number };
-  format: (value: number) => string;
-}) {
-  const color = SERIES_COLORS[0];
-  // 8% of headroom, so a dot sitting at the maximum is not clipped by the track's
-  // own right edge.
-  const scale = Math.max(reference.value, actual.value, 0) * 1.08;
-  const at = (value: number) => `${shareOf(value, scale) * 100}%`;
-  const [lo, hi] = [reference.value, actual.value].sort((a, b) => a - b);
-  const delta = actual.value - reference.value;
-  const pct = reference.value > 0 ? (delta / reference.value) * 100 : null;
-
-  return (
-    <div className="space-y-2">
-      <div className="relative h-8">
-        {/* The full axis, so the two points read as positions on a scale from zero
-            rather than as two free-floating marks. */}
-        <span className="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-border" />
-        <span
-          className="absolute top-1/2 h-1 -translate-y-1/2 rounded-full"
-          style={{
-            left: at(lo),
-            width: `${shareOf(hi - lo, scale) * 100}%`,
-            backgroundColor: color,
-            opacity: 0.35,
-          }}
-        />
-        {[
-          { entry: reference, filled: false },
-          { entry: actual, filled: true },
-        ].map(({ entry, filled }) => (
-          <span
-            key={entry.name}
-            className="absolute top-1/2 size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full"
-            style={{
-              left: at(entry.value),
-              backgroundColor: filled ? color : "hsl(var(--card))",
-              // A 2px surface ring, so the two dots stay separate marks where they
-              // land close enough to touch.
-              boxShadow: `0 0 0 2px hsl(var(--card))`,
-              border: `2px solid ${color}`,
-            }}
-            title={`${entry.name} ${format(entry.value)}`}
-          />
-        ))}
-      </div>
-      {/* Both figures and the gap, in text. Nothing here is gated behind hover. */}
-      <ul className="space-y-1 text-xs">
-        {[
-          { entry: actual, filled: true },
-          { entry: reference, filled: false },
-        ].map(({ entry, filled }) => (
-          <li key={entry.name} className="flex items-center gap-1.5">
-            <span
-              className="size-2 shrink-0 rounded-full"
-              style={{
-                backgroundColor: filled ? color : "transparent",
-                border: `1.5px solid ${color}`,
-              }}
-            />
-            <span className="min-w-0 truncate text-muted-foreground">{entry.name}</span>
-            <span className="ml-auto shrink-0 tabular-nums">{format(entry.value)}</span>
-          </li>
-        ))}
-        <li className="flex items-center gap-1.5 border-t border-border pt-1">
-          <span className="text-muted-foreground">청구서 − 이 페이지</span>
-          <span className="ml-auto shrink-0 tabular-nums">
-            {delta >= 0 ? "+" : "−"}
-            {format(Math.abs(delta))}
-            {pct !== null && (
-              <span className="ml-1 text-muted-foreground">
-                ({delta >= 0 ? "+" : "−"}
-                {Math.abs(pct).toFixed(0)}%)
-              </span>
-            )}
-          </span>
-        </li>
-      </ul>
     </div>
   );
 }

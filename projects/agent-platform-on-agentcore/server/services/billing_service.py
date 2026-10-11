@@ -696,19 +696,23 @@ class BillingService:
         *,
         repository: Any,
         ledger_agent_days: Dict[Tuple[str, str], Dict[str, int]],
-        ledger_components: Dict[str, int],
     ) -> Dict[str, Any]:
-        """Snapshot the bill against the ledger into `RECON#` items.
+        """Snapshot the bill into `RECON#` items.
 
-        Three comparisons, each written as its own item so the page can read them
+        Three reads, each written as its own item so the page can read them
         without touching Cost Explorer:
 
         * **agent × day runtime** — CE grouped by the `AgentName` tag and usage
           type (DAILY) against the collector's `RESOURCES#` day items, keyed by
           registry agent name. `diff_micros` is billed minus ours; the untagged
           bucket is reported separately, never attributed.
-        * **component** — `agentcore_costs` per component against our summed
-          component costs for the window.
+        * **component × day** — `agentcore_costs` split per billed day and
+          component, nothing compared: this is the figure the page shows as
+          "what AgentCore billed this platform", summed over whatever window
+          the reader picks. (Until 2026-10-10 this was one row holding the
+          whole window's sum under the check's end date, so a 7-day page read a
+          30-day figure. Those `component` rows stay in DDB unread; the kind
+          changed to `component_day` so they are never summed in.)
         * **model rate** — the rate the account was actually charged per
           (family, routing, tier) in *our* region against the repository rate
           card. A mismatch is a finding: the card is code and is fixed in code.
@@ -800,27 +804,26 @@ class BillingService:
             write(day, "agent_runtime", agent, {k: v for k, v in row.items() if v is not None and k not in ("agent", "day")})
             agent_rows.append(row)
 
-        # 2. components
+        # 2. component × day
         component_rows: List[Dict[str, Any]] = []
         try:
             costs = self.agentcore_costs(start_date, end_date)
         except BillingUnavailable:
             costs = None
         if costs:
-            for component, bucket in sorted(costs["by_component"].items()):
-                billed_micros = to_micro(bucket["cost"])
-                ours_micros = ledger_components.get(component)
-                row = {
-                    "component": component,
-                    "billed_micros": billed_micros,
-                    "ours_micros": ours_micros,
-                    "ce_estimated": bool(costs.get("estimated")),
-                    "checked_at": checked_at,
-                }
-                if ours_micros is not None:
-                    row["diff_micros"] = billed_micros - int(ours_micros)
-                write(end_date, "component", component, {k: v for k, v in row.items() if v is not None and k != "component"})
-                component_rows.append(row)
+            estimated_days = costs.get("estimated_days") or set()
+            for day, by_component in sorted(costs["by_day_component"].items()):
+                for component, cost in sorted(by_component.items()):
+                    row = {
+                        "day": day,
+                        "component": component,
+                        "billed_micros": to_micro(cost),
+                        "ce_estimated": day in estimated_days,
+                        "checked_at": checked_at,
+                    }
+                    write(day, "component_day", component,
+                          {k: v for k, v in row.items() if k not in ("day", "component")})
+                    component_rows.append(row)
 
         # 3. model rates, our region only — one row per (family, routing, tier, day).
         #
@@ -1029,11 +1032,17 @@ class BillingService:
         """
         total = 0.0
         estimated = False
+        estimated_days: set = set()
         by_component: Dict[str, Dict[str, float]] = {}
         by_date: Dict[str, float] = {}
+        by_day_component: Dict[str, Dict[str, float]] = {}
 
         for period in results:
+            date = (period.get("TimePeriod") or {}).get("Start")
             estimated = estimated or bool(period.get("Estimated"))
+            if period.get("Estimated"):
+                estimated_days.add(date)
+            day_components = by_day_component.setdefault(date, {})
             day_cost = 0.0
             for entry in period.get("Groups") or []:
                 usage_type = (entry.get("Keys") or [""])[0]
@@ -1052,11 +1061,12 @@ class BillingService:
                     bucket["vcpu_hours"] += quantity
                 elif unit in _GB_UNITS:
                     bucket["gb_hours"] += quantity
+                key = component_of(usage_type)
+                day_components[key] = day_components.get(key, 0.0) + cost
 
                 total += cost
                 day_cost += cost
 
-            date = (period.get("TimePeriod") or {}).get("Start")
             by_date[date] = by_date.get(date, 0.0) + day_cost
 
         return {
@@ -1069,5 +1079,12 @@ class BillingService:
                 {"date": date, "cost": round(cost, 6)}
                 for date, cost in sorted(by_date.items(), key=lambda pair: pair[0] or "")
             ],
+            # Same money as `by_component`, with the day axis kept: the
+            # reconciliation stores one row per (day, component).
+            "by_day_component": {
+                date: {name: round(cost, 6) for name, cost in components.items()}
+                for date, components in sorted(by_day_component.items(), key=lambda pair: pair[0] or "")
+            },
             "estimated": estimated,
+            "estimated_days": estimated_days,
         }

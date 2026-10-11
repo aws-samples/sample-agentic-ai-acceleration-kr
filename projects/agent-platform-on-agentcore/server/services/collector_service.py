@@ -663,10 +663,9 @@ class CollectorService:
         now = now or clock.now()
         end_date = clock.date_of(now)
         start_date = clock.date_of(now - timedelta(days=days - 1))
-        agent_days, components = self.ledger_inputs(start_date, end_date)
+        agent_days, _ = self.ledger_inputs(start_date, end_date)
         summary = self.billing.reconcile(
-            start_date, end_date, repository=self.repository,
-            ledger_agent_days=agent_days, ledger_components=components,
+            start_date, end_date, repository=self.repository, ledger_agent_days=agent_days,
         )
         # A rate learned just now belongs to turns already written — the days
         # it was observed on, and any turn on that model since. Reload, then

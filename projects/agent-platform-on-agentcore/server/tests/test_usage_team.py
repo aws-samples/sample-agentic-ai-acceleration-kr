@@ -80,3 +80,18 @@ def test_unattributed_denial_uses_the_dash_team_key():
     svc = UsageService(repository=repo)
     svc.record_policy_denial(agent_record_id="rec-1", owner_sub="", team=None, tool_name="x", date="2026-10-10")
     assert any(sk == "D#2026-10-10#G#-" for pk, sk, _ in repo.calls if pk == "POLICY_TEAMS#2026-10")
+
+
+def test_team_daily_costs_keeps_each_day_apart():
+    repo = StubRepo()
+    svc = UsageService(repository=repo)
+    turn(svc, team="finance", date="2026-10-09", turn_id="t1")
+    turn(svc, team="finance", date="2026-10-10", turn_id="t2")
+    turn(svc, team="hr", date="2026-10-10", turn_id="t3")
+    # A priced flush folds onto the same (day, team) item; the day must not merge into the window total.
+    repo.calls.append(("TEAMS#2026-10", "D#2026-10-09#G#finance", {"model_cost_micros": 2_500_000}))
+    repo.calls.append(("TEAMS#2026-10", "D#2026-10-10#G#finance", {"model_cost_micros": 400_000}))
+    daily = svc.team_daily_costs("2026-10-01", "2026-10-31")
+    assert daily["finance"] == {"2026-10-09": 2_500_000, "2026-10-10": 400_000}
+    assert daily["hr"] == {"2026-10-10": 0}
+    assert "sales" not in daily

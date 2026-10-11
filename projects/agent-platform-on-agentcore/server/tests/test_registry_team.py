@@ -14,6 +14,7 @@ def service(approved=None, details=None, fail_batch=False):
     svc.registry_id = "r"
     svc.region = "us-east-1"
     svc._team_cache = {}
+    svc._record_memo = rs.VersionMemo()
     approved = approved or {}
     details = details or {}
 

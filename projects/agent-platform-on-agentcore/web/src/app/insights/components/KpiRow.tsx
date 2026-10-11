@@ -1,13 +1,10 @@
 "use client";
 
-import { ArrowDownRight, ArrowUpRight, Minus } from "lucide-react";
-
 import { METRIC_COLOR } from "@/app/components/chartTheme";
 import {
   cacheHitRate,
   coverageHint,
   dailySeries,
-  formatDelta,
   formatMicros,
   formatRate,
   formatTokens,
@@ -16,6 +13,7 @@ import {
 } from "@/app/insights/insightsFormat.mjs";
 import type { InsightsSummary } from "@/lib/insights";
 import { Sparkline } from "./charts";
+import { KpiDelta as Delta, KpiTile as Tile, type PeriodDelta } from "./KpiTile";
 
 /**
  * One figure per tile, and none of them is an estimate.
@@ -24,7 +22,7 @@ import { Sparkline } from "./charts";
  * by the chat stream as each turn ended, model cost from the repository rate
  * card at that same moment. Runtime/Gateway/Memory are folded into the 총비용
  * headline only; their breakdown and the bill comparison live in their own
- * widgets (비용 구성, AWS 청구서 대조), so this row stays about what the chat did.
+ * widgets (비용 구성, AgentCore 청구 비용), so this row stays about what the chat did.
  *
  * The tiles used to carry a source badge each ("원장" / "계측" / "청구"). An admin
  * reading this page does not need to know which system produced a figure — only
@@ -32,59 +30,6 @@ import { Sparkline } from "./charts";
  * is a dash with its reason in the caption, never a number with a caveat. A
  * complete figure carries no caption at all.
  */
-
-type PeriodDelta = { pct: number; half: number; earlier: number; later: number } | null;
-
-function Delta({ delta }: { delta: PeriodDelta }) {
-  const pct = delta ? Math.round(delta.pct) : 0;
-  const Icon = !delta || pct === 0 ? Minus : pct > 0 ? ArrowUpRight : ArrowDownRight;
-
-  return (
-    <span className="inline-flex items-center gap-1 text-xxs text-muted-foreground">
-      <Icon className="size-3 shrink-0" />
-      <span className="tabular-nums">{formatDelta(delta)}</span>
-      {delta && <span className="opacity-70">· 앞 {delta.half}일 대비</span>}
-    </span>
-  );
-}
-
-function Tile({
-  label,
-  value,
-  hint,
-  spark,
-  delta,
-}: {
-  label: string;
-  value: string;
-  hint?: string;
-  spark?: {
-    data: Array<Record<string, unknown>>;
-    dataKey: string;
-    colorIndex: number;
-  };
-  delta?: PeriodDelta;
-}) {
-  return (
-    <div className="flex h-full flex-col justify-between rounded-md border border-border p-3">
-      <div>
-        <div className="mb-1 text-xs text-muted-foreground">{label}</div>
-        <div className="text-lg font-semibold">{value}</div>
-        {delta !== undefined && (
-          <div className="mt-0.5">
-            <Delta delta={delta} />
-          </div>
-        )}
-        {hint && <div className="mt-1 text-xxs text-muted-foreground">{hint}</div>}
-      </div>
-      {spark && (
-        <div className="mt-2">
-          <Sparkline data={spark.data} dataKey={spark.dataKey} name={label} colorIndex={spark.colorIndex} />
-        </div>
-      )}
-    </div>
-  );
-}
 
 export function KpiRow({ summary }: { summary: InsightsSummary }) {
   const { totals, cost } = summary;

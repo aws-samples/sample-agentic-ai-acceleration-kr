@@ -308,34 +308,9 @@ variable "allow_destroy" {
   default     = false
 }
 
-# Teams. Each name becomes a Cognito group `team:<name>`, a harness execution
-# role `${project}-harness-<name>`, and (with enable_gateway_policy) a set of
-# Cedar policies naming the tools that role may call. Empty = no team features.
-variable "teams" {
-  type        = list(string)
-  description = "Team names (lowercase, [a-z0-9-]). Empty disables every team feature."
-  default     = []
-
-  validation {
-    # "execution" would collide with the default harness role
-    # `${project}-harness-execution`; the length keeps the longest policy name
-    # (`<project>_team_<team>_expense_limit`) near the 48-char limit.
-    condition = alltrue([
-      for t in var.teams : can(regex("^[a-z0-9-]{1,16}$", t)) && t != "execution"
-    ])
-    error_message = "Each team name must match ^[a-z0-9-]+$ (at most 16 characters) and must not be \"execution\"."
-  }
-}
-
-variable "team_allowed_model_arns" {
-  type        = map(string)
-  description = "team name => comma-separated Bedrock model/inference-profile ARNs that team's harness role may invoke. A team not listed (or an empty value) may invoke any model."
-  default     = {}
-}
-
 variable "enable_gateway_policy" {
   type        = bool
-  description = "Create an AgentCore policy engine and attach it to the Lambda tools gateway with per-team Cedar policies."
+  description = "Create an AgentCore policy engine and attach it to the Lambda tools gateway. Terraform writes the platform permit; the Organization page writes each team's policies at runtime."
   default     = false
 }
 
@@ -347,18 +322,8 @@ variable "policy_mode" {
 
 variable "team_shared_actions" {
   type        = list(string)
-  description = "Fully-qualified Cedar actions (<target>___<tool>) every team harness role may call on the MCP gateway beyond its Lambda tools. Empty = the web-search connector's tool (<project>-web-search___WebSearch) when web_search_backend = agentcore, else none. Every entry must exist on the gateway: an unknown action fails the whole policy."
+  description = "Fully-qualified Cedar actions (<target>___<tool>) every team role may call on the MCP gateway beyond its own tools; the server adds them to each team's policies (TEAM_SHARED_ACTIONS). Empty = the web-search connector's tool (<project>-web-search___WebSearch) when web_search_backend = agentcore, else none. Every entry must exist on the gateway: an unknown action fails the policy."
   default     = []
-}
-
-variable "team_tools" {
-  type        = map(string)
-  description = "team => comma-separated tool names its harness role may call through the Lambda tools gateway. Teams not listed get no team policy (every call denied under ENFORCE)."
-  default = {
-    finance = "fetch_url,current_time,calculate,create_artifact,update_artifact,approve_expense"
-    hr      = "fetch_url,current_time,calculate,create_artifact,update_artifact,lookup_salary"
-    support = "fetch_url,current_time,calculate,create_artifact,update_artifact"
-  }
 }
 
 variable "extra_platform_role_names" {
@@ -371,4 +336,10 @@ variable "demo_tools" {
   type        = bool
   description = "Workshop mock tools (approve_expense, lookup_salary) on the Lambda tools target. They return canned results; leave off outside the workshop."
   default     = false
+}
+
+variable "demo_expense_teams" {
+  type        = list(string)
+  description = "With demo_tools: team names whose harness role (`<project>-harness-<team>`, made by the Organization page) may call approve_expense below the amount cap. Empty = no cap policy, and approve_expense stays unreachable."
+  default     = []
 }

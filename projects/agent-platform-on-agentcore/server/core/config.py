@@ -6,7 +6,7 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import List, Tuple
 
 from dotenv import load_dotenv
 
@@ -55,26 +55,6 @@ AUTH_ENFORCED = os.getenv("AUTH_ENFORCED", "true").lower() != "false"
 
 def _csv(name: str) -> List[str]:
     return [v.strip() for v in os.getenv(name, "").split(",") if v.strip()]
-
-
-def _json_dict(name: str) -> Dict[str, str]:
-    """A JSON object of string -> string from an env var; anything else reads as {}.
-
-    Used for TEAM_EXECUTION_ROLES, which terraform `jsonencode`s. A malformed
-    value must not keep the server from starting - teams are a feature, not a
-    precondition - so bad JSON and non-string values are dropped, not raised.
-    """
-    raw = os.getenv(name, "").strip()
-    if not raw:
-        return {}
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        logger.warning("%s is not valid JSON; ignoring", name)
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    return {str(k): v for k, v in data.items() if isinstance(v, str) and v}
 
 
 # ── OIDC login providers (Microsoft Entra ID and the like) ───────────────────
@@ -235,19 +215,34 @@ BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "global.anthropic.claude-sonnet
 # Use inference-profile ids (global.anthropic.…): Claude 5 foundation-model ids
 # are rejected by ConverseStream with an on-demand-throughput error.
 ALLOWED_MODELS = _csv("ALLOWED_MODELS")
-# team name -> harness execution role ARN, one per `teams` entry in terraform.
-# Empty = the deployment declared no teams, and every team feature stays off.
-TEAM_EXECUTION_ROLES: Dict[str, str] = _json_dict("TEAM_EXECUTION_ROLES")
 # The retired basic-chat path pinned this synthetic id onto its threads. Kept
 # only to recognise those threads: the next turn moves them onto the default
-# agent's record (services/agent_access.py), and Insights names the history
-# they left in the usage ledger (routes/insights.py).
+# agent's record (services/agent_access.py). The usage rows that path wrote
+# under this id were removed from the ledger on 2026-10-10 (32 test turns), so
+# Insights no longer has to name it.
 LEGACY_BASIC_CHAT_RECORD_ID = "__basic_chat__"
-LEGACY_BASIC_CHAT_LABEL = "기본 채팅 (이전)"
 # Thread.metadata key holding the per-thread model / system-prompt override the
 # web resends on every turn. The name predates overrides on runtime agents and
 # stays so threads written under it keep their settings.
 OVERRIDES_METADATA_KEY = "harness_overrides"
+# Organization page (routes/org.py). The teams table holds what the IdP cannot:
+# team metadata, the role/policy the server provisioned, Entra group mappings
+# and the audit ledger. Empty = the page reports 501 and there are no teams.
+TEAMS_TABLE = os.getenv("TEAMS_TABLE", "").strip()
+# Managed policy every server-made team role carries as its permissions
+# boundary. Empty = the server cannot create roles, so it cannot create teams.
+TEAM_ROLE_BOUNDARY_ARN = os.getenv("TEAM_ROLE_BOUNDARY_ARN", "").strip()
+# Gateway policy engine the per-team Cedar policies are written to. Empty =
+# teams are created without gateway policies ("정책 미연결" in the UI).
+POLICY_ENGINE_ID = os.getenv("POLICY_ENGINE_ID", "").strip()
+MCP_GATEWAY_ARN = os.getenv("MCP_GATEWAY_ARN", "").strip()
+# Fully-qualified gateway actions (<target>___<tool>) every team role may call
+# beyond its own tool list, e.g. the web-search connector's tool.
+TEAM_SHARED_ACTIONS = _csv("TEAM_SHARED_ACTIONS")
+# Tools whose Cedar policy (written outside the server, e.g. the demo amount cap)
+# carries an argument condition. The server refuses them in a team's list: its
+# generated policies have none.
+TEAM_CONDITIONED_ACTIONS = _csv("TEAM_CONDITIONED_ACTIONS")
 
 # AgentCore Agent Registry (created by infra/modules/agent_registry)
 AGENT_REGISTRY_ID = os.getenv("AGENT_REGISTRY_ID", "")

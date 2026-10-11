@@ -129,7 +129,16 @@ def repo_with_everything():
              "diff_micros": D(272), "ce_estimated": False, "checked_at": f"{TODAY}T06:00:00Z"},
             {"sk": f"D#{YESTERDAY}#K#agent_runtime#bap_default", "billed_micros": D(118_650), "ours_micros": D(590_628),
              "diff_micros": D(-471_978), "ce_estimated": True, "checked_at": f"{TODAY}T06:00:00Z"},
-            {"sk": f"D#{TODAY}#K#component#runtime", "billed_micros": D(590_900), "ours_micros": D(788_578),
+            # Per (day, component). Today's rows are the hours CE has ingested so
+            # far; the bill's own figures keep them, only comparisons drop them.
+            {"sk": f"D#{YESTERDAY}#K#component_day#runtime", "billed_micros": D(590_900), "ce_estimated": False,
+             "checked_at": f"{TODAY}T06:00:00Z"},
+            {"sk": f"D#{YESTERDAY}#K#component_day#memory", "billed_micros": D(5_000), "ce_estimated": False,
+             "checked_at": f"{TODAY}T06:00:00Z"},
+            {"sk": f"D#{TODAY}#K#component_day#runtime", "billed_micros": D(118_650), "ce_estimated": True,
+             "checked_at": f"{TODAY}T06:00:00Z"},
+            # A pre-2026-10-10 window-sum row: unread, never summed in.
+            {"sk": f"D#{TODAY}#K#component#runtime", "billed_micros": D(9_999_999), "ours_micros": D(788_578),
              "diff_micros": D(-197_678), "ce_estimated": True, "checked_at": f"{TODAY}T06:00:00Z"},
             {"sk": f"D#{TODAY}#K#model_rate#claude-sonnet-5|global|output", "billed_usd_per_1m_micro": D(12_000_000),
              "card_usd_per_1m_micro": D(10_000_000), "match": False, "registered": True, "region": "us-east-1",
@@ -209,8 +218,10 @@ def test_summary_reports_reconciliation_and_rate_card_findings():
     cost = insights.summary(days=7, user=admin())["cost"]
 
     assert cost["billed"]["runtime_micros"] == 590_900 + 118_650
-    assert cost["billed"]["component"] == {"runtime": 590_900}
-    assert cost["billed"]["latest_day"] == YESTERDAY
+    assert cost["billed"]["component"] == {"runtime": 590_900 + 118_650, "memory": 5_000}
+    assert cost["billed"]["total_micros"] == 590_900 + 118_650 + 5_000
+    assert cost["billed"]["latest_day"] == TODAY
+    assert cost["memory"]["billed_micros"] == 5_000
     assert cost["diff"]["runtime_micros"] == 272
     assert cost["diff"]["days_compared"] == 1 and cost["diff"]["through"] == SETTLED
     assert cost["rate_card"]["mismatches"] == [{

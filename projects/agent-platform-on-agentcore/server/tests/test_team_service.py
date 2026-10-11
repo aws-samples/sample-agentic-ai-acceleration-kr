@@ -1,4 +1,4 @@
-"""Team settings: one platform document, seeded from terraform's role map."""
+"""Team settings: rows in the teams table."""
 import os
 import sys
 
@@ -8,66 +8,37 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.auth import AuthUser  # noqa: E402
 from models.team import TeamConfigUpdate  # noqa: E402
-from services.team_service import PLATFORM_SUB, TEAMS_NAME, TeamService, TeamStorageUnavailable, reconcile_teams  # noqa: E402
+from services.team_service import TeamService, TeamStorageUnavailable  # noqa: E402
+from team_table_stub import Table, seed  # noqa: E402
 
 ROLES = {"finance": "arn:aws:iam::1:role/bap-harness-finance", "hr": "arn:aws:iam::1:role/bap-harness-hr"}
 
 
-class Prefs:
-    def __init__(self, fail=False):
-        self.items = {}
-        self.fail = fail
-
-    def get(self, sub, name):
-        if self.fail:
-            raise RuntimeError("table down")
-        return self.items.get((sub, name))
-
-    def put(self, sub, name, value):
-        if self.fail:
-            raise RuntimeError("table down")
-        self.items[(sub, name)] = value
-
-
-def test_reconcile_seeds_every_role_and_keeps_role_from_env_not_document():
-    stored = {"teams": {"finance": {"label": "재무", "execution_role_arn": "arn:stale", "allowed_models": ["m1"]}}}
-    teams = reconcile_teams(stored, ROLES)
-    assert set(teams) == {"finance", "hr"}
-    assert teams["finance"].label == "재무"
-    assert teams["finance"].execution_role_arn == ROLES["finance"]
-    assert teams["finance"].allowed_models == ["m1"]
-    assert teams["hr"].label == "hr" and teams["hr"].allowed_tools == []
-
-
-def test_reconcile_drops_teams_terraform_no_longer_declares_and_tolerates_garbage():
-    assert reconcile_teams({"teams": {"ghost": {}}}, ROLES).keys() == ROLES.keys()
-    assert reconcile_teams("nonsense", ROLES).keys() == ROLES.keys()
-    assert reconcile_teams(None, {}) == {}
-
-
-def test_put_then_get_round_trips_under_the_platform_key():
-    prefs = Prefs()
-    svc = TeamService(repository=prefs, seeded_roles=ROLES)
+def test_put_then_get_round_trips_through_the_team_row():
+    table = seed(Table(), ROLES)
+    svc = TeamService(repository=table)
     out = svc.put("finance", TeamConfigUpdate(label="재무팀", allowed_models=["m1"], allowed_tools=["@builtin"], daily_cost_alert_usd=20), by="admin")
     assert out.label == "재무팀" and out.execution_role_arn == ROLES["finance"]
-    doc = prefs.items[(PLATFORM_SUB, TEAMS_NAME)]
-    assert doc["teams"]["finance"]["allowed_tools"] == ["@builtin"] and doc["updated_by"] == "admin"
+    row = table.rows["finance"]
+    assert row["allowed_tools"] == ["@builtin"] and row["updated_by"] == "admin"
+    assert row["execution_role_arn"] == ROLES["finance"] and row["managed_by"] == "platform"
     assert svc.get("finance").daily_cost_alert_usd == 20
     assert [t.name for t in svc.list()] == ["finance", "hr"]
 
 
-def test_unknown_team_is_refused_and_unconfigured_storage_still_lists_seeds():
-    svc = TeamService(repository=None, seeded_roles=ROLES)
-    assert svc.configured is False
-    assert [t.name for t in svc.list()] == ["finance", "hr"]
+def test_unknown_team_is_refused_and_unconfigured_storage_has_no_teams():
+    svc = TeamService(repository=seed(Table(), ROLES))
     assert svc.role_for("hr") == ROLES["hr"] and svc.role_for("nope") == ""
     with pytest.raises(ValueError):
         svc.put("nope", TeamConfigUpdate(label="x"))
+    none = TeamService(repository=None)
+    assert none.configured is False and none.enabled is False and none.list() == []
+    with pytest.raises(TeamStorageUnavailable):
+        none.put("finance", TeamConfigUpdate(label="x"))
 
 
 def test_for_user_and_model_allowance():
-    prefs = Prefs()
-    svc = TeamService(repository=prefs, seeded_roles=ROLES)
+    svc = TeamService(repository=seed(Table(), ROLES))
     svc.put("finance", TeamConfigUpdate(allowed_models=["m1", "m2"]))
     svc.put("hr", TeamConfigUpdate(allowed_models=[]))
     user = AuthUser(username="u", groups=["team:finance", "team:ghost"])
@@ -78,29 +49,34 @@ def test_for_user_and_model_allowance():
     assert svc.allowed_models_for(["ghost"]) is None
 
 
-def test_failing_storage_lists_seeds_but_put_refuses_and_writes_nothing():
-    prefs = Prefs(fail=True)
-    svc = TeamService(repository=prefs, seeded_roles=ROLES)
-    assert [t.name for t in svc.list()] == ["finance", "hr"]
+def test_failing_storage_lists_nothing_and_put_refuses_and_writes_nothing():
+    table = Table(fail=True)
+    svc = TeamService(repository=table)
+    assert svc.list() == [] and svc.enabled is False
     with pytest.raises(TeamStorageUnavailable):
         svc.put("finance", TeamConfigUpdate(label="x"))
-    assert prefs.items == {}
+    assert table.rows == {}
 
 
-def test_failed_write_raises_storage_unavailable():
-    # Final review M11: a swallowed write answered 200 ("저장됨") for a value
-    # that was never kept.
-    class WriteFails(Prefs):
-        def put(self, sub, name, value):
-            raise RuntimeError("throttled")
+def test_failed_write_is_storage_unavailable_and_leaves_the_stored_row_alone():
+    class WriteFails(Table):
+        broken = False
 
-    svc = TeamService(repository=WriteFails(), seeded_roles=ROLES)
+        def put_team(self, item):
+            if self.broken:
+                raise RuntimeError("throttled")
+            super().put_team(item)
+
+    table = seed(WriteFails(), ROLES)
+    svc = TeamService(repository=table)
+    table.broken = True
     with pytest.raises(TeamStorageUnavailable):
         svc.put("finance", TeamConfigUpdate(label="x"))
+    assert svc.get("finance").label == "finance"
 
 
 def test_cost_alert_can_be_cleared_by_an_explicit_null_and_omitted_fields_stay():
-    svc = TeamService(repository=Prefs(), seeded_roles=ROLES)
+    svc = TeamService(repository=seed(Table(), ROLES))
     svc.put("finance", TeamConfigUpdate(daily_cost_alert_usd=50, label="재무"))
     assert svc.get("finance").daily_cost_alert_usd == 50
     svc.put("finance", TeamConfigUpdate(allowed_models=["m1"]))          # alert omitted: kept
@@ -110,6 +86,18 @@ def test_cost_alert_can_be_cleared_by_an_explicit_null_and_omitted_fields_stay()
     assert team.daily_cost_alert_usd is None and team.label == "재무" and team.allowed_models == ["m1"]
 
 
-def test_names_are_the_declared_teams():
-    assert TeamService(None, ROLES).names() == {"finance", "hr"}
-    assert TeamService(None, {}).names() == set()
+def test_names_are_the_rows():
+    assert TeamService(seed(Table(), ROLES)).names() == {"finance", "hr"}
+    assert TeamService(Table()).names() == set()
+    assert TeamService(None).names() == set()
+
+
+def test_external_rows_are_read_as_they_are():
+    # A row another stack wrote (managed_by != platform) keeps its role and label.
+    table = seed(Table(), {"ops": "arn:aws:iam::1:role/ws-harness-ops"}, managed_by="workshop")
+    svc = TeamService(table)
+    team = svc.get("ops")
+    assert team.managed_by == "workshop" and team.execution_role_arn.endswith("ws-harness-ops")
+    assert svc.role_for("ops").endswith("ws-harness-ops")
+    svc.put("ops", TeamConfigUpdate(label="운영"))
+    assert table.rows["ops"]["managed_by"] == "workshop" and table.rows["ops"]["label"] == "운영"

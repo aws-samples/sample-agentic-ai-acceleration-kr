@@ -41,7 +41,7 @@ DENIAL = "Tool execution failed: Tool Execution Denied: Tool call not allowed du
 
 
 def test_undeclared_team_groups_are_not_attributed():
-    # Final review M5: a `team:` group terraform never declared got a TEAMS#
+    # Final review M5: a `team:` group no team row declares got a TEAMS#
     # row that no panel renders, and the turn vanished from "unattributed" too.
     assert resolve_turn_team(["legacy", "hr"], None, {"hr", "finance"}) == "hr"
     assert resolve_turn_team(["legacy"], "legacy", {"hr"}) is None

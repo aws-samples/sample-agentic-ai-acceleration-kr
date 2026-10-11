@@ -7,6 +7,7 @@ from repositories.knowledge_repository import KnowledgeRepository
 from repositories.usage_repository import UsageRepository
 from repositories.prefs_repository import PrefsRepository
 from repositories.user_repository import UserRepository
+from repositories.team_repository import TeamRepository
 from services.artifact_service import ArtifactService
 from services.thread_service import ThreadService
 from services.mcp_apps_service import shared_relay
@@ -31,11 +32,13 @@ from services.team_service import TeamService
 from services.collector_service import CollectorService
 from services.observability_service import ObservabilityService
 from services.directory_service import DirectoryService
+from services.org_directory_service import OrgDirectoryService
+from services.audit_service import AuditService
 from services.registry_service import set_owner_resolver
 from agents.agentcore_client import AgentCoreClient
 from core.config import (
     MCP_GATEWAY_ID,
-    TEAM_EXECUTION_ROLES,
+    TEAMS_TABLE,
     COGNITO_REGION,
     COGNITO_USER_POOL_ID,
     ARTIFACTS_BUCKET,
@@ -53,6 +56,11 @@ from core.config import (
     USAGE_LOG_GROUP,
     USAGE_LOG_DESTINATION_ARN,
     USERS_TABLE,
+    TEAM_ROLE_BOUNDARY_ARN,
+    POLICY_ENGINE_ID,
+    MCP_GATEWAY_ARN,
+    TEAM_SHARED_ACTIONS,
+    SKILLS_BUCKET,
 )
 import boto3
 
@@ -174,6 +182,10 @@ knowledge_service = KnowledgeService(
     bucket=KNOWLEDGE_BUCKET,
     region=AWS_REGION,
     platform_source_bucket=KNOWLEDGE_PLATFORM_SOURCE_BUCKET,
+    # The stored owner name is the UUID-valued username; listings resolve the
+    # email through the directory below. A lambda because directory_service is
+    # constructed further down, and is only needed per request.
+    owner_names=lambda subs: directory_service.emails(subs),
 )
 
 # Per-user preferences: same conditional construction as artifact_repository.
@@ -191,11 +203,41 @@ layout_service = LayoutService(repository=prefs_repository)
 # Which sidebar menus a plain user sees; one platform-wide document in the same table.
 nav_service = NavService(repository=prefs_repository)
 
-# Team settings: the document lives in the same table; the set of teams comes
-# from terraform through TEAM_EXECUTION_ROLES.
-team_service = TeamService(repository=prefs_repository, seeded_roles=TEAM_EXECUTION_ROLES)
+# Teams: rows in their own table when TEAMS_TABLE is set (Organization page),
+# else none.
+team_repository = (
+    TeamRepository(table_name=TEAMS_TABLE, region_name=AWS_REGION)
+    if TEAMS_TABLE
+    else None
+)
+team_service = TeamService(repository=team_repository)
 # Attached here because streaming_service is built above, before teams exist (module order).
 streaming_service.team_service = team_service
+
+import core.auth as _auth
+_auth.entra_team_resolver = team_service.teams_for_entra_groups
+
+from services.team_provisioner import TeamProvisioner, account_id_of
+
+# Creates the Cognito group, IAM role and Cedar policies behind a team made on
+# the Organization page. `enabled` is False without the boundary policy (then
+# the page can list but not create teams).
+team_provisioner = TeamProvisioner(
+    boto3.client("cognito-idp", region_name=COGNITO_REGION),
+    boto3.client("iam", region_name=AWS_REGION),
+    boto3.client("bedrock-agentcore-control", region_name=AWS_REGION),
+    user_pool_id=COGNITO_USER_POOL_ID,
+    project=PLATFORM,
+    region=AWS_REGION,
+    account_id=account_id_of(TEAM_ROLE_BOUNDARY_ARN),
+    boundary_arn=TEAM_ROLE_BOUNDARY_ARN,
+    skills_bucket=SKILLS_BUCKET,
+    policy_engine_id=POLICY_ENGINE_ID,
+    gateway_arn=MCP_GATEWAY_ARN,
+    shared_actions=TEAM_SHARED_ACTIONS,
+)
+
+audit_service = AuditService(repository=team_repository)
 
 # The rate card an admin can read into and fill. Shares the usage service (the
 # overlay lives in its table and it reprices) and the Price List client.
@@ -227,10 +269,20 @@ user_repository = (
     if USERS_TABLE
     else None
 )
+_cognito_client = boto3.client("cognito-idp", region_name=COGNITO_REGION)
 directory_service = DirectoryService(
-    cognito=boto3.client("cognito-idp", region_name=COGNITO_REGION),
+    cognito=_cognito_client,
     user_pool_id=COGNITO_USER_POOL_ID,
     users=user_repository,
+)
+
+# The Organization page's people list: the pool live (users + group members),
+# Entra as recorded at login. Shares the cognito client with directory_service.
+org_directory_service = OrgDirectoryService(
+    cognito=_cognito_client,
+    user_pool_id=COGNITO_USER_POOL_ID,
+    users=user_repository,
+    entra_teams=team_service.teams_for_entra_groups,
 )
 # Registry records are stamped with their registering user's e-mail; a Cognito
 # access token only names the sub, so the directory resolves it.

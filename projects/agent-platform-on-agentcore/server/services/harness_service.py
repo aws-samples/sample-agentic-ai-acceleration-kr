@@ -45,6 +45,7 @@ from models.registry import (
     DESCRIPTOR_A2A,
     DESCRIPTOR_MCP,
 )
+from models.team import harness_allowed_tools
 from services.registry_service import (
     BOTO_CONFIG,
     RegistryService,
@@ -58,6 +59,7 @@ from services.registry_service import (
     owner_identity,
 )
 from services.skill_bundle_service import DiscoveredSkill, SkillBundleService
+from services.version_memo import VersionMemo, revision_key
 from services.team_access import can_see, normalize_team, team_of, visibility_known
 
 logger = logging.getLogger(__name__)
@@ -229,6 +231,8 @@ class HarnessService:
         self._s3 = None
         self._bedrock = bedrock
         self._lock = threading.Lock()
+        # GetHarness results, kept while ListHarnesses reports the same revision.
+        self._hydrated: VersionMemo[HarnessSummary] = VersionMemo()
         # Called with the companion runtime ARN once a composed harness is READY.
         # Wired by `core.dependencies` to `ObservabilityService.ensure_usage_logs`
         # so a new harness delivers per-session USAGE_LOGS from its first turn.
@@ -660,7 +664,8 @@ class HarnessService:
             if team_cfg.allowed_models and requested_model not in team_cfg.allowed_models:
                 raise ValueError(f"Model {requested_model} is not allowed for team {team}")
             if not allowed_tools and team_cfg.allowed_tools:
-                allowed_tools = list(team_cfg.allowed_tools)
+                # Gateway names become `@*/<target>___<tool>`; patterns pass through.
+                allowed_tools = harness_allowed_tools(team_cfg.allowed_tools)
             tags["Team"] = team
 
         params: Dict[str, Any] = {
@@ -943,9 +948,21 @@ class HarnessService:
             for index, summary in enumerate(summaries)
             if needs_hydration(summary)
         ]
-        for index, hydrated in zip(
-            stale, fan_out(lambda i: self._hydrate(summaries[i]), stale)
-        ):
+        # A GetHarness answer is fixed for one revision, and the List reports the
+        # revision, so it is re-read only when the harness changed (see
+        # services/version_memo.py). The full result covers `with_tools` too.
+        def hydrate(index: int) -> HarnessSummary:
+            summary = summaries[index]
+            key = revision_key(summary.version, summary.updated_at, summary.status)
+            hit = self._hydrated.get(summary.harness_id, key)
+            if hit is not None:
+                return hit.model_copy()
+            hydrated = self._hydrate(summary)
+            if hydrated is not summary:
+                self._hydrated.put(summary.harness_id, key, hydrated)
+            return hydrated
+
+        for index, hydrated in zip(stale, fan_out(hydrate, stale)):
             summaries[index] = hydrated
         return summaries
 

@@ -267,3 +267,80 @@ def test_harness_stream_blocking_read_happens_off_the_loop_thread():
     assert stream.blocked_on_thread is not loop_thread, (
         "the harness blocking read ran on the event loop's thread"
     )
+
+
+# --- the invoke itself ---------------------------------------------------------
+#
+# The tests above cover silence *inside* a stream. The call that opens it blocks
+# as well: botocore returns from invoke_harness / invoke_agent_runtime only once
+# the response headers arrive, and a cold harness sends none for 30s or more.
+# Measured on the deployed server: two content_creator harness invokes left the
+# log silent for 32s and `GET /api/org/users` (0.22s idle) took 32.2s.
+
+
+class SlowToAnswerControl:
+    """A boto3 client whose invoke blocks before returning, like a cold harness."""
+
+    def __init__(self, response, gap=GAP_SECONDS):
+        self._response = response
+        self._gap = gap
+        self.blocked_on_thread = None
+
+    def _wait(self):
+        import time
+
+        self.blocked_on_thread = threading.current_thread()
+        time.sleep(self._gap)
+        return self._response
+
+    def invoke_harness(self, **kwargs):
+        return self._wait()
+
+    def invoke_agent_runtime(self, **kwargs):
+        return self._wait()
+
+
+def test_harness_invoke_waiting_for_headers_does_not_hold_the_loop():
+    client = _harness_client(iter(HARNESS_EVENTS))
+    control = SlowToAnswerControl({"stream": iter(HARNESS_EVENTS)})
+    client.agentcore_client = control
+    values = {"messages": [{"id": "u1", "type": "human", "content": "안녕"}]}
+
+    events, ticks = asyncio.run(
+        _drain_while_probing(client.execute_stream("t-1", values))
+    )
+
+    expected = GAP_SECONDS / PROBE_INTERVAL
+    assert ticks >= expected / 2, (
+        f"event loop stalled while invoke_harness waited: probe ticked {ticks} times, "
+        f"expected at least {expected / 2:.0f}"
+    )
+    assert control.blocked_on_thread is not threading.main_thread()
+    assert any("end" in e.get("event", {}) for e in events)
+
+
+def test_runtime_invoke_waiting_for_headers_does_not_hold_the_loop():
+    client = AgentCoreClient.__new__(AgentCoreClient)
+    client.agent_runtime_arn = "arn:aws:bedrock-agentcore:us-east-1:1:runtime/r-1"
+    client.qualifier = "DEFAULT"
+    control = SlowToAnswerControl({
+        "contentType": "text/event-stream",
+        "response": SilentThenSpeakingStream(TYPED_FRAMES, gap=0),
+    })
+    client.agentcore_client = control
+    client._prepare_payload = lambda *a, **k: "{}"
+    client._session_id = lambda thread_id: thread_id.ljust(33, "0")
+    values = {"messages": [{"id": "u1", "type": "human", "content": "안녕"}]}
+
+    events, ticks = asyncio.run(
+        _drain_while_probing(client.execute_stream("t-1", values))
+    )
+
+    expected = GAP_SECONDS / PROBE_INTERVAL
+    assert ticks >= expected / 2, (
+        f"event loop stalled while invoke_agent_runtime waited: probe ticked {ticks} times, "
+        f"expected at least {expected / 2:.0f}"
+    )
+    assert control.blocked_on_thread is not threading.main_thread()
+    kinds = [k for e in events for k in e.get("event", {})]
+    assert kinds.count("messageStop") == 1

@@ -449,13 +449,17 @@ terraform output runtime_mcp_endpoints   # 4단계에서 쓸 URL
 
 ## 팀과 게이트웨이 정책
 
-조직 안에서 여러 팀이 에이전트를 나눠 쓰려면 팀을 1급 개념으로 둡니다. `teams` 에 팀
-이름을 적고 apply 하면 팀마다 Harness 실행 역할과 Cognito 그룹 `team:<name>` 이 생기고,
-그 그룹에 든 사용자가 그 팀 소속으로 로그인합니다. 정책 엔진은 `hashicorp/time` provider
-를 쓰므로 기존 체크아웃에서는 `terraform init` 을 한 번 다시 합니다.
+조직 안에서 여러 팀이 에이전트를 나눠 쓰려면 팀을 1급 개념으로 둡니다. 팀은 Terraform
+변수가 아니라 웹의 **조직 관리 화면(`/org`, admin)** 에서 만듭니다. 팀을 만들면 서버가
+Cognito 그룹 `team:<name>` → 팀 Harness 실행 역할(IAM, 경로 `/<project>/teams/`, Harness
+permissions boundary 부착) → 게이트웨이 Cedar 정책을 순서대로 만들고, 실패한 단계는 행에
+남겨 그 단계부터 다시 시도합니다. 서버의 IAM 권한은 이 경로와 boundary 조건으로 묶여 있어
+서버가 자기보다 넓은 역할을 만들 수 없습니다.
+
+게이트웨이 정책 엔진은 tfvars 로 켭니다. 엔진은 `hashicorp/time` provider 를 쓰므로 기존
+체크아웃에서는 `terraform init` 을 한 번 다시 합니다.
 
 ```hcl
-teams                 = ["finance", "hr"]
 enable_gateway_policy = true
 policy_mode           = "LOG_ONLY"   # 결정만 기록. ENFORCE 로 바꾸면 거부합니다
 ```
@@ -464,29 +468,35 @@ policy_mode           = "LOG_ONLY"   # 결정만 기록. ENFORCE 로 바꾸면 �
 cd infra/envs/standalone && terraform init && terraform apply
 ```
 
-apply 뒤에 달라지는 것:
+apply 뒤 `/org` 에서 팀을 만들면 달라지는 것:
 
-- **팀 설정.** admin 의 Settings → 팀 탭에서 팀별 허용 모델·툴 패턴·비용 경고를 둡니다.
+- **팀 설정.** 팀 상세에서 팀별 허용 모델·허용 툴 패턴·일일 비용 경고를 둡니다.
   허용 모델은 `allowed_models` 안에서만 좁혀지고, 비관리자의 Harness 조합에서 요청한
-  툴은 팀 목록이 이깁니다.
+  툴은 팀 목록이 이깁니다. 팀에 속한 사용자가 만든 Harness 는 그 팀의 실행 역할로 돕니다.
+- **사용자 관리.** 사용자 탭에서 초대·역할·팀 배정·비활성화를 Cognito 풀에 직접 쓰고,
+  구성원은 풀을 라이브로 읽습니다(콘솔에서 바꾼 것이 그대로 보임). 이 페이지에서 한 행위는
+  감사 로그 탭에, 콘솔에서 바꿔 어긋난 것은 드리프트 띠로 봅니다.
 - **레코드의 팀.** Registry 레코드는 `custom_metadata.team` 으로 팀에 속하고, 목록·검색·
   상세·실행 바인딩에서 admin 은 전부, 그 외는 공유 레코드와 자기 팀 레코드만 봅니다.
-  팀을 알 수 없는 레코드는 비관리자에게 숨겨집니다. `teams` 가 비어 있으면 이 규칙은
-  꺼지고 기존처럼 전부 보입니다.
+  팀을 알 수 없는 레코드는 비관리자에게 숨겨집니다. 팀이 하나도 없으면 이 규칙은 꺼지고
+  기존처럼 전부 보입니다.
 - **게이트웨이 정책.** `enable_gateway_policy` 는 Lambda 툴 Gateway 앞에 AgentCore Policy
   (Cedar) 엔진을 붙입니다. 플랫폼 역할(Runtime·기본 Harness·서버)은 모든 툴을, 팀 역할은
-  `team_tools` 에 적은 툴과 `team_shared_actions`(기본값은 AgentCore Web Search) 만
-  부를 수 있습니다. `ENFORCE` 에서는 허용되지 않은 툴이 `tools/list` 에서 아예 사라집니다.
+  팀이 고른 툴과 `team_shared_actions`(기본값은 AgentCore Web Search) 만 부를 수 있습니다.
+  `ENFORCE` 에서는 허용되지 않은 툴이 `tools/list` 에서 아예 사라집니다.
   정책 목록과 Cedar 형식은 [`infra/modules/gateway_policies/README.md`](infra/modules/gateway_policies/README.md)
   에 있습니다.
-- **Insights 팀 뷰.** 턴 원장에 팀이 기록되고 정책 거부 횟수가 팀별로 집계됩니다.
+- **Insights 팀·정책 뷰.** 턴 원장에 팀이 기록되어 팀별 일별 비용·점유·1인당 턴·경고 대비를,
+  정책 위젯이 ENFORCE 차단과 LOG_ONLY 판정을 팀별로 그립니다.
 
 `demo_tools = true` 는 워크숍용 모의 툴(`approve_expense`, `lookup_salary`)을 Gateway 에
-싣습니다. 금액 한도가 있는 정책 예제를 보여 주기 위한 것이라 평소에는 꺼 둡니다. 켜고
-끌 때는 Gateway 타깃을 `-replace` 해야 합니다(`infra/modules/mcp_gateway/README.md`).
+싣습니다. 금액 한도가 있는 정책 예제를 보여 주기 위한 것이라 평소에는 꺼 둡니다.
+`demo_expense_teams = ["finance"]` 처럼 `/org` 에서 만든 팀 이름을 적으면 그 팀 역할만
+한도 아래 `approve_expense` 를 부를 수 있습니다. 켜고 끌 때는 Gateway 타깃을 `-replace`
+해야 합니다(`infra/modules/mcp_gateway/README.md`).
 
-사용자를 팀에 넣는 가장 빠른 방법은 Cognito 콘솔에서 `team:<name>` 그룹에 추가하는
-것이고, 아래 데모 사용자 스크립트는 `--teams finance,hr` 로 팀을 나눠 만들어 줍니다.
+사용자를 팀에 넣는 가장 빠른 방법은 `/org` 사용자 탭(또는 Cognito 콘솔의 `team:<name>`
+그룹)이고, 아래 데모 사용자 스크립트는 `--teams finance,hr` 로 이미 만든 팀에 나눠 넣습니다.
 
 ## Microsoft Entra ID 로그인
 
@@ -501,7 +511,7 @@ Insights 화면을 여러 사용자의 데이터로 확인하려면 Cognito 에 
 ```bash
 cd server
 python scripts/seed_demo_users.py --password '<choose-a-password>'
-# 팀을 만들었다면: 사용자를 팀 그룹에 나눠 넣고 팀마다 <team>-user 계정도 만듭니다
+# /org 에서 팀을 만들었다면: 사용자를 팀 그룹에 나눠 넣고 팀마다 <team>-user 계정도 만듭니다
 python scripts/seed_demo_users.py --password '<choose-a-password>' --teams finance,hr
 ```
 

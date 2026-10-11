@@ -1,61 +1,91 @@
-"""Team settings — one platform-wide document, seeded from terraform's role map.
+"""Team settings — rows in the teams table.
 
-A team is a Cognito group `team:<name>` (core/auth.py). Which teams *exist* is
-decided by terraform (`teams` variable → one harness execution role each →
-TEAM_EXECUTION_ROLES env); this document only adds what an admin edits: label,
-allowed models, allowed tools, cost alert. The role ARN in the document is never
-trusted — the env value wins — so a stale document cannot point a harness at a
-role terraform has since replaced.
+A team is a row (`pk=TEAM, sk=<name>`). Rows the Organization page created
+(`managed_by=platform`) own an execution role and Cedar policies that
+services/team_provisioner.py made; a row written by anything else (a workshop
+stack, a console script — any other `managed_by`) is read as it is: its
+`execution_role_arn` is trusted and its lifecycle (provision, role/policy
+rewrite, deprovision) is not the server's.
 
-Stored beside the nav visibility document (`PREFS#platform` / `teams`) with the
-same rules: the stored value is a hint, the env map is the authority, a team the
-env no longer names is dropped on read, and a storage failure reads as "seeds
-only" rather than failing the page.
+Membership is not here. Cognito groups and the Entra token are the truth; this
+service only maps Entra group ids to team names (`teams_for_entra_groups`).
+
+Without a table (TEAMS_TABLE unset) there are no teams and every team feature
+is off. A storage failure reads as "no teams" rather than failing the page; a
+write after a failed read raises so one blip cannot blank another team's
+settings.
 """
 import logging
-from typing import Any, Dict, Iterable, List, Optional, Set
+import time
+from datetime import datetime, timezone
+from decimal import Decimal
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set
 
 from core.auth import AuthUser
-from models.team import TeamConfig, TeamConfigUpdate
+from models.knowledge import now_iso
+from models.team import TeamConfig, TeamConfigUpdate, TeamCreate, validate_team_name
 
 logger = logging.getLogger(__name__)
 
-PLATFORM_SUB = "platform"
-TEAMS_NAME = "teams"
+ENTRA_CACHE_SECONDS = 60
+# A `provisioning`/`deleting` row older than this is a process that died
+# mid-step (a daemon thread lost to a restart, a crash in the error path).
+PROVISION_STALE_SECONDS = 300
+EDITABLE = ("label", "description", "allowed_models", "allowed_tools", "daily_cost_alert_usd", "entra_group_ids")
+
+
+def is_stale(updated_at: str, now: datetime, stale_after_seconds: int = PROVISION_STALE_SECONDS) -> bool:
+    """True when `updated_at` is older than the window. An unreadable stamp is
+    stale: nothing proves a step is still running, and a stuck row must stay
+    recoverable."""
+    try:
+        stamped = datetime.fromisoformat(updated_at)
+    except (TypeError, ValueError):
+        return True
+    if stamped.tzinfo is None:
+        stamped = stamped.replace(tzinfo=timezone.utc)
+    return (now - stamped).total_seconds() >= stale_after_seconds
 
 
 class TeamStorageUnavailable(RuntimeError):
-    """The team document could not be read (a write would clobber it) or written."""
+    """The team rows could not be read (a write would clobber them) or written."""
 
 
 def _strings(value: Any) -> List[str]:
     return [v for v in value if isinstance(v, str) and v] if isinstance(value, list) else []
 
 
-def reconcile_teams(stored: Any, seeded_roles: Dict[str, str]) -> Dict[str, TeamConfig]:
-    """Every seeded team, with the document's editable fields where present."""
-    docs: Dict[str, Any] = {}
-    if isinstance(stored, dict) and isinstance(stored.get("teams"), dict):
-        docs = stored["teams"]
-    teams: Dict[str, TeamConfig] = {}
-    for name, role_arn in seeded_roles.items():
-        raw = docs.get(name) if isinstance(docs.get(name), dict) else {}
-        alert = raw.get("daily_cost_alert_usd")
-        teams[name] = TeamConfig(
-            name=name,
-            label=raw.get("label") if isinstance(raw.get("label"), str) and raw.get("label") else name,
-            execution_role_arn=role_arn,
-            allowed_models=_strings(raw.get("allowed_models")),
-            allowed_tools=_strings(raw.get("allowed_tools")),
-            daily_cost_alert_usd=float(alert) if isinstance(alert, (int, float)) else None,
-        )
-    return teams
+def _from_row(row: Dict[str, Any]) -> Optional[TeamConfig]:
+    name = row.get("name")
+    if not isinstance(name, str) or not name:
+        return None
+    alert = row.get("daily_cost_alert_usd")
+    return TeamConfig(
+        name=name,
+        label=row.get("label") if isinstance(row.get("label"), str) and row.get("label") else name,
+        description=str(row.get("description") or ""),
+        execution_role_arn=str(row.get("execution_role_arn") or ""),
+        allowed_models=_strings(row.get("allowed_models")),
+        allowed_tools=_strings(row.get("allowed_tools")),
+        daily_cost_alert_usd=float(alert) if isinstance(alert, (int, float, Decimal)) and not isinstance(alert, bool) else None,
+        managed_by=str(row.get("managed_by") or "platform"),
+        status=str(row.get("status") or "ready"),
+        error=row.get("error") if isinstance(row.get("error"), dict) else None,
+        policy_ids={k: str(v) for k, v in (row.get("policy_ids") or {}).items()} if isinstance(row.get("policy_ids"), dict) else {},
+        entra_group_ids=_strings(row.get("entra_group_ids")),
+        created_by=str(row.get("created_by") or ""),
+        created_at=str(row.get("created_at") or ""),
+        updated_by=str(row.get("updated_by") or ""),
+        updated_at=str(row.get("updated_at") or ""),
+    )
 
 
 class TeamService:
-    def __init__(self, repository=None, seeded_roles: Optional[Dict[str, str]] = None):
+    def __init__(self, repository=None, clock: Callable[[], float] = time.monotonic):
         self._repository = repository
-        self._seeded = dict(seeded_roles or {})
+        self._clock = clock
+        self._entra_cache: Optional[Dict[str, List[str]]] = None
+        self._entra_cache_at = 0.0
 
     @property
     def configured(self) -> bool:
@@ -63,25 +93,32 @@ class TeamService:
 
     @property
     def enabled(self) -> bool:
-        """False when terraform declared no teams: every team feature is off."""
-        return bool(self._seeded)
+        """False when there is no team at all: every team feature is off."""
+        return bool(self._read())
+
+    # ── reads ──────────────────────────────────────────────────────────────
+    def _rows(self) -> Dict[str, TeamConfig]:
+        teams: Dict[str, TeamConfig] = {}
+        for row in self._repository.list_teams():
+            team = _from_row(row)
+            if team is not None:
+                teams[team.name] = team
+        return dict(sorted(teams.items()))
 
     def _read(self) -> Dict[str, TeamConfig]:
         if not self.configured:
-            return reconcile_teams(None, self._seeded)
+            return {}
         try:
-            return reconcile_teams(self._repository.get(PLATFORM_SUB, TEAMS_NAME), self._seeded)
+            return self._rows()
         except Exception:
-            logger.warning("Failed to read team settings", exc_info=True)
-            return reconcile_teams(None, self._seeded)
+            logger.warning("Failed to read team rows", exc_info=True)
+            return {}
 
     def _read_strict(self) -> Dict[str, TeamConfig]:
-        """Like _read, but a failed read raises: put must never write a document
-        it did not read, or one storage blip blanks every other team."""
         try:
-            return reconcile_teams(self._repository.get(PLATFORM_SUB, TEAMS_NAME), self._seeded)
+            return self._rows()
         except Exception as exc:
-            logger.warning("Failed to read team settings before write", exc_info=True)
+            logger.warning("Failed to read team rows before write", exc_info=True)
             raise TeamStorageUnavailable("Team settings storage is unavailable") from exc
 
     def list(self) -> List[TeamConfig]:
@@ -91,55 +128,106 @@ class TeamService:
         return self._read().get(name)
 
     def names(self) -> Set[str]:
-        """The declared teams (terraform's role map), without reading storage."""
-        return set(self._seeded)
+        """Every known team name."""
+        return set(self._read())
 
     def role_for(self, name: str) -> str:
-        return self._seeded.get(name, "")
-
-    def put(self, name: str, update: TeamConfigUpdate, *, by: str = "") -> TeamConfig:
-        """Store the editable fields of one team. Unknown team → ValueError."""
-        if name not in self._seeded:
-            raise ValueError(f"Unknown team: {name}")
-        teams = self._read_strict() if self.configured else self._read()
-        current = teams[name]
-        # A field the request named is applied even when it is null: that is
-        # how the Settings tab clears daily_cost_alert_usd. An omitted field is
-        # left alone. The list fields and label have no "cleared" meaning for
-        # null, so null there still means "no change".
-        sent = update.model_dump(include=update.model_fields_set)
-        merged = current.model_copy(update={
-            k: v for k, v in sent.items() if v is not None or k == "daily_cost_alert_usd"
-        })
-        teams[name] = merged
-        if self.configured:
-            document = {
-                "teams": {
-                    n: t.model_dump(exclude={"name", "execution_role_arn"}) for n, t in teams.items()
-                },
-                "updated_by": by,
-            }
-            try:
-                self._repository.put(PLATFORM_SUB, TEAMS_NAME, document)
-            except Exception as exc:
-                # Answering 200 here showed "저장됨" for a value that was never kept.
-                logger.warning("Failed to store team settings", exc_info=True)
-                raise TeamStorageUnavailable("Team settings could not be stored") from exc
-        return merged
+        team = self.get(name)
+        return team.execution_role_arn if team else ""
 
     def for_user(self, user: AuthUser) -> List[TeamConfig]:
         teams = self._read()
         return [teams[n] for n in user.teams if n in teams]
 
     def allowed_models_for(self, team_names: Iterable[str]) -> Optional[Set[str]]:
-        """Union of the named teams' model lists; None when nothing restricts.
-
-        A team with an empty list places no restriction, so a person in such a
-        team may use any globally allowed model even if their other team is
-        restricted — the limit is a team's property, not a person's.
-        """
+        """Union of the named teams' model lists; None when nothing restricts."""
         teams = self._read()
         known = [teams[n] for n in team_names if n in teams]
         if not known or any(not t.allowed_models for t in known):
             return None
         return {m for t in known for m in t.allowed_models}
+
+    def teams_for_entra_groups(self, group_ids: List[str]) -> List[str]:
+        """Team names whose `entra_group_ids` intersect the token's groups.
+        Snapshot of the mapping, refreshed every ENTRA_CACHE_SECONDS."""
+        now = self._clock()
+        if self._entra_cache is None or now - self._entra_cache_at >= ENTRA_CACHE_SECONDS:
+            mapping: Dict[str, List[str]] = {}
+            for team in self._read().values():
+                for gid in team.entra_group_ids:
+                    mapping.setdefault(gid, []).append(team.name)
+            self._entra_cache, self._entra_cache_at = mapping, now
+        out: List[str] = []
+        for gid in group_ids:
+            for name in self._entra_cache.get(gid, []):
+                if name not in out:
+                    out.append(name)
+        return out
+
+    # ── writes ─────────────────────────────────────────────────────────────
+    def _write(self, team: TeamConfig) -> None:
+        try:
+            self._repository.put_team(team.model_dump())
+        except Exception as exc:
+            logger.warning("Failed to write team row %s", team.name, exc_info=True)
+            raise TeamStorageUnavailable("Team settings storage is unavailable") from exc
+        self._entra_cache = None
+
+    def put(self, name: str, update: TeamConfigUpdate, *, by: str = "") -> TeamConfig:
+        """Store the editable fields of one team. Unknown team → ValueError."""
+        if not self.configured:
+            raise TeamStorageUnavailable("TEAMS_TABLE is not configured")
+        teams = self._read_strict()
+        if name not in teams:
+            raise ValueError(f"Unknown team: {name}")
+        # A field the request named is applied even when it is null: that is how
+        # the sheet clears daily_cost_alert_usd. An omitted field is left alone.
+        # The list fields and strings have no "cleared" meaning for null, so null
+        # there still means "no change".
+        sent = update.model_dump(include=update.model_fields_set)
+        changes = {k: v for k, v in sent.items() if v is not None or k == "daily_cost_alert_usd"}
+        merged = teams[name].model_copy(update={**changes, "updated_by": by, "updated_at": now_iso()})
+        self._write(merged)
+        return merged
+
+    def create(self, req: TeamCreate, *, by: str) -> TeamConfig:
+        """A platform team row in `provisioning`; the provisioner fills the rest."""
+        if not self.configured:
+            raise TeamStorageUnavailable("TEAMS_TABLE is not configured")
+        validate_team_name(req.name)
+        if req.name in self._read_strict():
+            raise ValueError(f"팀 '{req.name}' 은 이미 있습니다.")
+        now = now_iso()
+        team = TeamConfig(
+            name=req.name, label=req.label or req.name, description=req.description,
+            allowed_models=list(req.allowed_models), allowed_tools=list(req.allowed_tools),
+            daily_cost_alert_usd=req.daily_cost_alert_usd, entra_group_ids=list(req.entra_group_ids),
+            managed_by="platform", status="provisioning",
+            created_by=by, created_at=now, updated_by=by, updated_at=now,
+        )
+        self._write(team)
+        return team
+
+    def save(self, team: TeamConfig, *, by: str = "") -> TeamConfig:
+        if not self.configured:
+            raise TeamStorageUnavailable("TEAMS_TABLE is not configured")
+        self._read_strict()
+        saved = team.model_copy(update={"updated_by": by or team.updated_by, "updated_at": now_iso()})
+        self._write(saved)
+        return saved
+
+    def set_status(self, name: str, status: str, error: Optional[Dict[str, Any]] = None) -> TeamConfig:
+        team = self._read_strict().get(name)
+        if team is None:
+            raise ValueError(f"Unknown team: {name}")
+        payload = {**error, "at": now_iso()} if error else None
+        updated = team.model_copy(update={"status": status, "error": payload, "updated_at": now_iso()})
+        self._write(updated)
+        return updated
+
+    def delete(self, name: str) -> None:
+        if not self.configured:
+            raise TeamStorageUnavailable("TEAMS_TABLE is not configured")
+        self._read_strict()
+        self._repository.delete_team(name)
+        self._entra_cache = None

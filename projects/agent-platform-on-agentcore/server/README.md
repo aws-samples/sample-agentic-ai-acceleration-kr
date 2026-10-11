@@ -55,6 +55,7 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 | Artifacts | `ARTIFACTS_BUCKET`, `ARTIFACTS_TABLE` | 화면에만 표시(저장·공유 비활성) |
 | Knowledge | `KNOWLEDGE_BUCKET`, `KNOWLEDGE_TABLE`, `KB_SERVICE_ROLE_ARN`, `KB_GATEWAY_ROLE_ARN`; 선택 `KNOWLEDGE_SOURCE_BUCKETS`, `KNOWLEDGE_PLATFORM_SOURCE_BUCKET` | 넷 중 하나라도 없으면 `/api/knowledge` 501. 소스 버킷이 없으면 업로드형 KB 만 |
 | Insights | `USAGE_TABLE`(필수), `PREFS_TABLE`, `USAGE_TIMEZONE`(기본 UTC), `PLATFORM`(기본 `bap`), `COLLECTOR_ENABLED`(일별 런타임 비용 수집기, 기본 off), `USAGE_LOG_GROUP`(세션별 런타임 비용), `MODEL_COST_AIP_ENABLED`(기본 off) | `USAGE_TABLE` 없으면 Insights 501. `PREFS_TABLE` 없으면 위젯 배치·메뉴 노출 설정이 저장되지 않음 |
+| 조직 관리(`/org`) | `TEAMS_TABLE`(필수), `TEAM_ROLE_BOUNDARY_ARN`(팀 생성에 필수), `POLICY_ENGINE_ID`·`MCP_GATEWAY_ARN`(Cedar 정책), `TEAM_SHARED_ACTIONS`, `TEAM_CONDITIONED_ACTIONS` | `TEAMS_TABLE` 없으면 `/api/org/*` 501 이고 팀은 없다. boundary 없으면 팀 목록·편집은 되지만 생성 501. 정책 엔진 없으면 팀은 "정책 미연결" |
 | Harness 출력 | `HARNESS_OUTPUT_SWEEP`, `HARNESS_OUTPUT_ROOTS`, `HARNESS_OUTPUT_EXTENSIONS` 등 | 출력 sweep 비활성 |
 | Browser 스크린샷 | `BROWSER_SCREENSHOT_BUCKET` | 스크린샷이 1시간 뒤 로드 실패 |
 

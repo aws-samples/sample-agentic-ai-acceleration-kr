@@ -26,6 +26,8 @@ import boto3
 from botocore.config import Config as BotoConfig
 from botocore.exceptions import BotoCoreError, ClientError
 
+from services.version_memo import VersionMemo, revision_key
+
 from core.config import (
     AGENT_REGISTRY_ID,
     AGENT_RUNTIME_DISCOVERY_REGIONS,
@@ -921,6 +923,12 @@ class RegistryService:
         # *create* concurrently, and listings now fan out across a threadpool.
         self._lock = threading.Lock()
         self._team_cache: Dict[str, Tuple[float, Optional[str]]] = {}
+        # Per-item Get results, kept while the List reports the same revision
+        # (services/version_memo.py): GetAgentRuntime facts, GetGateway, and the
+        # control-plane GetRegistryRecord of records the data plane does not serve.
+        self._runtime_facts_memo: VersionMemo[tuple] = VersionMemo()
+        self._gateway_memo: VersionMemo[Dict[str, Any]] = VersionMemo()
+        self._record_memo: VersionMemo[RegistryRecordDetail] = VersionMemo()
 
     def _require_configured(self) -> None:
         if not self.registry_id:
@@ -1090,7 +1098,7 @@ class RegistryService:
                 })
             # Never approved: only a Get knows its descriptors and metadata.
             try:
-                detail = self.get_record(summary.record_id)
+                detail = self._listed_record(summary)
             except Exception as exc:
                 logger.warning("Could not hydrate record %s: %s", summary.record_id, exc)
                 return summary.model_copy(update={"discoverable": False, "visibility_known": False})
@@ -1159,6 +1167,17 @@ class RegistryService:
             registryId=self.registry_id, recordId=record_id
         )
         return _to_detail(resp)
+
+    def _listed_record(self, summary: RegistryRecordSummary) -> RegistryRecordDetail:
+        """`get_record` for a record a listing just returned, re-read only when the
+        listing reports a new revision. Raises like `get_record` on a miss."""
+        key = revision_key(summary.version, summary.updated_at, summary.status)
+        hit = self._record_memo.get(summary.record_id, key)
+        if hit is not None:
+            return hit
+        latest = self.get_record(summary.record_id)
+        self._record_memo.put(summary.record_id, key, latest)
+        return latest
 
     def team_of_record(self, record_id: str) -> Optional[str]:
         """The team of the revision chat binds to, cached briefly: a pinned
@@ -1487,7 +1506,7 @@ class RegistryService:
 
         def arn_of(summary: RegistryRecordSummary) -> Optional[str]:
             try:
-                detail = self.get_record(summary.record_id)
+                detail = self._listed_record(summary)
             except Exception as exc:
                 logger.warning("Could not read MCP record %s: %s", summary.record_id, exc)
                 return None
@@ -1506,7 +1525,8 @@ class RegistryService:
         MCP gateways deployed to AgentCore.
 
         ListGateways omits both the ARN and the MCP endpoint, so each entry needs a
-        GetGateway call; those are fanned out because the listing is user-facing.
+        GetGateway call; those are fanned out because the listing is user-facing,
+        and skipped while ListGateways reports the revision they were read under.
         """
         items: List[Dict[str, Any]] = []
         params: Dict[str, Any] = {"maxResults": 100}
@@ -1522,11 +1542,14 @@ class RegistryService:
 
         def describe(item: Dict[str, Any]) -> GatewaySummary:
             gateway_id = item.get("gatewayId", "")
-            detail: Dict[str, Any] = {}
-            try:
-                detail = self.agentcore_control.get_gateway(gatewayIdentifier=gateway_id)
-            except Exception as exc:
-                logger.warning("Could not describe gateway %s: %s", gateway_id, exc)
+            revision = revision_key(str(item.get("updatedAt") or "") or None, item.get("status"))
+            detail: Dict[str, Any] = self._gateway_memo.get(gateway_id, revision) or {}
+            if not detail:
+                try:
+                    detail = self.agentcore_control.get_gateway(gatewayIdentifier=gateway_id)
+                    self._gateway_memo.put(gateway_id, revision, detail)
+                except Exception as exc:
+                    logger.warning("Could not describe gateway %s: %s", gateway_id, exc)
             return GatewaySummary(
                 name=item.get("name") or gateway_id,
                 gateway_id=gateway_id,
@@ -1579,7 +1602,8 @@ class RegistryService:
         and skipped rather than failing the whole listing.
         """
         runtimes: List[AgentRuntimeSummary] = []
-        keys: List[tuple[str, str]] = []  # (runtime_id, region) — region drives facts
+        # (runtime_id, region, revision) — region drives facts, revision the memo
+        keys: List[tuple[str, str, Any]] = []
         for region in self._discovery_regions():
             control = self._control_for_region(region)
             params: Dict[str, Any] = {"maxResults": 100}
@@ -1593,7 +1617,15 @@ class RegistryService:
                     logger.warning("Could not list runtimes in %s: %s", region, exc)
                     break
                 for runtime in resp.get("agentRuntimes", []):
-                    keys.append((runtime.get("agentRuntimeId", ""), region))
+                    keys.append((
+                        runtime.get("agentRuntimeId", ""),
+                        region,
+                        revision_key(
+                            runtime.get("agentRuntimeVersion"),
+                            str(runtime.get("lastUpdatedAt") or "") or None,
+                            runtime.get("status"),
+                        ),
+                    ))
                     runtimes.append(
                         AgentRuntimeSummary(
                             name=runtime.get("agentRuntimeName", ""),
@@ -1612,7 +1644,20 @@ class RegistryService:
         # only place a runtime-backed agent's model is written down. So it takes one
         # GetAgentRuntime each, fanned out against the runtime's own region. A failed
         # lookup leaves all three None, treated as "a plain agent, unknown model".
-        facts = fan_out(lambda key: self._runtime_facts(key[0], key[1]), keys)
+        # A runtime's facts change only with its version, so the Get is skipped
+        # while the List reports the revision it was read under.
+        def facts_of(key: tuple[str, str, Any]):
+            runtime_id, region, revision = key
+            memo_id = f"{region}/{runtime_id}"
+            hit = self._runtime_facts_memo.get(memo_id, revision)
+            if hit is not None:
+                return hit
+            found = self._runtime_facts(runtime_id, region)
+            if found != (None, None, None):
+                self._runtime_facts_memo.put(memo_id, revision, found)
+            return found
+
+        facts = fan_out(facts_of, keys)
         return [
             summary.model_copy(
                 update={

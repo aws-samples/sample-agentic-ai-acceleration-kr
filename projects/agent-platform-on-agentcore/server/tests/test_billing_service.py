@@ -76,6 +76,16 @@ def service(stub, **kwargs):
     return svc
 
 
+def test_costs_are_also_split_by_day_and_component():
+    """The reconciliation stores one row per (day, component), so the fold has
+    to keep the day axis instead of collapsing it into the window total."""
+    result = service(StubCostExplorer()).agentcore_costs("2026-08-15", "2026-08-16")
+    assert result["by_day_component"] == {
+        "2026-08-15": {"runtime": 4.6871, "gateway": 0.0096},
+        "2026-08-16": {"runtime": 0.1},
+    }
+
+
 def test_costs_are_grouped_by_component_and_summed():
     stub = StubCostExplorer()
     result = service(stub).agentcore_costs("2026-08-15", "2026-08-16")

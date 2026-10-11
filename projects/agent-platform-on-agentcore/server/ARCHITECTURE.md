@@ -283,6 +283,15 @@ terminal이라 서비스 계층에서 거부합니다.
 3. **다양한 Agent**: Agent 계층으로 분리하여 교체 용이
 4. **확장성**: 새로운 Agent 타입 추가가 쉬움
 
+## 조직 관리 (`routes/org.py`)
+
+관리자 전용 `/api/org/*`. IdP 가 구성원의 진실이고, `teams` 테이블은 IdP 가 가질 수 없는 것(팀 메타·역할·정책 ID·Entra 그룹 매핑·감사 원장)만 가진다. `TEAMS_TABLE` 이 없으면 라우터 전체가 501 이다.
+
+- `services/team_service.py` — 팀 행(`pk=TEAM, sk=<name>`). `managed_by=platform` 행만 서버가 역할·정책을 만들고 고친다; 다른 값(외부 스택이 쓴 행)은 읽기만 하고 행 값의 실행 역할을 그대로 쓴다. `allowed_tools` 는 두 종류를 담는다: 게이트웨이 이름 `<target>___<tool>`(Cedar 액션이자 하네스 `@*/<target>___<tool>`; 하네스의 `@<server>` 는 게이트웨이가 붙은 하네스 툴 이름이라 타깃 이름으로는 아무것도 맞지 않는다)과 하네스 패턴(`@builtin`, `*`; 하네스에만 전달). 변환은 `models/team.py` 의 `cedar_actions`/`harness_allowed_tools`.
+- `services/team_provisioner.py` — 팀 하나 = Cognito 그룹 `team:<name>` + IAM 역할(`<project>-harness-<name>`, 경로 `/<project>/teams/`, harness boundary 부착) + Cedar 정책(`<project>_team_<name>_tools/_shared`). 단계는 멱등이고 실패 단계가 행에 남아 재시도가 그 단계부터 이어진다. Cedar 조건은 정확 ARN 또는 세션 접미만 허용한다.
+- `services/org_directory_service.py` — 풀을 라이브로 읽고(`ListUsers` + 그룹별 `ListUsersInGroup`) Entra 는 로그인 때 적힌 `users` 행으로 보인다. 쓰기는 Cognito 에만; Entra 사용자는 호출 전에 거부.
+- `services/audit_service.py` — 이 페이지에서 한 행위의 월 샤드 원장. 콘솔·IdP 변경은 보이지 않으므로 `services/org_drift.py` 가 풀·행을 비교해 드리프트(미등록 그룹, 그룹 없음, 역할·정책 없음, 멈춘 프로비저닝)를 낸다.
+
 ## MCP Apps 라우트 (`routes/mcp_apps.py`)
 
 **SEP-1865 공식 MCP Apps 확장** 지원을 위한 릴레이 엔드포인트입니다.
