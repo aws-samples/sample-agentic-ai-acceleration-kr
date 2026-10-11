@@ -35,6 +35,20 @@ class NotCognitoUser(ValueError):
     """A write was attempted on a person the pool does not hold (Entra)."""
 
 
+class InviteFailed(ValueError):
+    """An invite that could not be completed. `detail` is written for the admin
+    who sent it and is the only text the route puts in the response; the
+    underlying ClientError stays in the chained cause for the server log."""
+
+    def __init__(self, detail: str):
+        super().__init__(detail)
+        self.detail = detail
+
+
+class InviteHalfCreated(InviteFailed, RuntimeError):
+    """The Cognito user exists but a group add failed; `detail` names the group."""
+
+
 class OrgUser(BaseModel):
     sub: str
     username: str = ""
@@ -233,13 +247,13 @@ class OrgDirectoryService:
         """AdminCreateUser; Cognito mails the temporary password unless
         `send_email` is False, in which case we mint one and hand it back once."""
         if not self._pool:
-            raise ValueError("Cognito 풀이 설정되지 않았습니다.")
+            raise InviteFailed("Cognito 풀이 설정되지 않았습니다.")
         for t in teams:
             try:
                 self._cognito.get_group(UserPoolId=self._pool, GroupName=f"{TEAM_PREFIX}{t}")
             except ClientError as exc:
                 if exc.response.get("Error", {}).get("Code") == "ResourceNotFoundException":
-                    raise ValueError(f"팀 그룹 team:{t} 이 없습니다.") from exc
+                    raise InviteFailed(f"팀 그룹 team:{t} 이 없습니다.") from exc
                 raise
         temp = None if send_email else temporary_password()
         kwargs: Dict[str, Any] = {
@@ -255,7 +269,7 @@ class OrgDirectoryService:
             created = self._cognito.admin_create_user(**kwargs)["User"]
         except ClientError as exc:
             if exc.response.get("Error", {}).get("Code") == "UsernameExistsException":
-                raise ValueError(f"{email} 은 이미 등록된 사용자입니다.") from exc
+                raise InviteFailed(f"{email} 은 이미 등록된 사용자입니다.") from exc
             raise
         username = str(created.get("Username"))
         sub = _attrs(created).get("sub") or username
@@ -266,7 +280,7 @@ class OrgDirectoryService:
                     self._cognito.admin_add_user_to_group(UserPoolId=self._pool, Username=username, GroupName=g)
                 except ClientError as exc:
                     code = exc.response.get("Error", {}).get("Code", "")
-                    raise RuntimeError(f"{email} 은 만들어졌지만 그룹 {g} 추가에 실패했습니다: {code}") from exc
+                    raise InviteHalfCreated(f"{email} 은 만들어졌지만 그룹 {g} 추가에 실패했습니다: {code}") from exc
         finally:
             self.invalidate()  # the user exists now, whether or not the groups landed
         user = OrgUser(sub=sub, username=username, email=email, provider=COGNITO, role=role,

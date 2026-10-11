@@ -21,7 +21,7 @@ from core.auth import AuthUser, require_admin
 from core.config import MCP_GATEWAY_ARN, TEAM_CONDITIONED_ACTIONS, TEAM_SHARED_ACTIONS
 from core.dependencies import audit_service, org_directory_service, team_provisioner, team_service, usage_service
 from models.team import TeamConfig, TeamConfigUpdate, TeamCreate, is_tool_pattern, validate_team_name
-from services.org_directory_service import NotCognitoUser
+from services.org_directory_service import InviteFailed, NotCognitoUser
 from services.org_drift import compute_drift
 from services.registry_service import RegistryNotConfigured
 from services.team_access import team_of
@@ -546,10 +546,11 @@ def invite_users(body: InviteRequest, user: AuthUser = Depends(require_admin)) -
             continue
         try:
             person, temp = _directory().invite(email, teams=body.teams, role=body.role, send_email=body.send_email)
-        except (ValueError, RuntimeError) as exc:
-            # RuntimeError: the Cognito user exists but a group add failed (half-created); the message names the group.
-            failed.append({"email": email, "detail": str(exc)})
-            _audit().record(user, "user.invite", email, result="error", message=str(exc))
+        except InviteFailed as exc:
+            # InviteHalfCreated: the Cognito user exists but a group add failed; the detail names the group.
+            # Only the service's admin-facing `detail` reaches the response, never the exception text.
+            failed.append({"email": email, "detail": exc.detail})
+            _audit().record(user, "user.invite", email, result="error", message=exc.detail)
             continue
         row = {"sub": person.sub, "email": person.email, "teams": person.teams, "role": person.role}
         if temp:

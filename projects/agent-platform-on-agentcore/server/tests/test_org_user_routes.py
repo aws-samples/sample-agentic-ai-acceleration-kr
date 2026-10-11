@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import routes.org as org  # noqa: E402
 from core.auth import AuthUser, require_admin  # noqa: E402
 from services.audit_service import AuditService  # noqa: E402
-from services.org_directory_service import NotCognitoUser, OrgUser  # noqa: E402
+from services.org_directory_service import InviteFailed, InviteHalfCreated, NotCognitoUser, OrgUser  # noqa: E402
 from services.team_service import TeamService  # noqa: E402
 from team_table_stub import seed  # noqa: E402
 
@@ -60,7 +60,7 @@ class Directory:
     def invite(self, email, teams, role, send_email=True):
         self.calls.append(("invite", email, tuple(teams), role, send_email))
         if email == "dup@example.com":
-            raise ValueError("이미 등록된 사용자입니다.")
+            raise InviteFailed("이미 등록된 사용자입니다.")
         u = OrgUser(sub=f"new-{email}", username=email, email=email, provider="cognito", role=role, teams=list(teams))
         self.users[u.sub] = u
         return u, (None if send_email else "Temp1234!abcd")
@@ -233,7 +233,7 @@ def test_reset_and_delete_audit_and_404():
 
 def test_half_created_invite_is_reported_as_failed_and_audited():
     def boom(email, teams, role, send_email=True):
-        raise RuntimeError("사용자는 만들어졌지만 finance 그룹에 넣지 못했습니다.")
+        raise InviteHalfCreated("사용자는 만들어졌지만 finance 그룹에 넣지 못했습니다.")
 
     org._directory_override.invite = boom
     out = org.invite_users(org.InviteRequest(emails=["gina@example.com"], teams=["finance"]), user=ADMIN)
