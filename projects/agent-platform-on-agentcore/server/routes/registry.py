@@ -32,7 +32,11 @@ from services.registry_service import (
     is_registry_unavailable,
     registry_enabled,
     skill_source_of,
+    owner_identity,
 )
+from services.team_access import can_see, filter_visible, team_of, visibility_known
+from services.default_agent import is_default_record, mark_default
+from services.agent_defaults import AgentDefaults, resolve_agent_defaults
 from services.skill_bundle_service import (
     DiscoveredSkill,
     SkillBundleService,
@@ -55,6 +59,29 @@ def _registry() -> RegistryService:
 
 def _sync() -> AgentSyncService:
     return _sync_service
+
+
+from core.dependencies import team_service as _team_service  # noqa: E402 — after the singletons
+from core.dependencies import usage_service as _usage_service  # noqa: E402
+from routes.harness import _service as _harness_service  # noqa: E402
+
+# Tests swap this for a TeamService with or without declared teams.
+_teams_override = None
+
+
+def _teams_enabled() -> bool:
+    teams = _teams_override or _team_service
+    return bool(getattr(teams, "enabled", False))
+
+
+def _visible(records, user: AuthUser):
+    return filter_visible(records, user, teams_enabled=_teams_enabled())
+
+
+def _can_see_detail(detail, user: AuthUser) -> bool:
+    return can_see(
+        team_of(detail), user, teams_enabled=_teams_enabled(), known=visibility_known(detail)
+    )
 
 
 def _bundles() -> SkillBundleService:
@@ -112,38 +139,60 @@ def list_records(
     type: str | None = Query(None, description="Filter by descriptorType"),
     status: str | None = Query(None, description="Filter by record status"),
     name: str | None = Query(None, description="Exact record name"),
-    _: AuthUser = Depends(current_user),
+    user: AuthUser = Depends(current_user),
 ):
     # Registry off: the chattable agents are the deployed resources themselves.
     if not registry_enabled():
-        records = _sync().deployed_agent_records()
-        return {"records": records, "count": len(records)}
+        records = _visible(_sync().deployed_agent_records(), user)
+        return {"records": mark_default(records), "count": len(records)}
     try:
         records = _registry().list_records(
             descriptor_type=type, status=status, name=name
         )
-        return {"records": records, "count": len(records)}
     except Exception as exc:
         # Registry configured but unreachable (SCP, retired namespace, outage):
         # degrade to the same fallback rather than a blank page.
-        if is_registry_unavailable(exc):
-            logger.warning("Registry unavailable; listing deployed agents: %s", exc)
-            records = _sync().deployed_agent_records()
-            return {"records": records, "count": len(records)}
-        _fail(exc)
+        if not is_registry_unavailable(exc):
+            _fail(exc)
+        logger.warning("Registry unavailable; listing deployed agents: %s", exc)
+        records = _sync().deployed_agent_records()
+    # Outside the try: a filter error must never read as "registry unavailable".
+    records = _visible(records, user)
+    return {"records": mark_default(records), "count": len(records)}
+
+
+def _parse_meta_filters(meta: list[str] | None) -> dict[str, str]:
+    """`meta=team=search&meta=tier=internal` → {"team": "search", "tier": "internal"}.
+
+    The key is a field of the registry's custom metadata schema; AWS validates
+    it, so an unknown key comes back as a 502 ValidationException rather than
+    being silently ignored here.
+    """
+    parsed: dict[str, str] = {}
+    for item in meta or []:
+        key, sep, value = item.partition("=")
+        if sep and key.strip():
+            parsed[key.strip()] = value
+    return parsed
 
 
 @router.get("/search")
 def search_records(
     q: str = Query(..., min_length=1, max_length=256),
     type: list[str] | None = Query(None, description="descriptorType filter, repeatable"),
-    _: AuthUser = Depends(current_user),
+    meta: list[str] | None = Query(
+        None, description="custom metadata filter as key=value, repeatable"
+    ),
+    user: AuthUser = Depends(current_user),
 ):
     try:
-        records = _registry().search_records(query=q, descriptor_types=type)
-        return {"records": records, "count": len(records)}
+        records = _registry().search_records(
+            query=q, descriptor_types=type, custom_metadata=_parse_meta_filters(meta)
+        )
     except Exception as exc:
         _fail(exc)
+    records = _visible(records, user)
+    return {"records": records, "count": len(records)}
 
 
 @router.get("/runtimes")
@@ -198,11 +247,12 @@ def list_deployed_targets(_: AuthUser = Depends(current_user)):
 @router.post("/sync", response_model=SyncAgentsResponse)
 def sync_deployed_agents(
     req: SyncAgentsRequest | None = None,
-    _: AuthUser = Depends(require_admin),
+    user: AuthUser = Depends(require_admin),
 ):
-    """Register deployed agents that have no registry record yet."""
+    """Register deployed agents that have no registry record yet. The admin
+    who runs the sync becomes the owner of every record it creates."""
     try:
-        return _sync().sync(req or SyncAgentsRequest())
+        return _sync().sync(req or SyncAgentsRequest(), owner=owner_identity(user))
     except Exception as exc:
         _fail(exc)
 
@@ -321,7 +371,7 @@ async def create_skill_record(
     file: UploadFile = File(...),
     version: str | None = Form(None),
     submit_for_approval: bool = Form(True),
-    _: AuthUser = Depends(require_admin),
+    user: AuthUser = Depends(require_admin),
 ):
     """Publish a bundle to S3 and register it as an AGENT_SKILLS record.
 
@@ -369,7 +419,8 @@ async def create_skill_record(
                 skill_markdown=info.skill_md,
                 skill_source=source.model_dump(),
                 submit_for_approval=submit_for_approval,
-            )
+            ),
+            owner=owner_identity(user),
         )
     except HTTPException:
         raise
@@ -450,22 +501,45 @@ def list_skill_files(record_id: str, _: AuthUser = Depends(current_user)):
 # `{record_id:path}` on every record route: a deployed-fallback id is
 # `deployed:<arn>` and an ARN carries slashes (`…:harness/name`), which a plain
 # path segment stops at — the route 404s and the UI spins forever.
-@router.get("/records/{record_id:path}", response_model=RegistryRecordDetail)
-def get_record(record_id: str, _: AuthUser = Depends(current_user)):
+def _record_detail(record_id: str, user: AuthUser) -> RegistryRecordDetail:
+    """Shared by the detail and defaults routes: same lookup, same visibility rule."""
     # A deployed-fallback id has no registry record to fetch; answer it from the
     # same synthesis the list route uses rather than 502 against the AWS API.
     if record_id.startswith("deployed:"):
-        return _deployed_detail(record_id)
-    try:
-        return _registry().get_record(record_id)
-    except Exception as exc:
-        _fail(exc)
+        detail = _deployed_detail(record_id)
+    else:
+        try:
+            detail = _registry().get_record(record_id)
+        except Exception as exc:
+            _fail(exc)
+    # Deployed records too: a teamed harness carries its Team tag as metadata.
+    if not _can_see_detail(detail, user):
+        raise HTTPException(status_code=404, detail="Record not found")
+    return detail
+
+
+@router.get("/records/{record_id:path}/defaults", response_model=AgentDefaults)
+def get_record_defaults(record_id: str, user: AuthUser = Depends(current_user)):
+    """The model and system prompt this agent runs with when a thread overrides
+    neither — the baseline the override popover shows. See services/agent_defaults.
+    Null fields are unknowable (a runtime's prompt), not empty."""
+    detail = _record_detail(record_id, user)
+    return resolve_agent_defaults(detail, usage=_usage_service, harness=_harness_service)
+
+
+@router.get("/records/{record_id:path}", response_model=RegistryRecordDetail)
+def get_record(record_id: str, user: AuthUser = Depends(current_user)):
+    """The list filters by the approved revision's team; this detail by the latest's."""
+    detail = _record_detail(record_id, user)
+    detail.is_default = is_default_record(detail)
+    return detail
 
 
 @router.post("/records", response_model=RegistryRecordSummary)
-def create_record(req: CreateRecordRequest, _: AuthUser = Depends(require_admin)):
+def create_record(req: CreateRecordRequest, user: AuthUser = Depends(require_admin)):
+    # The owner metadata is the caller, never the form (see RegistryService).
     try:
-        return _registry().create_record(req)
+        return _registry().create_record(req, owner=owner_identity(user))
     except Exception as exc:
         _fail(exc)
 
@@ -490,6 +564,20 @@ def update_status(
 ):
     try:
         return _registry().update_status(record_id, req.action, reason=req.reason)
+    except Exception as exc:
+        _fail(exc)
+
+
+@router.post("/records/{record_id:path}/sync", response_model=RegistryRecordDetail)
+def sync_record(record_id: str, _: AuthUser = Depends(require_admin)):
+    """Re-fetch the record's definition from its synchronisation source.
+
+    Admin-only like every other write: the fetch runs with the registry's
+    outbound credentials and rewrites the descriptor (and, as AWS does on sync,
+    the record's name, description and version from what the source says).
+    """
+    try:
+        return _registry().trigger_sync(record_id)
     except Exception as exc:
         _fail(exc)
 

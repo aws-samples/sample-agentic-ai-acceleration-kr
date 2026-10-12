@@ -65,6 +65,8 @@ ROUTES = [
     Route("PATCH", "/threads/t1/state", False, body={"values": {"a": 1}}),
     Route("POST", "/threads/t1/runs/stream", False, body={}),
     Route("POST", "/threads/t1/stream", False, body={}),
+    Route("GET", "/threads/t1/runs/stream", False),
+    Route("POST", "/threads/t1/runs/cancel", False),
     Route("DELETE", "/threads/t1", False),
     Route("POST", "/threads/t1/attachments", False, body={}),
     Route("GET", "/threads/t1/attachments/att1", False),
@@ -120,6 +122,8 @@ ROUTES = [
     # agents, which are public registry records, and this one names people. `/me`
     # stays the owner-scoped door to the same counters.
     Route("GET", "/api/insights/users", True),
+    # Spend and policy denials per team; inline is_admin check like /users.
+    Route("GET", "/api/insights/teams", True),
     # Model rate card. Admin throughout (inline _require_admin): registering or
     # removing a rate reprices every turn in the ledger, and the Settings tab that
     # drives these is admin-only.
@@ -159,11 +163,34 @@ GATED_ELSEWHERE = [
     # which menus are hidden, only an admin changes it.
     Route("GET", "/api/settings/nav", False),
     Route("PUT", "/api/settings/nav", True),
+    Route("GET", "/api/settings/teams", False),
+    # Organization page (test_org_team_routes.py, test_org_user_routes.py,
+    # test_org_misc_routes.py): every route is admin-only.
+    Route("GET", "/api/org/teams", True),
+    Route("POST", "/api/org/teams", True),
+    Route("GET", "/api/org/teams/{name}", True),
+    Route("PATCH", "/api/org/teams/{name}", True),
+    Route("DELETE", "/api/org/teams/{name}", True),
+    Route("POST", "/api/org/teams/{name}/provision", True),
+    Route("GET", "/api/org/teams/{name}/members", True),
+    Route("PUT", "/api/org/teams/{name}/members/{sub}", True),
+    Route("DELETE", "/api/org/teams/{name}/members/{sub}", True),
+    Route("GET", "/api/org/teams/{name}/records", True),
+    Route("GET", "/api/org/users", True),
+    Route("POST", "/api/org/users", True),
+    Route("GET", "/api/org/users/{sub}", True),
+    Route("PATCH", "/api/org/users/{sub}", True),
+    Route("POST", "/api/org/users/{sub}/reset-password", True),
+    Route("DELETE", "/api/org/users/{sub}", True),
+    Route("GET", "/api/org/drift", True),
+    Route("GET", "/api/org/audit", True),
+    Route("GET", "/api/org/tools", True),
     # Called once after an OIDC login with the fresh id_token (test_auth_routes.py).
     Route("POST", "/api/auth/session", False),
     Route("GET", "/api/registry/info", False),
     Route("GET", "/api/registry/records", False),
     Route("GET", "/api/registry/records/r1", False),
+    Route("GET", "/api/registry/records/r1/defaults", False),
     Route("GET", "/api/registry/search", False),
     Route("GET", "/api/registry/runtimes", False),
     Route("GET", "/api/registry/gateways", False),
@@ -172,6 +199,9 @@ GATED_ELSEWHERE = [
     Route("POST", "/api/registry/records", True),
     Route("PATCH", "/api/registry/records/r1", True),
     Route("POST", "/api/registry/records/r1/status", True),
+    # Re-fetches the descriptor from the record's source with the registry's
+    # outbound credentials and rewrites the record: a curator's action.
+    Route("POST", "/api/registry/records/r1/sync", True),
     Route("DELETE", "/api/registry/records/r1", True),
     # Skill bundles (test_skill_routes.py). Validation writes nothing — it exists
     # so the upload dialog can report problems — so it needs no more than a
@@ -198,6 +228,7 @@ GATED_ELSEWHERE = [
     Route("GET", "/api/knowledge", False),
     Route("POST", "/api/knowledge", False),
     Route("GET", "/api/knowledge/source-buckets", False),
+    Route("GET", "/api/knowledge/stats", False),
     Route("GET", "/api/knowledge/kb1", False),
     Route("DELETE", "/api/knowledge/kb1", False),
     Route("POST", "/api/knowledge/kb1/documents", False),
@@ -256,7 +287,7 @@ class StubThreadService:
 
 class StubStreamingService:
     async def stream_thread_execution(
-        self, thread_id, request, actor_id=None, owner_sub=""
+        self, thread_id, request, actor_id=None, owner_sub="", caller=None
     ):
         # Signature matches the real one. Accepting only (thread_id, request)
         # made every streaming case here pass through a 500, which "not 401 and

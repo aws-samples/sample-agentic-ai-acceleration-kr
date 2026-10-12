@@ -264,11 +264,11 @@ def client_token_for(kb_key: str, step: str) -> str:
 class KnowledgeBaseRecord(BaseModel):
     kb_key: str
     owner_id: str
-    # The `username` claim, which is only as readable as the pool makes it: a pool
-    # whose usernames are UUIDs (this one) stores the same value as owner_id, so the
-    # UI shows a UUID for a shared knowledge base's owner. The access token carries
-    # no `email`, so the server has nothing better to record — a readable owner needs
-    # an alias or a pool attribute mapped into the token, not a change here.
+    # Stored as the `username` claim, which in this pool is the sub again (it signs
+    # in by email, so Cognito mints UUID usernames) and the access token carries no
+    # email. Listings therefore overwrite it with the directory's email for
+    # owner_id at read time (services/directory_service.py); the stored value is
+    # only the fallback when that lookup has nothing.
     owner_name: str = ""
     # Admin-only. A shared knowledge base is readable and attachable by everyone.
     shared: bool = False
@@ -327,6 +327,21 @@ class KnowledgeDocument(BaseModel):
     status: Optional[str] = None
     status_reason: Optional[str] = None
     updated_at: Optional[str] = None
+
+
+class KnowledgeBaseStats(BaseModel):
+    """What a knowledge-base card shows beyond the record itself.
+
+    Served apart from the listing because every field costs AWS calls the
+    listing does not make, and the listing is polled every five seconds while
+    anything provisions. None means "could not be read", which the UI must not
+    render as zero.
+    """
+
+    documents: Optional[int] = None
+    failed_documents: Optional[int] = None
+    # Names of the harnesses that attached this knowledge base's gateway.
+    agents: Optional[List[str]] = None
 
 
 class SyncJob(BaseModel):

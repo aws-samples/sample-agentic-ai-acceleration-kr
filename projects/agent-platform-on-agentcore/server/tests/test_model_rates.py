@@ -382,14 +382,16 @@ def test_tagged_dollars_come_back_with_the_untagged_remainder_beside_them():
 def test_the_per_agent_breakdown_is_scoped_like_the_total_it_breaks_down():
     """Without the REGION filter the total and its breakdown answer different
     questions, and once the tag is active the bars can sum past the total they sit
-    under — with nothing on screen to explain it."""
-    service = BillingService(region_name="us-east-1")
+    under — with nothing on screen to explain it. The Platform tag is part of
+    that scope too, so it is pinned here rather than read from the environment."""
+    service = BillingService(region_name="us-east-1", platform="bap")
     service._client = StubCostExplorer([])
 
     service.per_agent_costs("2026-08-01", "2026-08-16")
 
     filters = service._client.calls[0]["Filter"]["And"]
-    dimensions = {f["Dimensions"]["Key"]: f["Dimensions"]["Values"] for f in filters}
+    dimensions = {f["Dimensions"]["Key"]: f["Dimensions"]["Values"] for f in filters if "Dimensions" in f}
+    assert [f["Tags"] for f in filters if "Tags" in f] == [{"Key": "Platform", "Values": ["bap"]}]
     assert dimensions["REGION"] == ["us-east-1"]
     assert dimensions["SERVICE"] == ["Amazon Bedrock AgentCore"]
     assert dimensions["RECORD_TYPE"] == ["Usage"]

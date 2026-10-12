@@ -55,7 +55,7 @@ class StubRegistry:
             raise self._error
         return {}
 
-    def create_record(self, req):
+    def create_record(self, req, owner=None):
         from models.registry import RegistryRecordSummary
 
         self.created.append(req)

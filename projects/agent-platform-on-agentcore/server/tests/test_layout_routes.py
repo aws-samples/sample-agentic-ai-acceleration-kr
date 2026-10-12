@@ -132,7 +132,7 @@ def test_put_then_get_round_trips():
         "widgets": [
             {"id": "leaderboard", "span": "half", "visible": True},
             {"id": "kpi", "span": "full", "visible": False},
-            {"id": "billed", "span": "half", "visible": True},
+            {"id": "users", "span": "half", "visible": True},
             {"id": "trend", "span": "full", "visible": True},
             {"id": "reuse", "span": "half", "visible": True},
         ],

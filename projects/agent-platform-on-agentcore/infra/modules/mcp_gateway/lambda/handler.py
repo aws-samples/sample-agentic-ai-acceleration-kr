@@ -5,6 +5,7 @@ The gateway invokes this function once per tool call. The tool name arrives in
 the `bedrockAgentCoreToolName` client context (prefixed with the target name),
 and the tool arguments are the event body.
 """
+import hashlib
 import json
 import logging
 import re
@@ -56,6 +57,37 @@ def _calculate(args):
         return {"error": f"Unsupported operation: {operation}"}
 
     return {"operation": operation, "a": a, "b": b, "result": results[operation]()}
+
+
+# --- workshop demo tools -----------------------------------------------------
+# Mock business tools so a Cedar policy has something team-specific to allow or
+# deny: finance may approve expenses (under a limit the policy sets), HR may
+# look up salary bands. Neither touches a real system.
+
+_SALARY_BANDS = ("B1", "B2", "B3", "B4", "B5")
+
+
+def _approve_expense(args):
+    amount = args.get("amount")
+    if isinstance(amount, bool) or not isinstance(amount, int):
+        return {"error": "'amount' must be an integer number of dollars."}
+    memo = str(args.get("memo") or "")
+    digest = hashlib.sha256(f"{amount}:{memo}".encode()).hexdigest()[:8].upper()
+    return {
+        "approved": True,
+        "approval_id": f"EXP-{digest}",
+        "amount": amount,
+        "memo": memo,
+        "mock": True,
+    }
+
+
+def _lookup_salary(args):
+    employee_id = str(args.get("employee_id") or "").strip()
+    if not employee_id:
+        return {"error": "'employee_id' is required."}
+    index = int(hashlib.sha256(employee_id.encode()).hexdigest(), 16) % len(_SALARY_BANDS)
+    return {"employee_id": employee_id, "band": _SALARY_BANDS[index], "mock": True}
 
 
 class _TextExtractor(HTMLParser):
@@ -170,6 +202,8 @@ TOOLS = {
     "fetch_url": _fetch_url,
     "create_artifact": _create_artifact,
     "update_artifact": _update_artifact,
+    "approve_expense": _approve_expense,
+    "lookup_salary": _lookup_salary,
 }
 
 

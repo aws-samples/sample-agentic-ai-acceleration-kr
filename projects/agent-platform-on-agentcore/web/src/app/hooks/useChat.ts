@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
+import { getCapabilities } from "@/lib/capabilities";
 import { useStream } from "@/hooks/useStream";
 import type { Message, Checkpoint } from "@/lib/api-types";
 import { listThreadArtifacts, type ArtifactEvent } from "@/lib/artifacts";
@@ -17,7 +18,7 @@ import {
   overridesFromMetadata,
   OVERRIDES_METADATA_KEY,
   type AgentChatConfig,
-  type HarnessOverrides,
+  type ThreadOverrides,
 } from "@/lib/agent-config";
 import type { Thread } from "@/lib/api-types";
 
@@ -47,14 +48,15 @@ export function useChat({
   const [threadId, setThreadId] = useQueryState("threadId");
   const apiClient = useClient();
 
-  // Per-thread model / prompt overrides for a harness agent. State here so the
-  // popover and the send path see the same value; persisted in thread metadata
-  // so the thread keeps them when reopened.
-  const [overrides, setOverridesState] = useState<HarnessOverrides>({});
+  // Per-thread model / prompt overrides. State here so the popover and the send
+  // path see the same value; persisted in thread metadata so the thread keeps
+  // them when reopened. Offered for any agent the server can forward them to:
+  // a harness (InvokeHarness model/systemPrompt) or a runtime (invoke payload).
+  const [overrides, setOverridesState] = useState<ThreadOverrides>({});
   // Set before the thread exists (a fresh chat): the PATCH has to wait until the
   // first turn has created the thread, or it lands on a 404.
-  const pendingOverridesRef = useRef<HarnessOverrides | null>(null);
-  const overridesSupported = !!agentConfig?.harnessArn;
+  const pendingOverridesRef = useRef<ThreadOverrides | null>(null);
+  const overridesSupported = !!(agentConfig?.harnessArn || agentConfig?.agentRuntimeArn);
 
   const flushPendingOverrides = useCallback(
     (id: string | null) => {
@@ -96,7 +98,20 @@ export function useChat({
     threadId ? ["thread-overrides", threadId] : null,
     async ([, id]: [string, string]) => {
       const thread = (await apiClient.getThread(id)) as Thread;
-      return overridesFromMetadata(thread.metadata);
+      const stored = overridesFromMetadata(thread.metadata);
+      // A thread the retired basic-chat path pinned carries its model in a
+      // field of its own. Seeding the override from it means this session
+      // keeps sending that model while the server moves the thread onto the
+      // default record (which also writes the override for later reopens).
+      // Only a model the server still allows is seeded: a withdrawn one is
+      // dropped server-side anyway, and sending it would read as a choice.
+      if (!stored.modelId && thread.agent_record_id === "__basic_chat__" && thread.basic_chat_model_id) {
+        const allowed = (await getCapabilities()).allowedModels ?? [];
+        if (allowed.includes(thread.basic_chat_model_id)) {
+          return { ...stored, modelId: thread.basic_chat_model_id };
+        }
+      }
+      return stored;
     },
     { revalidateOnFocus: false }
   );
@@ -113,7 +128,7 @@ export function useChat({
   }, [threadId, storedOverrides]);
 
   const setOverrides = useCallback(
-    (next: HarnessOverrides) => {
+    (next: ThreadOverrides) => {
       setOverridesState(next);
       if (threadId) {
         void apiClient

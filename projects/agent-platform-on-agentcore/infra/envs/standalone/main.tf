@@ -4,6 +4,8 @@
 # The full stack: every resource is named from `var.project` (default `bap`), so
 # the whole deployment shares one greppable prefix.
 
+data "aws_caller_identity" "current" {}
+
 locals {
   # Service discovery is per-VPC, but the namespace is a global name in Cloud
   # Map, so it is prefixed like everything else. Held here rather than read back
@@ -79,6 +81,7 @@ module "dynamodb" {
   usage_table_name     = "${var.project}-usage"
   prefs_table_name     = "${var.project}-prefs"
   users_table_name     = "${var.project}-users"
+  teams_table_name     = "${var.project}-teams"
   allow_destroy        = var.allow_destroy
 }
 
@@ -111,6 +114,20 @@ module "agent_registry" {
   region        = var.region
   auto_approval = var.registry_auto_approval
   python_bin    = var.registry_python_bin
+  # Empty map = the module's default schema (owner/team/tier).
+  custom_metadata_schema = length(var.registry_custom_metadata_schema) > 0 ? var.registry_custom_metadata_schema : null
+  kms_key_arn            = var.registry_kms_key_arn
+  # Approval-workflow events go to the same inbox as the insights alarms.
+  approval_email = var.alert_email
+}
+
+locals {
+  registry_mcp_endpoint = var.enable_agent_registry && var.registry_tool_on_gateway ? module.agent_registry[0].mcp_endpoint : ""
+  registry_arn          = var.enable_agent_registry ? module.agent_registry[0].registry_arn : ""
+  registry_sync_role    = var.enable_agent_registry ? module.agent_registry[0].sync_role_arn : ""
+  # Workshop mock tools on the Lambda tools target (modules/mcp_gateway drops
+  # them unless demo_tools); the policy wiring must not name them when absent.
+  demo_tool_names = ["approve_expense", "lookup_salary"]
 }
 
 # The activation status is account-global: two states declaring the same keys
@@ -126,12 +143,24 @@ module "bedrock_guardrail" {
   project = var.project
 }
 
+module "policy_engine" {
+  source  = "../../modules/policy_engine"
+  count   = var.enable_gateway_policy ? 1 : 0
+  project = var.project
+}
+
 module "mcp_gateway" {
-  source              = "../../modules/mcp_gateway"
-  project             = var.project
-  region              = var.region
-  web_search_backend  = var.web_search_backend
-  runtime_mcp_servers = var.runtime_mcp_servers
+  source                = "../../modules/mcp_gateway"
+  project               = var.project
+  region                = var.region
+  web_search_backend    = var.web_search_backend
+  runtime_mcp_servers   = var.runtime_mcp_servers
+  attach_registry       = var.enable_agent_registry && var.registry_tool_on_gateway
+  registry_mcp_endpoint = local.registry_mcp_endpoint
+  registry_arn          = local.registry_arn
+  policy_engine_arn     = var.enable_gateway_policy ? module.policy_engine[0].engine_arn : ""
+  policy_mode           = var.policy_mode
+  demo_tools            = var.demo_tools
 }
 
 module "s3_skills" {
@@ -168,6 +197,35 @@ module "harness_role" {
   project           = var.project
   region            = var.region
   skills_bucket_arn = module.s3_skills.bucket_arn
+  create_boundary   = true
+}
+
+module "gateway_policies" {
+  source           = "../../modules/gateway_policies"
+  count            = var.enable_gateway_policy ? 1 : 0
+  project          = var.project
+  policy_engine_id = module.policy_engine[0].engine_id
+  gateway_arn      = module.mcp_gateway.gateway_arn
+  target_name      = "${var.project}-platform-tools"
+  account_id       = data.aws_caller_identity.current.account_id
+  platform_role_names = concat([
+    "${var.project}-agent-runtime",
+    module.harness_role.role_name,
+    # The server itself lists and calls this gateway (MCP Apps discovery, the
+    # admin tool tester) with its task role; without a permit ENFORCE empties
+    # its tools/list.
+    "${var.project}-ecs-task",
+  ], var.extra_platform_role_names)
+  # The mock tools exist on the target only with demo_tools. A policy naming an
+  # action the gateway lacks fails validation, so the platform forbid drops
+  # these names when the mocks are off.
+  team_only_actions = var.demo_tools ? local.demo_tool_names : []
+  # Same condition as mcp_gateway's attach_registry: the forbid may only name
+  # tools the gateway actually has.
+  registry_target_name = var.enable_agent_registry && var.registry_tool_on_gateway ? "registry" : ""
+  # Workshop demo: the amount cap on approve_expense, by role name. Team roles
+  # themselves are the Organization page's (`<project>-harness-<team>`).
+  demo_expense_role_names = var.demo_tools ? [for t in var.demo_expense_teams : "${var.project}-harness-${t}"] : []
 }
 
 # Execution role for the hand-deployed agent runtimes (agent-runtime/scripts/
@@ -204,10 +262,15 @@ module "iam" {
     var.browser_screenshot_bucket != "" ?
     "arn:aws:s3:::${var.browser_screenshot_bucket}" : ""
   )
-  usage_table_arn = module.dynamodb.usage_table_arn
-  prefs_table_arn = module.dynamodb.prefs_table_arn
-  users_table_arn = module.dynamodb.users_table_arn
-  user_pool_arn   = module.cognito.user_pool_arn
+  usage_table_arn        = module.dynamodb.usage_table_arn
+  prefs_table_arn        = module.dynamodb.prefs_table_arn
+  users_table_arn        = module.dynamodb.users_table_arn
+  teams_table_arn        = module.dynamodb.teams_table_arn
+  team_role_boundary_arn = module.harness_role.boundary_arn
+  policy_engine_arn      = var.enable_gateway_policy ? module.policy_engine[0].engine_arn : ""
+  gateway_arn            = module.mcp_gateway.gateway_arn
+  user_pool_arn          = module.cognito.user_pool_arn
+  registry_sync_role_arn = local.registry_sync_role
 }
 
 module "ecs" {
@@ -237,9 +300,8 @@ module "ecs" {
     MODEL_COST_AIP_ENABLED = tostring(var.enable_model_cost_aip)
     DYNAMODB_THREADS_TABLE = module.dynamodb.table_name
     BEDROCK_MODEL_ID       = var.bedrock_model_id
-    # Basic chat answers from the default runtime (AGENT_RUNTIME_ARN) with one
-    # of these models; the server refuses any other.
-    BASIC_CHAT_ALLOWED_MODELS   = join(",", var.basic_chat_allowed_models)
+    # Per-thread model overrides may pick only these; the server refuses any other.
+    ALLOWED_MODELS              = join(",", var.allowed_models)
     COGNITO_USER_POOL_CLIENT_ID = module.cognito.client_id
     COGNITO_USER_POOL_ID        = module.cognito.user_pool_id
     COGNITO_REGION              = var.region
@@ -251,12 +313,32 @@ module "ecs" {
     AGENT_RUNTIME_ARN               = var.agent_runtime_arn
     AGENT_RUNTIME_DISCOVERY_REGIONS = var.agent_runtime_discovery_regions
     AGENT_REGISTRY_ID               = var.enable_agent_registry ? module.agent_registry[0].registry_id : ""
-    HARNESS_EXECUTION_ROLE_ARN      = module.harness_role.role_arn
-    SKILLS_BUCKET                   = module.s3_skills.bucket_name
-    ARTIFACTS_BUCKET                = module.s3_artifacts.bucket_name
-    ARTIFACTS_TABLE                 = module.dynamodb.artifacts_table_name
-    USAGE_TABLE                     = module.dynamodb.usage_table_name
-    PREFS_TABLE                     = module.dynamodb.prefs_table_name
+    # Offered by the Register dialog as the IAM credential for record sync.
+    REGISTRY_SYNC_ROLE_ARN     = local.registry_sync_role
+    HARNESS_EXECUTION_ROLE_ARN = module.harness_role.role_arn
+    # Organization page: teams the server creates at runtime live here; the
+    # server fences their roles with the boundary and writes their Cedar
+    # policies to the engine (empty when the stack has none).
+    TEAMS_TABLE            = module.dynamodb.teams_table_name
+    TEAM_ROLE_BOUNDARY_ARN = module.harness_role.boundary_arn
+    POLICY_ENGINE_ID       = var.enable_gateway_policy ? module.policy_engine[0].engine_id : ""
+    MCP_GATEWAY_ARN        = module.mcp_gateway.gateway_arn
+    # Actions the server adds to every team's Cedar policy. Default: the
+    # web-search connector's tool, which exists only with the agentcore backend.
+    TEAM_SHARED_ACTIONS = join(",", length(var.team_shared_actions) > 0 ? [
+      for a in var.team_shared_actions : a
+      if var.web_search_backend == "agentcore" || !startswith(a, "${var.project}-web-search___")
+    ] : (var.web_search_backend == "agentcore" ? ["${var.project}-web-search___WebSearch"] : []))
+    # Tools whose terraform Cedar policy carries an argument condition (the
+    # demo expense amount cap). The server refuses them in a team's tool list
+    # because its generated policies have no conditions.
+    TEAM_CONDITIONED_ACTIONS = var.demo_tools && length(var.demo_expense_teams) > 0 ? "${var.project}-platform-tools___approve_expense" : ""
+    MCP_GATEWAY_ID           = module.mcp_gateway.gateway_id
+    SKILLS_BUCKET            = module.s3_skills.bucket_name
+    ARTIFACTS_BUCKET         = module.s3_artifacts.bucket_name
+    ARTIFACTS_TABLE          = module.dynamodb.artifacts_table_name
+    USAGE_TABLE              = module.dynamodb.usage_table_name
+    PREFS_TABLE              = module.dynamodb.prefs_table_name
     # The insights collector runs inside the server task (one per stack; a DDB
     # lease guards a second replica) and reads per-session usage from the
     # vended log group below.

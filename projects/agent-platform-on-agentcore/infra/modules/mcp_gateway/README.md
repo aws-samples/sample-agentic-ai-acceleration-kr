@@ -88,3 +88,32 @@ Switching is a plain `terraform apply`: the connector target is gated by the val
   not detected as drift. `terraform destroy` does remove it.
 - Requires `python3` with `boto3`/`botocore` (>= 1.43.78 to pin a connector
   version) wherever `terraform apply` runs.
+
+## Workshop mock tools (`demo_tools`)
+
+`approve_expense` and `lookup_salary` are canned mocks for the team/policy
+workshop. They stay in `tools.json` but the upsert drops them
+(`--drop-tool`) unless `demo_tools = true`. The flag is not a `null_resource`
+trigger (adding one would replace the live target), so flipping it on an
+existing stack needs `terraform apply -replace=module.mcp_gateway.null_resource.target`.
+
+## Target replacement is destroy-first
+
+`null_resource.target` is replaced whenever a trigger changes (schema sha,
+script sha, Lambda ARN, …). Terraform runs the old resource's destroy
+provisioner (`gateway_target.py delete`) **before** the new upsert, and
+`create_before_destroy` is not a fix: the upsert reconciles by name, so the
+later destroy would delete the target it just upserted. If a later step in the
+same apply fails, the Lambda tools target is left deleted and every agent loses
+`current_time`, `calculate`, `fetch_url`, `create_artifact`, …
+
+Seen on bap 2026-10-10, twice: at ~02:10 UTC a registry-module replace failed
+(SystemExit) after the target had been deleted, and at ~04:12:45 UTC the
+policy-engine attach failed on IAM propagation after the same delete; the
+second time the target stayed gone until the next apply recreated it at
+04:21:08 (≈8 min 20 s).
+
+Recovery: fix the failing step and re-run `terraform apply` — the null_resource
+is still pending creation, so the apply recreates the target. To restore it
+without fixing anything else, `terraform apply -target=module.mcp_gateway.null_resource.target`.
+Check with `aws bedrock-agentcore-control list-gateway-targets --gateway-identifier <id>`.

@@ -15,7 +15,8 @@ import type {
   InsightsSources,
 } from "@/lib/insights";
 import {
-  DailyColumns,
+  DailyArea,
+  DonutShare,
   EmptyPlot,
   Plot,
   PlotCell,
@@ -113,14 +114,15 @@ export function GuardrailPanel({
     );
   }
 
+  // A donut: four kinds of action that together are every intervention. Each
+  // keeps its own hue slot, so 출력 마스킹 is the same colour in a window that has
+  // no input blocks.
   const actionSegments = [
-    { name: "입력 차단", value: totals!.blocked_input },
-    { name: "출력 차단", value: totals!.blocked_output },
-    { name: "입력 마스킹", value: totals!.anonymized_input },
-    { name: "출력 마스킹", value: totals!.anonymized_output },
-  ]
-    .filter((segment) => segment.value > 0)
-    .map((segment) => ({ ...segment, display: segment.value.toLocaleString("ko-KR") }));
+    { name: "입력 차단", value: totals!.blocked_input, colorIndex: 0 },
+    { name: "출력 차단", value: totals!.blocked_output, colorIndex: 1 },
+    { name: "입력 마스킹", value: totals!.anonymized_input, colorIndex: 2 },
+    { name: "출력 마스킹", value: totals!.anonymized_output, colorIndex: 3 },
+  ].filter((segment) => segment.value > 0);
 
   // The filter list is the "what". Sorted by count; the label is Bedrock's own
   // filter name so it can be matched against the guardrail's configuration.
@@ -196,7 +198,8 @@ export function GuardrailPanel({
 
   return (
     <PlotStack>
-      {/* Row 1: the two part-to-whole bars. Row 2: by agent and by filter. Row 3: by
+      {/* Row 1: what kind of action (donut) and how sure (an ordered scale, so a
+          stacked bar that reads sure → unsure). Row 2: by agent and by filter. Row 3: by
           person and by day. Cells are unconditional, see the component note. */}
       <PlotGrid>
         <PlotCell>
@@ -208,7 +211,7 @@ export function GuardrailPanel({
                 : `개입 ${interventions.toLocaleString("ko-KR")}회`
             }
           >
-            <ShareBar segments={actionSegments} />
+            <DonutShare segments={actionSegments} totalLabel="회" empty="실행 유형이 기록된 개입이 없습니다." />
           </Plot>
         </PlotCell>
 
@@ -274,7 +277,7 @@ export function GuardrailPanel({
         <PlotCell>
           <Plot title="일별 개입" hint="하루에 가드레일이 개입한 횟수입니다.">
             {series.length > 0 ? (
-              <DailyColumns
+              <DailyArea
                 data={series}
                 dataKey="guardrail_interventions"
                 name="개입"

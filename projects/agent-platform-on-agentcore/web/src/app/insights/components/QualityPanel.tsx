@@ -14,8 +14,10 @@ import {
   type EvaluationRun,
   type EvaluationScore,
   type Evaluator,
+  type RecordThread,
 } from "@/lib/insights";
 import { EmptyPlot, RankedBars, type RankedEntry } from "./charts";
+import { EvaluatorPicker, ThreadPicker } from "./EvaluationPickers";
 
 /**
  * Quality scores for one agent — the third subsystem that was built and never drawn.
@@ -101,11 +103,17 @@ const EVALUATOR_LABELS: Record<string, string> = {
   "Builtin.Harmfulness": "무해성",
 };
 const WANTED_EVALUATORS = Object.keys(EVALUATOR_LABELS);
+/** `StartBatchEvaluation` rejects more than this many evaluators in one run. */
+const MAX_EVALUATORS = 10;
 
 export function QualityPanel({ recordId }: { recordId: string }) {
   const [run, setRun] = useState<EvaluationRun | { status: "none" } | null>(null);
+  // The whole catalogue, for the picker; the measured defaults are preselected
+  // (see WANTED_EVALUATORS) and anything else is the admin's choice to add.
   const [evaluators, setEvaluators] = useState<Evaluator[]>([]);
-  const [threadCount, setThreadCount] = useState<number | null>(null);
+  const [selectedEvaluators, setSelectedEvaluators] = useState<Set<string>>(new Set());
+  const [threads, setThreads] = useState<RecordThread[] | null>(null);
+  const [selectedThreads, setSelectedThreads] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [forbidden, setForbidden] = useState(false);
@@ -121,43 +129,43 @@ export function QualityPanel({ recordId }: { recordId: string }) {
 
   useEffect(() => {
     setRun(null);
-    setThreadCount(null);
+    setThreads(null);
     void load();
-    // The catalogue and the thread count are what the button needs to be honest
-    // about what pressing it will do. Both are free reads.
+    // The catalogue and the threads are what the pickers offer and what the
+    // button needs to be honest about what pressing it will do. Both are free.
     fetchEvaluators()
-      .then((value) =>
-        setEvaluators(
-          // Intersected in `WANTED_EVALUATORS` order, not catalogue order, so the
-          // set a press asks for is the measured one rather than whatever AWS
-          // happens to list first.
-          WANTED_EVALUATORS.map((id) =>
-            value.evaluators.find(
-              (evaluator) => evaluator.builtin && evaluator.evaluator_id === id,
-            ),
-          ).filter((evaluator): evaluator is Evaluator => Boolean(evaluator)),
-        ),
-      )
+      .then((value) => {
+        setEvaluators(value.evaluators);
+        // Preselect the measured set, in WANTED_EVALUATORS order, so an untouched
+        // press asks for the evaluators whose direction we have checked rather
+        // than whatever AWS happens to list first.
+        const ids = new Set(value.evaluators.map((evaluator) => evaluator.evaluator_id));
+        setSelectedEvaluators(new Set(WANTED_EVALUATORS.filter((id) => ids.has(id))));
+      })
       .catch(() => setEvaluators([]));
     fetchRecordThreads(recordId, 20)
-      .then((value) => setThreadCount(value.threads.length))
-      .catch(() => setThreadCount(null));
+      .then((value) => {
+        setThreads(value.threads);
+        // Every recent thread, as this panel always ran; the picker is there to
+        // trim, and the count beside the button says what the press costs.
+        setSelectedThreads(new Set(value.threads.map((thread) => thread.thread_id)));
+      })
+      .catch(() => setThreads([]));
   }, [recordId, load]);
 
+  const overCap = selectedEvaluators.size > MAX_EVALUATORS;
+  const canStart =
+    selectedEvaluators.size > 0 && !overCap && selectedThreads.size > 0;
+
   const start = async () => {
-    if (evaluators.length === 0) return;
+    if (!canStart) return;
     setBusy(true);
     setError(null);
     try {
-      const threads = await fetchRecordThreads(recordId, 20);
-      if (threads.threads.length === 0) {
-        setError("평가할 스레드가 없습니다.");
-        return;
-      }
       setRun(
         await startEvaluation(
-          threads.threads.map((thread) => thread.thread_id),
-          evaluators.map((evaluator) => evaluator.evaluator_id),
+          Array.from(selectedThreads),
+          Array.from(selectedEvaluators),
           recordId,
         ),
       );
@@ -177,18 +185,50 @@ export function QualityPanel({ recordId }: { recordId: string }) {
 
   return (
     <div className="space-y-3">
+      {/* What a press will score, chosen here rather than fixed: threads by
+          their opening question, evaluators by provider. Hidden for a plain user,
+          who cannot start a run and would only be shown knobs that 403. */}
+      {!forbidden && (
+        <div className="grid grid-cols-1 gap-2 @xl:grid-cols-2">
+          <div className="space-y-1">
+            <div className="text-xxs font-medium text-muted-foreground">대상 스레드</div>
+            {threads === null ? (
+              <p className="text-xxs text-muted-foreground">스레드를 읽고 있습니다…</p>
+            ) : threads.length === 0 ? (
+              <p className="text-xxs text-muted-foreground">
+                이 에이전트로 열린 스레드가 없어 평가할 대상이 없습니다.
+              </p>
+            ) : (
+              <ThreadPicker
+                threads={threads}
+                selected={selectedThreads}
+                onChange={setSelectedThreads}
+              />
+            )}
+          </div>
+          <div className="space-y-1">
+            <div className="text-xxs font-medium text-muted-foreground">평가자</div>
+            {evaluators.length === 0 ? (
+              <p className="text-xxs text-muted-foreground">평가자 카탈로그를 읽지 못했습니다.</p>
+            ) : (
+              <EvaluatorPicker
+                evaluators={evaluators}
+                selected={selectedEvaluators}
+                onChange={setSelectedEvaluators}
+              />
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-wrap items-center gap-2">
         {!forbidden && (
           <Button
             variant="outline"
             size="sm"
-            disabled={busy || running || evaluators.length === 0}
+            disabled={busy || running || !canStart}
             onClick={() => void start()}
-            title={
-              evaluators.length === 0
-                ? "평가자 카탈로그를 읽지 못했습니다."
-                : "최근 스레드를 채점합니다. 판정 모델 호출만큼 요금이 붙습니다."
-            }
+            title="고른 스레드를 고른 평가자로 채점합니다. 판정 모델 호출만큼 요금이 붙습니다."
           >
             <Play className={cn("size-3.5", busy && "animate-pulse")} />
             평가 실행
@@ -202,9 +242,11 @@ export function QualityPanel({ recordId }: { recordId: string }) {
         )}
         {/* Stated before the button is pressed, not after: this is the one
             control in the drill-down that bills per session. */}
-        {threadCount !== null && evaluators.length > 0 && !active && (
-          <span className="text-xxs text-muted-foreground">
-            스레드 {threadCount}개 × 평가자 {evaluators.length}개가 채점됩니다
+        {!forbidden && threads !== null && (
+          <span className={cn("text-xxs", overCap ? "text-destructive" : "text-muted-foreground")}>
+            {overCap
+              ? `평가자는 한 번에 ${MAX_EVALUATORS}개까지입니다`
+              : `스레드 ${selectedThreads.size}개 × 평가자 ${selectedEvaluators.size}개가 채점됩니다`}
           </span>
         )}
       </div>

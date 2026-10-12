@@ -1,7 +1,6 @@
 import useSWRInfinite from "swr/infinite";
 import type { Thread, ThreadStatus } from "@/lib/api-types";
 import { ApiClient } from "@/lib/api-client";
-import { getConfig } from "@/lib/config";
 import { epochOf } from "@/app/insights/threadRows.mjs";
 
 /** Server `utcnow().isoformat()` (no zone) interpreted as UTC, as a Date. */
@@ -37,11 +36,11 @@ export function useThreads(props: {
 
   return useSWRInfinite(
     (pageIndex: number, previousPageData: ThreadItem[] | null) => {
-      const config = getConfig();
-
-      if (!config) {
-        return null;
-      }
+      // No gate on the saved config. The key used to be null until an agent had
+      // been picked, from when the config held the API address; the fetcher reads
+      // that from the environment now, and the gate's only effect was a blank
+      // rail — not loading, not empty — for anyone who had never picked an
+      // agent, even though the chat itself already runs on the default agent.
 
       // If the previous page returned no items, we've reached the end
       if (previousPageData && previousPageData.length === 0) {

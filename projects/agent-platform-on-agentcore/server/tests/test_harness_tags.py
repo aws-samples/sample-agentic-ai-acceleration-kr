@@ -80,3 +80,43 @@ def test_no_owner_tag_is_invented():
     """Harnesses carry no owner in this system; per-user usage lives in the
     usage table, not in a billing tag."""
     assert "OwnerSub" not in created_with()["tags"]
+
+
+class TagControl:
+    def __init__(self, tags=None, fail=False):
+        self.tags, self.fail, self.calls = tags or {}, fail, 0
+
+    def list_tags_for_resource(self, resourceArn):
+        self.calls += 1
+        if self.fail:
+            raise RuntimeError("AccessDenied")
+        return {"tags": self.tags}
+
+
+def _tag_service(control):
+    service = HarnessService(registry=object(), region="us-east-1", execution_role_arn="arn:aws:iam::1:role/h")
+    service._control = control
+    return service
+
+
+def test_team_tag_is_read_back_normalised_and_cached():
+    # The deployed-record fallback reads the team from this tag (final review C1).
+    control = TagControl({"Platform": PLATFORM, "Team": "Finance"})
+    service = _tag_service(control)
+    assert service.team_tag_of(HARNESS_ARN) == "finance"
+    assert service.team_tag_of(HARNESS_ARN) == "finance"
+    assert control.calls == 1
+    assert _tag_service(TagControl({"Platform": PLATFORM})).team_tag_of(HARNESS_ARN) is None
+
+
+def test_unreadable_tags_raise_and_are_not_cached():
+    control = TagControl(fail=True)
+    service = _tag_service(control)
+    for _ in range(2):
+        try:
+            service.team_tag_of(HARNESS_ARN)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("expected the read failure to surface")
+    assert control.calls == 2

@@ -11,11 +11,12 @@ import {
 } from "@/lib/insights";
 import { KpiRow } from "./components/KpiRow";
 import { AgentLeaderboard } from "./components/AgentLeaderboard";
-import { BilledPanel } from "./components/BilledPanel";
-import { CostCompositionPanel } from "./components/CostCompositionPanel";
+import { CostPanel } from "./components/CostPanel";
 import { ModelMixPanel } from "./components/ModelMixPanel";
 import { TrendCharts } from "./components/TrendCharts";
 import { ReusePanel } from "./components/ReusePanel";
+import { PolicyPanel } from "./components/PolicyPanel";
+import { TeamPanel } from "./components/TeamPanel";
 import { UserPanel } from "./components/UserPanel";
 import { QualityPanel } from "./components/QualityPanel";
 import { TriagePanel } from "./components/TriagePanel";
@@ -40,11 +41,12 @@ export type WidgetId =
   | "leaderboard"
   | "cost_composition"
   | "model_mix"
-  | "billed"
   | "trend"
   | "reuse"
   | "users"
-  | "guardrail";
+  | "guardrail"
+  | "teams"
+  | "policy";
 
 export interface WidgetConfig {
   title: string;
@@ -269,16 +271,6 @@ export function createWidgetRegistry(ctx: WidgetRegistryContext): Record<WidgetI
           </AgentLeaderboard>
         ) : null,
     },
-    cost_composition: {
-      title: "비용 구성",
-      defaultSpan: "half",
-      render: () =>
-        ctx.summary ? (
-          <PlotStack>
-            <CostCompositionPanel cost={ctx.summary.cost} />
-          </PlotStack>
-        ) : null,
-    },
     model_mix: {
       title: "모델 믹스",
       defaultSpan: "half",
@@ -286,18 +278,6 @@ export function createWidgetRegistry(ctx: WidgetRegistryContext): Record<WidgetI
         ctx.summary ? (
           <PlotStack>
             <ModelMixPanel models={ctx.summary.models} />
-          </PlotStack>
-        ) : null,
-    },
-    // The `PlotStack` lives here rather than inside each panel, so a panel returns
-    // bands and stays composable.
-    billed: {
-      title: "AWS 청구서 대조",
-      defaultSpan: "full",
-      render: () =>
-        ctx.summary ? (
-          <PlotStack>
-            <BilledPanel cost={ctx.summary.cost} agents={ctx.summary.agents} />
           </PlotStack>
         ) : null,
     },
@@ -334,6 +314,32 @@ export function createWidgetRegistry(ctx: WidgetRegistryContext): Record<WidgetI
           <UserPanel days={ctx.days} />
         </PlotStack>
       ),
+    },
+    // Both read /api/insights/teams (shared in flight by useTeamInsights) and
+    // carry their own band chrome, like GuardrailPanel.
+    teams: {
+      title: "팀별 사용량",
+      defaultSpan: "full",
+      render: () => <TeamPanel days={ctx.days} />,
+    },
+    policy: {
+      title: "게이트웨이 정책",
+      defaultSpan: "full",
+      render: () => <PolicyPanel days={ctx.days} agents={ctx.summary?.agents ?? []} />,
+    },
+    // The `PlotStack` lives here rather than inside each panel, so a panel returns
+    // bands and stays composable.
+    // One widget since 2026-10-10, when 비용 구성 absorbed AgentCore 청구 비용 (the
+    // `billed` id). The key stays `cost_composition` so saved layouts keep it.
+    cost_composition: {
+      title: "비용",
+      defaultSpan: "full",
+      render: () =>
+        ctx.summary ? (
+          <PlotStack>
+            <CostPanel cost={ctx.summary.cost} agents={ctx.summary.agents} />
+          </PlotStack>
+        ) : null,
     },
     guardrail: {
       title: "가드레일 개입",

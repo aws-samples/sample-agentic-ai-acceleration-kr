@@ -40,8 +40,25 @@ export interface AuthUser {
   name?: string;
   role: Role;
   groups: string[];
+  /** Team names from `team:` groups (see server/core/auth.py TEAM_GROUP_PREFIX). */
+  teams: string[];
   /** Which login produced this session. */
   provider?: string;
+}
+
+/** Same prefix as server/core/auth.py TEAM_GROUP_PREFIX. */
+export const TEAM_GROUP_PREFIX = "team:";
+
+/** The team names a group list encodes: `team:finance` -> `finance`. */
+export function teamsOf(groups: string[]): string[] {
+  const out: string[] = [];
+  for (const g of groups) {
+    if (typeof g === "string" && g.startsWith(TEAM_GROUP_PREFIX)) {
+      const name = g.slice(TEAM_GROUP_PREFIX.length);
+      if (name && !out.includes(name)) out.push(name);
+    }
+  }
+  return out;
 }
 
 /** True for a session that signed in through an OIDC provider, not Cognito. */
@@ -103,6 +120,7 @@ export function userFromIdToken(idToken: string, providerId?: string): AuthUser 
     name: typeof claims["name"] === "string" ? claims["name"] : undefined,
     role,
     groups,
+    teams: teamsOf(groups),
     provider: providerId ?? COGNITO_PROVIDER_ID,
   };
 }

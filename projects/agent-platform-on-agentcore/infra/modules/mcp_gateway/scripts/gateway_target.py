@@ -158,6 +158,9 @@ def _target_configuration(args):
         }
     with open(args.schema) as handle:
         tools = json.load(handle)
+    drop = set(args.drop_tool or [])
+    if drop:
+        tools = [t for t in tools if t.get("name") not in drop]
     return {
         "mcp": {
             "lambda": {
@@ -252,6 +255,12 @@ def main():
                 default="",
                 help="Pin the connector to a semantic version (e.g. 1.2.0). Empty "
                 "uses the connector's default version. Requires botocore >= 1.43.78.",
+            )
+            p.add_argument(
+                "--drop-tool",
+                action="append",
+                default=[],
+                help="Tool name to omit from a Lambda target's schema (repeatable).",
             )
             p.add_argument(
                 "--mcp-endpoint",

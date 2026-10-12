@@ -19,6 +19,26 @@ interface RecordCardProps {
 }
 
 /**
+ * Up to two metadata values to show on the card. `team` and `tier` are the keys
+ * people filter by, so they win; otherwise the first two string values stand in.
+ * Booleans are left out: a bare "Yes" chip says nothing without its key.
+ */
+function metadataChips(
+  meta: RegistryRecordSummary["custom_metadata"]
+): Array<[string, string]> {
+  if (!meta) return [];
+  const strings = Object.entries(meta).filter(
+    (entry): entry is [string, string] => typeof entry[1] === "string" && entry[1] !== ""
+  );
+  const preferred = ["team", "tier"];
+  const ranked = [
+    ...preferred.flatMap((key) => strings.filter(([k]) => k === key)),
+    ...strings.filter(([k]) => !preferred.includes(k)),
+  ];
+  return ranked.slice(0, 2);
+}
+
+/**
  * A registry record.
  *
  * Laid out as header / meta / action at 1rem padding — the previous version used
@@ -34,6 +54,7 @@ export function RecordCard({
   index = 0,
 }: RecordCardProps) {
   const chattable = isChattable(record);
+  const chips = metadataChips(record.custom_metadata);
   return (
     <Card
       style={{ "--i": index } as React.CSSProperties}
@@ -83,6 +104,11 @@ export function RecordCard({
               Harness
             </Badge>
           )}
+          {record.auto_detected && (
+            <Badge shape="tag" variant="secondary">
+              Auto-detected
+            </Badge>
+          )}
           <StatusBadge status={record.status} />
           {record.version && (
             <Badge shape="count" variant="secondary" className="ml-auto">
@@ -90,6 +116,15 @@ export function RecordCard({
             </Badge>
           )}
         </div>
+        {chips.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1">
+            {chips.map(([key, value]) => (
+              <Badge key={key} shape="tag" variant="outline">
+                {key}: {value}
+              </Badge>
+            ))}
+          </div>
+        )}
         {chattable && (
           <Button
             size="sm"

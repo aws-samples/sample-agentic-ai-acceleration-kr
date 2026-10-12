@@ -45,3 +45,11 @@ output "users_table_name" {
 output "users_table_arn" {
   value = aws_dynamodb_table.users.arn
 }
+
+output "teams_table_name" {
+  value = aws_dynamodb_table.teams.name
+}
+
+output "teams_table_arn" {
+  value = aws_dynamodb_table.teams.arn
+}

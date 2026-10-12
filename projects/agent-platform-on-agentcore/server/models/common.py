@@ -64,7 +64,8 @@ class StreamConfig(BaseModel):
     # no such fields; the runtime path forwards both inside the payload instead
     # (agent-runtime/main.py reads `system_prompt` and `model_id`). The web keeps
     # them per thread in Thread.metadata["harness_overrides"] and resends them
-    # each turn; basic chat sets model_id server-side from the allow-list.
+    # each turn; the server checks it against the operator's allow-list
+    # (services/agent_access.py).
     system_prompt: Optional[str] = None
     model_id: Optional[str] = None
     # AgentCore Runtime target
@@ -81,9 +82,9 @@ class StreamConfig(BaseModel):
     # registry lookup on every turn. Client-supplied and therefore never trusted
     # for a decision — only registry_record_id gates which agent may answer.
     registry_agent_name: Optional[str] = None
-    # Basic chat: no registry agent, the default runtime answers with one of the
-    # operator-allowed models. The server binds the target itself; the ARNs the
-    # client may have sent are not consulted. See StreamingService._bind_basic_chat.
+    # Retired basic-chat fields. Still accepted so a tab loaded before the
+    # retirement is not 400'd: the server translates such a request onto the
+    # default agent's record (services/agent_access.py). Never set by the web now.
     basic_chat: bool = False
     basic_chat_model_id: Optional[str] = None
     

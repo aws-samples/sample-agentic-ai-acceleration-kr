@@ -12,8 +12,23 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from core import config as cfg  # noqa: E402
 from models.common import StreamRequest  # noqa: E402
 from services.streaming_service import StreamingService  # noqa: E402
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _allow_every_model_this_file_uses(monkeypatch):
+    """The override check reads ALLOWED_MODELS from the environment; a fresh
+    checkout has none, and these tests are about pricing, not the allow-list."""
+    import core.config as cfg
+    monkeypatch.setattr(cfg, "ALLOWED_MODELS", [
+        "global.anthropic.claude-haiku-5-5",
+        "global.anthropic.claude-sonnet-5-5",
+        "global.anthropic.claude-opus-5-5",
+    ])
+
 
 VALUES = {"messages": [{"id": "h-42", "type": "human", "content": "hello"}]}
 RUNTIME_ARN = "arn:aws:bedrock-agentcore:us-east-1:1:runtime/x-1"
@@ -30,6 +45,9 @@ class StubRegistry:
         return SimpleNamespace(
             status="APPROVED", agent_runtime_arn=RUNTIME_ARN, harness_arn=self.harness_arn, qualifier=None
         )
+    def chattable_record(self, record_id):
+        # The approval gate reads the chattable revision; these doubles have one.
+        return self.get_record(record_id)
 
 
 
@@ -132,9 +150,10 @@ def test_flush_passes_turn_identity_and_model():
     assert {call["turn_id"] for call in usage.calls} == {"t-1:h-42"}
 
 
-def test_a_thread_model_override_is_what_the_turn_is_priced_at():
+def test_a_thread_model_override_is_what_the_turn_is_priced_at(monkeypatch):
     """`config.model_id` is what InvokeHarness actually runs (harness_client sends it),
     so pricing at the harness's default model would store a permanently wrong figure."""
+    monkeypatch.setattr(cfg, "ALLOWED_MODELS", ["global.anthropic.claude-opus-5-5"])
     usage = RecordingUsage()
     client = TwoModelCallsClient()
     service = StreamingService(

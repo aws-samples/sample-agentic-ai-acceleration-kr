@@ -94,6 +94,8 @@ export interface ComposeHarnessBody {
   truncation?: TruncationSettings;
   /** Create only: memory is never re-sent on update. */
   memory_event_expiry_days?: number;
+  /** Team the harness belongs to; omitted = the server decides (single team) or shared. */
+  team?: string;
 }
 
 /**
@@ -104,7 +106,7 @@ export interface ComposeHarnessBody {
  */
 export type UpdateHarnessBody = Omit<
   ComposeHarnessBody,
-  "name" | "description" | "memory_event_expiry_days"
+  "name" | "description" | "memory_event_expiry_days" | "team"
 >;
 
 export interface ComposeHarnessResponse {

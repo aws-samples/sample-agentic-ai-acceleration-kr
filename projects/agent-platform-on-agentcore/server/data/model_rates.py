@@ -37,8 +37,28 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, TypedDict
 RATE_CARD_VERSION = "2026-09-23.1"
 
 TIERS = ("input", "output", "cache_read", "cache_write")
-# Counter attribute each tier is stored under in the usage table.
-TIER_COUNTER = {tier: f"{tier}_tokens" for tier in TIERS}
+# A second card for the calls whose prompt crossed the family's long-context
+# threshold. Bedrock bills those on their own usagetypes
+# (`…-input-tokens-long-ctx-global-standard`), and *every* tier of such a call —
+# its output too — moves to the long card, so it is four more tiers, not one.
+LONG_TIERS = tuple(f"long_{tier}" for tier in TIERS)
+# Every tier a rate can carry.
+RATE_TIERS = TIERS + LONG_TIERS
+# Counter attribute each tier is stored under in the usage table. A long counter
+# is a *subset* of its plain one: `input_tokens` stays the turn's whole input and
+# `long_input_tokens` is the part of it sent in long-context calls, so every
+# token total already on the dashboard stays the total it was.
+TIER_COUNTER = {tier: f"{tier}_tokens" for tier in RATE_TIERS}
+LONG_COUNTERS = tuple(TIER_COUNTER[tier] for tier in LONG_TIERS)
+
+# family -> prompt size (input + cache read + cache write, in tokens) above which
+# a call is billed on the long card. Measured 2026-10-10: Cost Explorer bills
+# Haiku 5.5 at 0.10/0.50 on the plain global-standard lines and 0.50/2.50 on the
+# `long-ctx` ones, the split Anthropic publishes at a 100K-token prompt. A family
+# absent here has one card at every prompt length.
+LONG_CONTEXT_THRESHOLDS: Dict[str, int] = {
+    "claude-haiku-5-5": 100_000,
+}
 
 _D = Decimal
 
@@ -146,7 +166,7 @@ def set_learned_rates(entries: Iterable[Mapping[str, Any]]) -> None:
             usd = Decimal(str(entry["usd_per_1m"]))
         except (KeyError, TypeError, ValueError, ArithmeticError):
             continue
-        if tier not in TIERS or routing not in ("global", "regional") or len(effective_from) != 10 or usd < 0:
+        if tier not in RATE_TIERS or routing not in ("global", "regional") or len(effective_from) != 10 or usd < 0:
             continue
         parsed.append({
             "family": family, "routing": routing, "tier": tier,
@@ -203,6 +223,17 @@ def family_name_of(model_id: Optional[str]) -> Optional[str]:
     return match.group(1) if match else None
 
 
+def long_context_threshold(model_id: Optional[str]) -> Optional[int]:
+    """The prompt size above which a call on this model is billed on the long
+    card, or None when the model has one card at every length.
+
+    Keyed by the spelled family, not the registered one: the split has to be
+    recorded from a family's first turn — before any rate for it exists — or
+    the turns that arrive unpriced could never be priced correctly later."""
+    family = family_name_of(model_id)
+    return LONG_CONTEXT_THRESHOLDS.get(family) if family else None
+
+
 def family_of(model_id: str) -> Optional[str]:
     """The rate-card family a model id belongs to, or None.
 
@@ -253,7 +284,7 @@ def effective_rate(family: str, routing: str, day: Optional[str] = None) -> Opti
         if routing in table:
             usd = dict(table[routing])
         else:
-            usd = {tier: table["global"][tier] * REGIONAL_MULTIPLIER for tier in TIERS}
+            usd = {tier: per_1m * REGIONAL_MULTIPLIER for tier, per_1m in table["global"].items()}
         provenance = {tier: {"source": f"card:{RATE_CARD_VERSION}", "effective_from": None} for tier in usd}
     learned_from: Optional[str] = None
     for entry in _LEARNED:
@@ -295,17 +326,23 @@ def resolve_rate(model_id: Optional[str], day: Optional[str] = None) -> Optional
 def cost_micros(counters: Mapping[str, int], rate: ResolvedRate) -> Optional[int]:
     """Integer micro-dollars for the four tiers, rounded half-up at the micro.
 
+    Tokens counted in a `long_*` counter are priced on the long card and the
+    rest of the tier on the plain one.
+
     None — not 0, not a partial sum — when the turn used a tier the rate has no
     figure for: a learned family whose cache tiers the bill has not shown yet
-    cannot price a turn that read from cache, and a figure missing one tier
-    would be a floor presented as a total."""
+    cannot price a turn that read from cache, a family whose long card is not
+    registered cannot price a turn with a long-context call, and a figure
+    missing one tier would be a floor presented as a total."""
     usd = _D(0)
     for tier in TIERS:
-        tokens = int(counters.get(TIER_COUNTER[tier]) or 0)
-        if not tokens:
-            continue
-        per_1m = rate["usd_per_1m"].get(tier)
-        if per_1m is None:
-            return None
-        usd += _D(tokens) * per_1m / _ONE_MILLION_TOKENS
+        total = int(counters.get(TIER_COUNTER[tier]) or 0)
+        long_tokens = min(int(counters.get(TIER_COUNTER[f"long_{tier}"]) or 0), total)
+        for name, tokens in ((tier, total - long_tokens), (f"long_{tier}", long_tokens)):
+            if not tokens:
+                continue
+            per_1m = rate["usd_per_1m"].get(name)
+            if per_1m is None:
+                return None
+            usd += _D(tokens) * per_1m / _ONE_MILLION_TOKENS
     return int((usd * _MICRO).quantize(_D(1), rounding=ROUND_HALF_UP))

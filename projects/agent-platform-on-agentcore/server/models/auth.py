@@ -39,4 +39,7 @@ class SessionProfile(BaseModel):
     name: str = ""
     role: str = "user"
     groups: List[str] = []
+    # Team names derived from `team:` groups; the harness form and the registry
+    # filter read these rather than parsing groups again.
+    teams: List[str] = []
     provider: str = ""

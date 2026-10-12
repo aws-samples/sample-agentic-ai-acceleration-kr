@@ -237,7 +237,7 @@ class PricingService:
     _MODEL_USAGE_TYPE = re.compile(
         r"anthropic\.(?P<family>claude-[a-z]+-\d{1,2}(?:-\d{1,2})?)"
         r"(?:-[a-z0-9]+)*?-(?P<tier>input|output|cache-read|cache-write)-tokens"
-        r"(?:-(?P<ttl>\d+h))?-(?P<routing>(?:global-)?standard)$"
+        r"(?:-(?P<ttl>\d+h))?(?P<long>-long-ctx)?-(?P<routing>(?:global-)?standard)$"
     )
     _MODEL_SERVICE_CODE = "AmazonBedrockService"
 
@@ -284,7 +284,9 @@ class PricingService:
                 rows.append({
                     "family": match.group("family"),
                     "routing": "global" if match.group("routing").startswith("global") else "regional",
-                    "tier": match.group("tier").replace("-", "_"),
+                    # A long-context line is its own tier: the price of a call
+                    # whose prompt crossed the family's threshold.
+                    "tier": ("long_" if match.group("long") else "") + match.group("tier").replace("-", "_"),
                     "usd_per_1m": format(per_1m.normalize(), "f"),
                     "usage_type": usage_type,
                     "model": attributes.get("model") or "",

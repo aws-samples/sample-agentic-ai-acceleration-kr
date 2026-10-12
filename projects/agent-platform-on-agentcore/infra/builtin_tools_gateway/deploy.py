@@ -224,7 +224,9 @@ def ensure_interceptor_role(iam, names):
     return arn
 
 
-def ensure_gateway_role(iam, names, lambda_arn, with_web_search, interceptor_arn=None):
+def ensure_gateway_role(
+    iam, names, lambda_arn, with_web_search, interceptor_arn=None, policy_engine_arn=None
+):
     """Role the gateway assumes to reach its targets on the agent's behalf."""
     arn = _put_role(
         iam,
@@ -271,6 +273,32 @@ def ensure_gateway_role(iam, names, lambda_arn, with_web_search, interceptor_arn
                 "Action": "bedrock-agentcore:InvokeWebSearch",
                 # Service-owned tool ARN, checked per request.
                 "Resource": f"arn:aws:bedrock-agentcore:{names.region}:aws:tool/web-search.v1",
+            },
+        ]
+    if policy_engine_arn:
+        # An attached engine is called as this role; without these UpdateGateway
+        # fails with "Access denied while calling GetPolicyEngine" (2026-10-10
+        # live) and every call is denied even in LOG_ONLY. AuthorizeAction /
+        # PartiallyAuthorizeActions are checked against the engine AND the
+        # gateway. See the AgentCore devguide page policy-permissions.html.
+        statements += [
+            {
+                "Sid": "PolicyEngineConfiguration",
+                "Effect": "Allow",
+                "Action": ["bedrock-agentcore:GetPolicyEngine"],
+                "Resource": [policy_engine_arn],
+            },
+            {
+                "Sid": "PolicyEngineAuthorization",
+                "Effect": "Allow",
+                "Action": [
+                    "bedrock-agentcore:AuthorizeAction",
+                    "bedrock-agentcore:PartiallyAuthorizeActions",
+                ],
+                "Resource": [
+                    policy_engine_arn,
+                    f"arn:aws:bedrock-agentcore:{names.region}:{names.account}:gateway/*",
+                ],
             },
         ]
     _put_role_policy(iam, names.gateway_role, f"{names.gateway_role}-policy", statements)
@@ -562,7 +590,23 @@ def interceptor_configurations(interceptor_arn):
     }
 
 
-def ensure_gateway(ctl, names, role_arn, cognito, interceptor_arn=None):
+def policy_engine_configuration(engine_arn, mode):
+    """Gateway kwargs attaching a policy engine. Omitted when no engine is given,
+    which on UpdateGateway also *detaches* one attached by an earlier run."""
+    if not engine_arn:
+        return {}
+    return {"policyEngineConfiguration": {"arn": engine_arn, "mode": mode}}
+
+
+def ensure_gateway(
+    ctl,
+    names,
+    role_arn,
+    cognito,
+    interceptor_arn=None,
+    policy_engine_arn=None,
+    policy_mode="LOG_ONLY",
+):
     if cognito:
         pool_id, client_id = cognito
         authorizer_type = "CUSTOM_JWT"
@@ -599,6 +643,7 @@ def ensure_gateway(ctl, names, role_arn, cognito, interceptor_arn=None):
             # UpdateGateway replaces the whole configuration, so omitting the key
             # (--shared-sessions) detaches an interceptor attached by an earlier run.
             **interceptor_configurations(interceptor_arn),
+            **policy_engine_configuration(policy_engine_arn, policy_mode),
         }
         if authorizer_config:
             kwargs["authorizerConfiguration"] = authorizer_config
@@ -612,6 +657,7 @@ def ensure_gateway(ctl, names, role_arn, cognito, interceptor_arn=None):
             "authorizerType": authorizer_type,
             "description": "AgentCore built-in tools: web search, code interpreter, browser",
             **interceptor_configurations(interceptor_arn),
+            **policy_engine_configuration(policy_engine_arn, policy_mode),
         }
         if authorizer_config:
             kwargs["authorizerConfiguration"] = authorizer_config
@@ -806,11 +852,19 @@ def cmd_up(args):
 
     step("Gateway role")
     gateway_role_arn = ensure_gateway_role(
-        iam, names, lambda_arn, with_web_search, interceptor_arn
+        iam, names, lambda_arn, with_web_search, interceptor_arn, args.policy_engine_arn
     )
 
     step("Gateway")
-    gateway = ensure_gateway(ctl, names, gateway_role_arn, cognito, interceptor_arn)
+    gateway = ensure_gateway(
+        ctl,
+        names,
+        gateway_role_arn,
+        cognito,
+        interceptor_arn,
+        args.policy_engine_arn,
+        args.policy_mode,
+    )
     gateway_id = gateway["gatewayId"]
     gateway_arn = gateway["gatewayArn"]
     gateway_url = gateway["gatewayUrl"]
@@ -1132,6 +1186,18 @@ def main():
         action="store_true",
         help="skip the identity interceptor and let every caller share one sandbox "
         "and browser profile (single trusted tenant only)",
+    )
+    up.add_argument(
+        "--policy-engine-arn",
+        help="attach this AgentCore policy engine (terraform output policy_engine_arn)",
+    )
+    up.add_argument(
+        "--policy-mode",
+        choices=["LOG_ONLY", "ENFORCE"],
+        default="LOG_ONLY",
+        help="policy engine mode when --policy-engine-arn is given. Use LOG_ONLY "
+        "here: this gateway has no baseline Cedar policy, so ENFORCE would deny "
+        "every call (team isolation is the harness allowedTools @builtin)",
     )
     up.set_defaults(func=cmd_up)
 

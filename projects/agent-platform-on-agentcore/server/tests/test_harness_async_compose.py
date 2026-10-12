@@ -14,6 +14,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.harness import ComposeHarnessRequest  # noqa: E402
+import services.harness_service as harness_service_module
 from services.harness_service import HarnessService  # noqa: E402
 
 HARNESS_ID = "agent_x-abc123"
@@ -63,7 +64,7 @@ class RecordingRegistry:
         self.existing_arns = set(existing_arns)
         self.created = []
 
-    def create_record(self, req):
+    def create_record(self, req, owner=None):
         self.created.append(req)
         return None
 
@@ -88,11 +89,14 @@ def test_compose_returns_before_the_harness_is_ready(monkeypatch):
     """The response must not wait on GetHarness polling or the registry."""
     control = StubControl()
     service = service_with(control)
+    # Registration is only spawned when the registry is on; do not let a local
+    # .env (or its absence) decide what this test asserts.
+    monkeypatch.setattr(harness_service_module, "registry_enabled", lambda: True)
     spawned = []
     monkeypatch.setattr(
         service,
         "_spawn_registration",
-        lambda harness_id, req: spawned.append(harness_id),
+        lambda harness_id, req, owner=None: spawned.append(harness_id),
     )
 
     resp = service.compose_and_register(ComposeHarnessRequest(name="agent_x"))
@@ -145,7 +149,7 @@ def test_background_registration_survives_registry_errors():
     """The harness exists either way; a registry failure must only be logged."""
 
     class ExplodingRegistry(RecordingRegistry):
-        def create_record(self, req):
+        def create_record(self, req, owner=None):
             raise RuntimeError("registry down")
 
     service = service_with(StubControl(), ExplodingRegistry())

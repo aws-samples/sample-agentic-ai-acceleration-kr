@@ -1,8 +1,7 @@
 """The bill checks the ledger, and extends the rate card under one rule.
 
 `reconcile` snapshots three comparisons into `RECON#` items: billed runtime per
-(agent, day) against the collector's day items, billed cost per component against
-our summed components, and the per-token rate the account was actually charged
+(agent, day) against the collector's day items, billed cost per component per day, and the per-token rate the account was actually charged
 — **per day** — against the rate in force that day. A mismatch is written and
 reported, never smoothed over. A rate the card lacks is learned only when the
 same exact value was billed on two consecutive complete days, and then dated.
@@ -60,14 +59,24 @@ class StubCE:
                 ],
             }]}
         if keys == ["USAGE_TYPE"]:
-            return {"ResultsByTime": [{
-                "TimePeriod": {"Start": "2026-08-25", "End": "2026-08-26"},
-                "Estimated": True,
-                "Groups": [
-                    group(["USE1-Runtime:Consumption-based:Memory"], 0.574, 60.678, "GB-Hours"),
-                    group(["USE1-Gateway:Consumption-based:API-Invocations"], 0.001, 200, "Invocations"),
-                ],
-            }]}
+            return {"ResultsByTime": [
+                {
+                    "TimePeriod": {"Start": "2026-08-24", "End": "2026-08-25"},
+                    "Estimated": False,
+                    "Groups": [
+                        group(["USE1-Runtime:Consumption-based:Memory"], 0.5, 52.0, "GB-Hours"),
+                        group(["USE1-Gateway:Consumption-based:API-Invocations"], 0.002, 400, "Invocations"),
+                    ],
+                },
+                {
+                    "TimePeriod": {"Start": "2026-08-25", "End": "2026-08-26"},
+                    "Estimated": True,
+                    "Groups": [
+                        group(["USE1-Runtime:Consumption-based:Memory"], 0.574, 60.678, "GB-Hours"),
+                        group(["USE1-Gateway:Consumption-based:API-Invocations"], 0.001, 200, "Invocations"),
+                    ],
+                },
+            ]}
         raise AssertionError(f"unexpected GroupBy {keys}")
 
 
@@ -90,14 +99,13 @@ LEDGER_AGENT_DAYS = {
         "runtime_cost_micros": 590_628, "gb_hours_micro": 59_659_000, "vcpu_hours_micro": 300_000,
     }
 }
-LEDGER_COMPONENTS = {"runtime": 590_628, "gateway": 1_000}
 
 
 def test_agent_day_diff_is_billed_minus_ours():
     repo = Repo()
     result = service(StubCE()).reconcile(
         "2026-08-25", "2026-08-25", repository=repo,
-        ledger_agent_days=LEDGER_AGENT_DAYS, ledger_components=LEDGER_COMPONENTS,
+        ledger_agent_days=LEDGER_AGENT_DAYS,
     )
     row = repo.items[("RECON#2026-08", "D#2026-08-25#K#agent_runtime#bap_default")]
     assert row["billed_micros"] == 590_900
@@ -111,24 +119,34 @@ def test_agent_day_diff_is_billed_minus_ours():
     assert result["untagged_micros"] == 10_000
 
 
-def test_component_snapshot_carries_ce_estimated_flag():
+def test_component_costs_are_written_per_billed_day():
+    """One row per (day, component), under a kind of its own.
+
+    The earlier `component` rows held the whole window's sum under the check's
+    end date, so a 7-day page read a 30-day figure. They stay in DDB unread; a
+    new kind keeps them from being summed in with the per-day rows.
+    """
     repo = Repo()
-    service(StubCE()).reconcile(
-        "2026-08-25", "2026-08-25", repository=repo,
-        ledger_agent_days=LEDGER_AGENT_DAYS, ledger_components=LEDGER_COMPONENTS,
+    result = service(StubCE()).reconcile(
+        "2026-08-24", "2026-08-25", repository=repo, ledger_agent_days=LEDGER_AGENT_DAYS,
     )
-    row = repo.items[("RECON#2026-08", "D#2026-08-25#K#component#gateway")]
-    assert row["billed_micros"] == 1_000
-    assert row["ours_micros"] == 1_000
-    assert row["diff_micros"] == 0
-    assert row["ce_estimated"] is True
+    first = repo.items[("RECON#2026-08", "D#2026-08-24#K#component_day#gateway")]
+    second = repo.items[("RECON#2026-08", "D#2026-08-25#K#component_day#gateway")]
+    assert first["billed_micros"] == 2_000 and first["ce_estimated"] is False
+    assert second["billed_micros"] == 1_000 and second["ce_estimated"] is True
+    assert repo.items[("RECON#2026-08", "D#2026-08-24#K#component_day#runtime")]["billed_micros"] == 500_000
+    assert not any("#K#component#" in sk for _, sk in repo.items)
+    assert {(r["day"], r["component"], r["billed_micros"]) for r in result["component"]} == {
+        ("2026-08-24", "gateway", 2_000), ("2026-08-24", "runtime", 500_000),
+        ("2026-08-25", "gateway", 1_000), ("2026-08-25", "runtime", 574_000),
+    }
 
 
 def test_rate_mismatch_is_reported_not_hidden():
     repo = Repo()
     result = service(StubCE(sonnet_output_usd_per_1k="0.012")).reconcile(
         "2026-08-01", "2026-08-25", repository=repo,
-        ledger_agent_days={}, ledger_components={},
+        ledger_agent_days={},
     )
     rows = {(r["family"], r["routing"], r["tier"]): r for r in result["model_rate"]}
     bad = rows[("claude-sonnet-5", "global", "output")]
@@ -145,7 +163,7 @@ def test_rate_mismatch_is_reported_not_hidden():
 
 def test_unregistered_family_on_the_bill_is_surfaced():
     result = service(StubCE()).reconcile(
-        "2026-08-01", "2026-08-25", repository=Repo(), ledger_agent_days={}, ledger_components={},
+        "2026-08-01", "2026-08-25", repository=Repo(), ledger_agent_days={},
     )
     unregistered = [r for r in result["model_rate"] if r["registered"] is False]
     assert [(r["family"], r["routing"], r["tier"]) for r in unregistered] == [("claude-opus-5-5", "global", "output")]
@@ -154,7 +172,7 @@ def test_unregistered_family_on_the_bill_is_surfaced():
 
 def test_one_hour_cache_writes_and_other_regions_are_not_compared():
     result = service(StubCE()).reconcile(
-        "2026-08-01", "2026-08-25", repository=Repo(), ledger_agent_days={}, ledger_components={},
+        "2026-08-01", "2026-08-25", repository=Repo(), ledger_agent_days={},
     )
     keys = {(r["family"], r["routing"], r["tier"]) for r in result["model_rate"]}
     assert ("claude-sonnet-5", "regional", "cache_write") not in keys
@@ -180,7 +198,7 @@ class FirstPartyCE(StubCE):
 
 def test_first_party_usage_types_map_onto_rate_card_families():
     result = service(FirstPartyCE()).reconcile(
-        "2026-08-01", "2026-08-25", repository=Repo(), ledger_agent_days={}, ledger_components={},
+        "2026-08-01", "2026-08-25", repository=Repo(), ledger_agent_days={},
     )
     rows = {(r["family"], r["routing"], r["tier"]): r for r in result["model_rate"]}
     assert rows[("claude-haiku-4-5", "global", "input")]["match"] is True
@@ -190,7 +208,7 @@ def test_first_party_usage_types_map_onto_rate_card_families():
 
 def test_model_rates_are_asked_for_per_day_not_per_month():
     stub = StubCE()
-    service(stub).reconcile("2026-08-01", "2026-08-25", repository=Repo(), ledger_agent_days={}, ledger_components={})
+    service(stub).reconcile("2026-08-01", "2026-08-25", repository=Repo(), ledger_agent_days={})
     model_calls = [r for r in stub.requests if [g.get("Key") for g in r.get("GroupBy", [])] == ["USAGE_TYPE", "REGION"]]
     assert model_calls and all(r["Granularity"] == "DAILY" for r in model_calls)
 
@@ -230,7 +248,7 @@ def test_an_unregistered_rate_billed_on_two_consecutive_days_is_learned_and_date
         ("2026-09-24", [(OPUS55_OUT, 0.0375, 1000.0), (OPUS55_IN, 0.0075, 1000.0)]),
         ("2026-09-25", [(OPUS55_OUT, 0.0375, 1000.0), (OPUS55_IN, 0.0075, 1000.0)]),
         ("2026-09-26", [(OPUS55_OUT, 0.0375, 500.0)]),  # today: still being billed, not evidence
-    ])).reconcile("2026-09-20", "2026-09-26", repository=repo, ledger_agent_days={}, ledger_components={})
+    ])).reconcile("2026-09-20", "2026-09-26", repository=repo, ledger_agent_days={})
     learned = learned_items(repo)
     assert set(learned) == {
         "R#claude-opus-5-5|global|output|2026-09-24",
@@ -249,7 +267,7 @@ def test_one_day_is_not_enough_to_learn_a_rate():
     service(DailyCE([
         ("2026-09-25", [(OPUS55_OUT, 0.0375, 1000.0)]),
         ("2026-09-26", [(OPUS55_OUT, 0.0375, 1000.0)]),  # today, incomplete
-    ])).reconcile("2026-09-20", "2026-09-26", repository=repo, ledger_agent_days={}, ledger_components={})
+    ])).reconcile("2026-09-20", "2026-09-26", repository=repo, ledger_agent_days={})
     assert learned_items(repo) == {}
 
 
@@ -259,7 +277,7 @@ def test_two_days_that_disagree_or_do_not_divide_cleanly_teach_nothing():
         ("2026-09-23", [(OPUS55_OUT, 0.0375, 1000.0)]),
         ("2026-09-24", [(OPUS55_OUT, 0.0300, 1000.0)]),        # a different value: no run
         ("2026-09-25", [(OPUS55_OUT, 0.0301234567, 1000.0)]),  # two prices mixed inside one day
-    ])).reconcile("2026-09-20", "2026-09-26", repository=repo, ledger_agent_days={}, ledger_components={})
+    ])).reconcile("2026-09-20", "2026-09-26", repository=repo, ledger_agent_days={})
     assert learned_items(repo) == {}
     stored = repo.items[("RECON#2026-09", "D#2026-09-25#K#model_rate#claude-opus-5-5|global|output")]
     assert stored["clean"] is False
@@ -272,7 +290,7 @@ def test_a_price_change_on_a_registered_family_becomes_a_dated_entry_not_a_perma
         ("2026-09-24", [(SONNET_OUT, 0.008, 1000.0)]),  # AWS lowered the price
         ("2026-09-25", [(SONNET_OUT, 0.008, 1000.0)]),
         ("2026-09-26", [(SONNET_OUT, 0.008, 300.0)]),
-    ])).reconcile("2026-09-20", "2026-09-26", repository=repo, ledger_agent_days={}, ledger_components={})
+    ])).reconcile("2026-09-20", "2026-09-26", repository=repo, ledger_agent_days={})
     learned = learned_items(repo)
     assert list(learned) == ["R#claude-sonnet-5|global|output|2026-09-24"]
     assert learned["R#claude-sonnet-5|global|output|2026-09-24"]["usd_per_1m"] == "8.0000"
@@ -292,7 +310,7 @@ def test_a_learned_rate_is_judged_matching_once_installed():
         result = service(DailyCE([
             ("2026-09-23", [(SONNET_OUT, 0.010, 1000.0)]),
             ("2026-09-25", [(SONNET_OUT, 0.008, 1000.0)]),
-        ])).reconcile("2026-09-20", "2026-09-26", repository=repo, ledger_agent_days={}, ledger_components={})
+        ])).reconcile("2026-09-20", "2026-09-26", repository=repo, ledger_agent_days={})
         rows = {r["day"]: r for r in result["model_rate"]}
         assert rows["2026-09-23"]["match"] is True and rows["2026-09-23"]["card_usd_per_1m_micro"] == 10_000_000
         assert rows["2026-09-25"]["match"] is True and rows["2026-09-25"]["card_usd_per_1m_micro"] == 8_000_000
@@ -309,7 +327,7 @@ def test_a_model_used_every_other_day_is_still_learned_and_a_usage_gap_does_not_
         ("2026-09-12", [(OPUS55_OUT, 0.0200, 1000.0)]),
         ("2026-09-20", [(OPUS55_OUT, 0.0200, 1000.0)]),
         ("2026-09-21", [(OPUS55_OUT, 0.0200, 1000.0)]),
-    ])).reconcile("2026-09-01", "2026-09-26", repository=repo, ledger_agent_days={}, ledger_components={})
+    ])).reconcile("2026-09-01", "2026-09-26", repository=repo, ledger_agent_days={})
     learned = learned_items(repo)
     assert list(learned) == ["R#claude-opus-5-5|global|output|2026-09-10"]
     assert learned["R#claude-opus-5-5|global|output|2026-09-10"]["days_observed"] == 4

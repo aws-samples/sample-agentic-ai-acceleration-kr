@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import {
   AlertTriangle,
   BookOpen,
+  Bot,
+  FileText,
   FolderOpen,
   Loader2,
   Plus,
@@ -27,6 +29,7 @@ import { useAuth } from "@/providers/AuthProvider";
 import {
   KnowledgeApiError,
   deleteKnowledgeBase,
+  getKnowledgeStats,
   isProvisioning,
   isUploadSource,
   listKnowledgeBases,
@@ -34,6 +37,7 @@ import {
   sourceTypeLabel,
   statusLabel,
   type KnowledgeBaseRecord,
+  type KnowledgeBaseStats,
 } from "@/lib/knowledge";
 import { CreateKnowledgeDialog } from "./components/CreateKnowledgeDialog";
 import { KnowledgeDetailSheet } from "./components/KnowledgeDetailSheet";
@@ -47,6 +51,7 @@ export default function KnowledgePage() {
   const [creating, setCreating] = useState(false);
   const [selected, setSelected] = useState<KnowledgeBaseRecord | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [stats, setStats] = useState<Record<string, KnowledgeBaseStats>>({});
 
   const load = useCallback(async () => {
     try {
@@ -62,6 +67,28 @@ export default function KnowledgePage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Counts cost AWS calls the listing does not make, so they are fetched apart
+  // from it and never on the provisioning poll. Optional decoration: a failure
+  // leaves the cards as they were.
+  const loadStats = useCallback(async () => {
+    try {
+      setStats(await getKnowledgeStats());
+    } catch {
+      // The cards stay usable without counts.
+    }
+  }, []);
+
+  // Refetch only when the set of ready knowledge bases changes (first load, one
+  // finishing provisioning, a delete) — the five-second poll leaves this string
+  // unchanged and so costs nothing extra.
+  const readyKeys = records
+    .filter((kb) => kb.status === "READY")
+    .map((kb) => kb.kb_key)
+    .join(",");
+  useEffect(() => {
+    if (readyKeys) void loadStats();
+  }, [readyKeys, loadStats]);
 
   // Provisioning runs server-side in a background task; polling both shows
   // progress and is what restarts a driver that died mid-chain.
@@ -118,7 +145,14 @@ export default function KnowledgePage() {
         hint="파일을 올리면 에이전트가 검색할 수 있는 Knowledge Base가 만들어집니다"
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => void load()}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                void load();
+                void loadStats();
+              }}
+            >
               <RefreshCw className="size-3.5" />
               새로고침
             </Button>
@@ -155,6 +189,7 @@ export default function KnowledgePage() {
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
             {records.map((kb, i) => {
               const variant = statusVariant(kb.status);
+              const counts = stats[kb.kb_key];
               return (
                 <Card
                   key={kb.kb_key}
@@ -225,6 +260,34 @@ export default function KnowledgePage() {
                     )}
                   </div>
 
+                  {counts &&
+                    (counts.documents !== null || counts.agents !== null) && (
+                      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums text-muted-foreground">
+                        {counts.documents !== null && (
+                          <span className="inline-flex items-center gap-1">
+                            <FileText className="size-3.5" />
+                            문서 {counts.documents}개
+                            {!!counts.failed_documents && (
+                              <span className="text-destructive">
+                                · 실패 {counts.failed_documents}
+                              </span>
+                            )}
+                          </span>
+                        )}
+                        {counts.agents !== null && (
+                          <span
+                            className="inline-flex items-center gap-1"
+                            title={counts.agents.join(", ") || undefined}
+                          >
+                            <Bot className="size-3.5" />
+                            {counts.agents.length > 0
+                              ? `에이전트 ${counts.agents.length}개`
+                              : "연결된 에이전트 없음"}
+                          </span>
+                        )}
+                      </div>
+                    )}
+
                   {kb.failure_reason && (
                     <p className="mt-2 text-xs leading-normal text-destructive">
                       {kb.failure_reason}
@@ -232,7 +295,10 @@ export default function KnowledgePage() {
                   )}
                   {kb.shared && (
                     <p className="mt-2 truncate text-xs text-muted-foreground">
-                      소유자: {kb.owner_name || kb.owner_id}
+                      소유자:{" "}
+                      {kb.owner_id === user?.sub
+                        ? "나"
+                        : kb.owner_name || kb.owner_id}
                     </p>
                   )}
                 </Card>
@@ -252,7 +318,11 @@ export default function KnowledgePage() {
         knowledgeBase={selected}
         writable={selected ? writable(selected) : false}
         onOpenChange={(open) => {
-          if (!open) setSelected(null);
+          if (!open) {
+            setSelected(null);
+            // The sheet uploads and deletes documents; its card should agree.
+            void loadStats();
+          }
         }}
       />
     </>

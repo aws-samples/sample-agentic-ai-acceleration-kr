@@ -106,3 +106,13 @@ export function sessionSummary(sessions) {
 export function isPending(status) {
   return status === "PENDING" || status === "IN_PROGRESS" || status === "STOPPING";
 }
+
+/**
+ * The name to show for an evaluator id: the catalogue's name when the catalogue
+ * is loaded, else the id without its "Builtin." prefix — the Usage tab shows a
+ * record's latest run before anyone has opened the launcher that loads names.
+ */
+export function evaluatorLabel(id, evaluators) {
+  const match = (evaluators ?? []).find((candidate) => candidate.evaluator_id === id);
+  return match?.name || String(id).replace(/^Builtin\./, "");
+}

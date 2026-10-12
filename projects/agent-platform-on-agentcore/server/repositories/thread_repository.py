@@ -155,7 +155,12 @@ class ThreadRepository(DynamoDBRepository):
                 expression = expression & extra
             scan_kwargs["FilterExpression"] = expression
 
-        threads = []
+        # Only what the filter, sort and slice need. `values` is the whole
+        # transcript — 7.4MB of the live table's 7.5MB, 343 threads, one a 408KB
+        # item — and a listing of 20 used to read and deserialise all of it on
+        # every sidebar load. The page's full items are fetched afterwards.
+        scan_kwargs["ProjectionExpression"] = "thread_id, created_at, updated_at, metadata"
+
         try:
             # A single scan() stops at DynamoDB's 1MB page limit, so follow
             # LastEvaluatedKey — otherwise threads past the first page silently
@@ -184,23 +189,35 @@ class ThreadRepository(DynamoDBRepository):
                         filtered.append(item)
                 threads_data = filtered
 
-            # Convert to Thread objects
-            for item in threads_data:
-                threads.append(self._to_thread(item))
-
             # Sort (in-memory)
             reverse = sort_order == "desc"
-            if sort_by == "updated_at":
-                threads.sort(key=lambda t: t.updated_at, reverse=reverse)
-            elif sort_by == "created_at":
-                threads.sort(key=lambda t: t.created_at, reverse=reverse)
+            if sort_by in ("updated_at", "created_at"):
+                threads_data.sort(key=lambda i: i[sort_by], reverse=reverse)
 
             # Paginate
-            return threads[offset : offset + limit]
+            page = [i["thread_id"] for i in threads_data[offset : offset + limit]]
+            return [self._to_thread(item) for item in self._get_many(page)]
 
         except ClientError as e:
             print(f"Error scanning threads: {e}")
             return []
+
+    def _get_many(self, thread_ids: List[str]) -> List[Dict[str, Any]]:
+        """Full items for `thread_ids`, in that order.
+
+        BatchGetItem takes 100 keys per call (the route caps `limit` at 100)
+        and may hand some back as UnprocessedKeys under throttling, which are
+        retried. A thread deleted since the scan is simply absent.
+        """
+        found: Dict[str, Dict[str, Any]] = {}
+        for i in range(0, len(thread_ids), 100):
+            request = {self.table_name: {"Keys": [{"thread_id": t} for t in thread_ids[i : i + 100]]}}
+            while request:
+                response = self.dynamodb.batch_get_item(RequestItems=request)
+                for item in response.get("Responses", {}).get(self.table_name, []):
+                    found[item["thread_id"]] = item
+                request = response.get("UnprocessedKeys") or {}
+        return [found[t] for t in thread_ids if t in found]
 
 
 

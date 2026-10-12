@@ -164,3 +164,29 @@ resource "aws_dynamodb_table" "users" {
     type = "S"
   }
 }
+
+# Teams an admin creates from the Organization page, plus the audit ledger of
+# what admins did there. Membership is NOT here: Cognito groups and the Entra
+# token are the source of truth (server/services/org_directory_service.py).
+# pk = "TEAM", sk = <name>  |  pk = "AUDIT#<yyyy-mm>", sk = "<iso-ts>#<id>".
+resource "aws_dynamodb_table" "teams" {
+  deletion_protection_enabled = !var.allow_destroy
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  name         = var.teams_table_name
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "pk"
+  range_key    = "sk"
+
+  attribute {
+    name = "pk"
+    type = "S"
+  }
+
+  attribute {
+    name = "sk"
+    type = "S"
+  }
+}

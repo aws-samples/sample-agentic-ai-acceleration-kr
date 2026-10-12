@@ -133,6 +133,20 @@ def list_source_buckets(user: AuthUser = Depends(current_user)):
         _fail(exc)
 
 
+@router.get("/stats")
+def knowledge_base_stats(user: AuthUser = Depends(current_user)):
+    """Document and agent counts per visible knowledge base, keyed by kb_key.
+
+    Separate from the listing so the five-second provisioning poll never pays for
+    it; the page asks once the cards are on screen. Declared before `/{kb_key}`
+    for the same reason as `/source-buckets`.
+    """
+    try:
+        return {"stats": _service().stats(user)}
+    except Exception as exc:
+        _fail(exc)
+
+
 @router.get("/{kb_key}", response_model=KnowledgeBaseDetail)
 def get_knowledge_base(kb_key: str, user: AuthUser = Depends(current_user)):
     try:

@@ -2,11 +2,10 @@
 
 import { useState } from "react";
 
-import { METRIC_COLOR, COST_COLOR } from "@/app/components/chartTheme";
 import { Button } from "@/components/ui/button";
-import { formatMicros, formatTokens, topNWithOther } from "@/app/insights/insightsFormat.mjs";
+import { formatMicros, formatTokens } from "@/app/insights/insightsFormat.mjs";
 import type { ModelRow } from "@/lib/insights";
-import { EmptyPlot, Plot, PlotCell, PlotGrid, RankedBars, type RankedEntry } from "./charts";
+import { DonutShare, EmptyPlot, Plot, PlotCell, PlotGrid } from "./charts";
 
 /**
  * Which models the fleet actually ran, by turns and by cost.
@@ -27,22 +26,12 @@ export function ModelMixPanel({ models }: { models: ModelRow[] }) {
     );
   }
 
-  const byTurns = topNWithOther(
-    models.map((row) => ({ name: row.model_id, value: row.turns })),
-    8,
-  ).map((entry: RankedEntry) => ({
-    ...entry,
-    display: `${entry.value.toLocaleString("ko-KR")}턴`,
-  })) as RankedEntry[];
-
-  const priced = models.filter((row) => row.model_cost_micros !== null);
-  const byCost = topNWithOther(
-    priced.map((row) => ({ name: row.model_id, value: (row.model_cost_micros ?? 0) / 1_000_000 })),
-    8,
-  ).map((entry: RankedEntry) => ({
-    ...entry,
-    display: `$${entry.value.toFixed(4)}`,
-  })) as RankedEntry[];
+  // A donut: a fleet runs a handful of models and the question is what share of
+  // the work (or the money) each one took. `DonutShare` folds past eight.
+  const byTurns = models.map((row) => ({ name: row.model_id, value: row.turns }));
+  const byCost = models
+    .filter((row) => row.model_cost_micros !== null)
+    .map((row) => ({ name: row.model_id, value: (row.model_cost_micros ?? 0) / 1_000_000 }));
 
   const unregistered = models.filter((row) => !row.registered);
 
@@ -65,9 +54,13 @@ export function ModelMixPanel({ models }: { models: ModelRow[] }) {
             }
           >
             {by === "turns" ? (
-              <RankedBars entries={byTurns} colorIndex={METRIC_COLOR.turns} />
-            ) : byCost.length > 0 ? (
-              <RankedBars entries={byCost} color={COST_COLOR} />
+              <DonutShare segments={byTurns} totalLabel="턴" empty="이 기간에 모델별로 기록된 턴이 없습니다." />
+            ) : byCost.some((row) => row.value > 0) ? (
+              <DonutShare
+                segments={byCost}
+                format={(value) => formatMicros(Math.round(value * 1_000_000))}
+                empty="요율표에 등록된 모델의 턴이 없습니다."
+              />
             ) : (
               <EmptyPlot label="요율표에 등록된 모델의 턴이 없습니다." />
             )}

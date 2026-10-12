@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { usePathname } from "next/navigation";
-import { BarChart3, Settings } from "lucide-react";
+import { BarChart3, Building2, Settings } from "lucide-react";
 import { getConfig, saveConfig, StandaloneConfig } from "@/lib/config";
 import { fetchNavVisibility, type MenuKey } from "@/lib/settings";
 import { ThreadList } from "@/app/components/ThreadList";
@@ -238,6 +238,15 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
       // Org-wide fleet usage and spend. The server gates /summary·/telemetry·
       // /composition on admin too; this only hides the door a plain user cannot
       // walk through anyway.
+      roles: ["admin"],
+    },
+    {
+      key: "org",
+      label: "Organization",
+      icon: Building2,
+      href: "/org",
+      // Teams the server provisions and the people in the pool. Admin-only on
+      // the server too; not in MENU_KEYS because a plain user never sees it.
       roles: ["admin"],
     },
     {

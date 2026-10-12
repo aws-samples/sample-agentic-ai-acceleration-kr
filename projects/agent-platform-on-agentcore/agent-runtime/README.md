@@ -82,6 +82,7 @@ cp .env.example .env
 | `GUARDRAIL_ID` / `GUARDRAIL_VERSION` | *(empty)* / `DRAFT` | Bedrock Guardrail applied to every model call |
 | `REASONING_BUDGET` | `0` | Extended-thinking budget in tokens; 0 = off. Claude 5 models get adaptive thinking instead of a budget |
 | `MAX_TOKENS` | `8192` | Output ceiling per model call |
+| `PLATFORM_VERSION` | `V2` | AgentCore Runtime platform version. V2 restores a prepared snapshot per instance (flat cold starts); `agentcore launch` cannot set it, so `deploy.sh` applies it after launch via `scripts/set_platform_version.py`. `V1` rolls back |
 | `PROMPT_CACHE` | `true` | Cache the static prefix (system prompt + tool schemas) |
 | `PLATFORM_API_URL`, `PLATFORM_ADMIN_USERNAME`, `PLATFORM_ADMIN_PASSWORD` | *(empty)* | Lets `deploy.sh` register the runtime in the Agent Registry; empty skips it |
 | `AUTO_TF_OUTPUTS` / `INFRA_ENV_DIR` | `true` / `infra/envs/standalone` | Where `deploy.sh` reads Terraform outputs from |

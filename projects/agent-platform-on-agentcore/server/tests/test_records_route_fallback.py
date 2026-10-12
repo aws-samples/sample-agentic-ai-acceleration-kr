@@ -26,7 +26,7 @@ def test_list_records_falls_back_on_client_error(monkeypatch):
     monkeypatch.setattr(reg._service, "list_records", boom)
     monkeypatch.setattr(reg._sync_service, "deployed_agent_records",
                         lambda: [_deployed("deployed:arn:x", "x")])
-    out = reg.list_records(type=None, status=None, name=None, _=None)
+    out = reg.list_records(type=None, status=None, name=None, user=None)
     assert out["count"] == 1
     assert out["records"][0].source == "deployed"
 
@@ -37,7 +37,7 @@ def test_list_records_falls_back_when_disabled(monkeypatch):
                         lambda **kw: (_ for _ in ()).throw(AssertionError("registry called")))
     monkeypatch.setattr(reg._sync_service, "deployed_agent_records",
                         lambda: [_deployed("deployed:arn:y", "y")])
-    out = reg.list_records(type=None, status=None, name=None, _=None)
+    out = reg.list_records(type=None, status=None, name=None, user=None)
     assert out["records"][0].name == "y"
 
 
@@ -51,7 +51,7 @@ def test_get_record_synthesises_deployed_detail_without_calling_aws(monkeypatch)
     monkeypatch.setattr(reg._service, "get_record", must_not_call)
     monkeypatch.setattr(reg._sync_service, "deployed_agent_records",
                         lambda: [_deployed("deployed:arn:z", "z")])
-    detail = reg.get_record(record_id="deployed:arn:z", _=None)
+    detail = reg.get_record(record_id="deployed:arn:z", user=None)
     assert detail.record_id == "deployed:arn:z"
     assert detail.source == "deployed"
     assert detail.status == "APPROVED"
@@ -60,5 +60,5 @@ def test_get_record_synthesises_deployed_detail_without_calling_aws(monkeypatch)
 def test_get_record_404s_for_an_unknown_deployed_id(monkeypatch):
     monkeypatch.setattr(reg._sync_service, "deployed_agent_records", lambda: [])
     with pytest.raises(HTTPException) as exc:
-        reg.get_record(record_id="deployed:arn:gone", _=None)
+        reg.get_record(record_id="deployed:arn:gone", user=None)
     assert exc.value.status_code == 404

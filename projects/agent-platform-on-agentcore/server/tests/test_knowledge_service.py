@@ -190,8 +190,14 @@ class FakeHarness:
 
     def __init__(self, harnesses=None):
         self.harnesses = harnesses or []
+        self.list_error = None
 
-    def list_harnesses(self):
+    def list_harnesses(self, with_tools=False):
+        """`with_tools` is HarnessService hydrating each summary with GetHarness."""
+        if self.list_error:
+            raise self.list_error
+        if with_tools:
+            return list(self.harnesses)
         return [h.as_summary() for h in self.harnesses]
 
     def get_harness(self, harness_id):
@@ -215,7 +221,7 @@ class Harness:
 
 
 def build(harnesses=None, source_buckets=("corp-docs",),
-          platform_source_bucket=PLATFORM_BUCKET):
+          platform_source_bucket=PLATFORM_BUCKET, owner_names=None):
     repository = FakeRepository()
     provisioner = FakeProvisioner(repository)
     service = KnowledgeService(
@@ -227,6 +233,7 @@ def build(harnesses=None, source_buckets=("corp-docs",),
         harness=FakeHarness(harnesses),
         source_buckets=list(source_buckets),
         platform_source_bucket=platform_source_bucket,
+        owner_names=owner_names,
     )
     return service, repository, provisioner
 
@@ -333,6 +340,33 @@ def test_the_listing_shows_mine_and_shared_but_not_someone_elses():
     keys = {r.kb_key for r in service.list_visible(ALICE)}
 
     assert keys == {"kb_mine_00000001", "kb_shared_00000001"}
+
+
+def test_the_listing_names_owners_by_email_not_by_the_uuid_username():
+    """This pool's usernames are the sub again, so the stored name is a UUID."""
+    service, repository, _ = build(
+        owner_names=lambda subs: {s: "bob@example.com" for s in subs if s == BOB.sub}
+    )
+    seed(repository, "kb_shared_00000001", owner=BOB, shared=True)
+
+    [record] = service.list_visible(ALICE)
+
+    assert record.owner_name == "bob@example.com"
+    # Resolved for the response only; nothing is written back.
+    assert repository.get("kb_shared_00000001").owner_name == "bob"
+
+
+def test_an_unresolved_or_failed_owner_lookup_keeps_the_stored_name():
+    def broken(subs):
+        raise RuntimeError("directory down")
+
+    for resolver in (lambda subs: {}, broken):
+        service, repository, _ = build(owner_names=resolver)
+        seed(repository, "kb_shared_00000001", owner=BOB, shared=True)
+
+        [record] = service.list_visible(ALICE)
+
+        assert record.owner_name == "bob"
 
 
 def test_the_listing_can_be_narrowed_to_attachable_knowledge_bases():
@@ -1220,3 +1254,68 @@ def test_every_operation_refuses_when_storage_is_unconfigured():
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# --- card stats ----------------------------------------------------------
+
+
+def _doc(doc_id, status):
+    return {"identifier": {"custom": {"id": doc_id}}, "status": status, "updatedAt": None}
+
+
+def test_stats_count_live_documents_and_failures_and_name_attached_agents():
+    service, repository, provisioner = build()
+    record = seed(repository)
+    provisioner.agent.documents = {
+        "a.pdf_00000001": _doc("a.pdf_00000001", "INDEXED"),
+        "b.pdf_00000002": _doc("b.pdf_00000002", "FAILED"),
+        "c.pdf_00000003": _doc("c.pdf_00000003", "IGNORED"),
+        "d.pdf_00000004": _doc("d.pdf_00000004", "NOT_FOUND"),
+    }
+    service.harness.harnesses = [
+        Harness("support_bot", record.gateway_arn),
+        Harness("analyst", record.gateway_arn),
+        Harness("other_bot", "arn:aws:bedrock-agentcore:us-east-1:1:gateway/unrelated"),
+    ]
+
+    stats = service.stats(ALICE)[record.kb_key]
+
+    assert stats.documents == 3  # the NOT_FOUND tombstone is not a document
+    assert stats.failed_documents == 2
+    assert stats.agents == ["analyst", "support_bot"]
+
+
+def test_stats_cover_only_knowledge_bases_the_caller_can_see():
+    service, repository, _ = build()
+    seed(repository, "kb_mine_00000001", owner=ALICE)
+    seed(repository, "kb_theirs_0000001", owner=BOB)
+
+    assert set(service.stats(ALICE)) == {"kb_mine_00000001"}
+
+
+def test_an_unreadable_count_is_unknown_not_zero():
+    """A throttled listing must not make a full knowledge base look empty."""
+    service, repository, provisioner = build()
+    record = seed(repository)
+    provisioner.agent.list_error = client_error("ThrottlingException")
+    service.harness.list_error = RuntimeError("harness down")
+
+    stats = service.stats(ALICE)[record.kb_key]
+
+    assert stats.documents is None
+    assert stats.failed_documents is None
+    assert stats.agents is None
+
+
+def test_a_knowledge_base_still_provisioning_has_unknown_counts_and_no_aws_call():
+    service, repository, provisioner = build()
+    repository.put(KnowledgeBaseRecord(
+        kb_key="kb_new_00000001", owner_id=ALICE.sub, name="New",
+        status=STATUS_CREATING, created_at=now_iso(), updated_at=now_iso(),
+    ))
+    provisioner.agent.list_error = AssertionError("must not be called")
+
+    stats = service.stats(ALICE)["kb_new_00000001"]
+
+    assert stats.documents is None
+    assert stats.agents == []

@@ -29,6 +29,7 @@ import {
  * - **MCP Tools**: the MCP inspector, formerly its own top-level menu.
  *
  * `?tab=` selects the tab, so the old `/mcp` route can land on the inspector.
+ * 팀 관리는 /org (`?tab=teams` 는 거기로 보낸다).
  *
  * The rate window is fixed at 30 days: this page asks "which models has the
  * platform run, and is each one priced", and a week can miss a model that ran
@@ -141,6 +142,9 @@ function SettingsPageInner() {
   const router = useRouter();
   const params = useSearchParams();
   const requested = params.get("tab");
+  useEffect(() => {
+    if (requested === "teams") router.replace("/org?tab=teams");
+  }, [requested, router]);
   const tab: Tab = (TABS as readonly string[]).includes(requested ?? "") ? (requested as Tab) : "menus";
 
   return (
@@ -152,9 +156,11 @@ function SettingsPageInner() {
       />
       <PageBody>
         <div className="mx-auto flex w-full max-w-6xl flex-col gap-4">
+          {/* Native history, as on /org: a tab is a view of this page, not a
+              router navigation that can stall uncommitted. */}
           <Tabs
             value={tab}
-            onValueChange={(value) => router.replace(`/settings?tab=${value}`)}
+            onValueChange={(value) => window.history.replaceState(null, "", `/settings?tab=${value}`)}
           >
             <TabsList>
               <TabsTrigger value="menus">메뉴</TabsTrigger>

@@ -101,5 +101,28 @@
       },
       "required": ["artifact_id", "title", "kind", "content"]
     }
+  },
+  {
+    "name": "approve_expense",
+    "description": "Workshop demo (mock data): record an expense approval for the finance team. Returns an approval id. Amount is whole dollars.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "amount": { "type": "integer", "description": "Expense amount in whole US dollars." },
+        "memo": { "type": "string", "description": "What the expense is for." }
+      },
+      "required": ["amount"]
+    }
+  },
+  {
+    "name": "lookup_salary",
+    "description": "Workshop demo (mock data): look up an employee's salary band for the HR team. Returns a band label, never a figure.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "employee_id": { "type": "string", "description": "Employee id, e.g. E-1042." }
+      },
+      "required": ["employee_id"]
+    }
   }
 ]

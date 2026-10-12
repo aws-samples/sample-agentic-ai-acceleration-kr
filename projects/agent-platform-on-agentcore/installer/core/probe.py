@@ -22,6 +22,7 @@ from installer.core.runner import Command
 # Memory for the default Runtime agent (session-summary strategy).
 MEMORY_NAME = "bap_conversations_default"
 
+
 # Substrings that mean "the answer is unavailable", as opposed to "absent".
 # Treating these as PENDING would re-run finished work; treating them as DONE
 # would skip work that never happened. Neither is acceptable, hence UNKNOWN.

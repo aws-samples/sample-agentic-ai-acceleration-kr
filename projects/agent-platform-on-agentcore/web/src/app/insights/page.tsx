@@ -290,7 +290,7 @@ export default function InsightsPage() {
       icon: AlertTriangle,
       children: `요율표 ${summary.cost.rate_card.version} 와 AWS 청구서 요율이 ${summary.cost.rate_card.mismatches.length}건 다릅니다 (${summary.cost.rate_card.mismatches
         .map((m) => `${m.family} ${m.routing} ${m.tier}`)
-        .join(", ")}). 같은 값이 이틀 연속 청구되면 그 날짜부터의 요율로 자동 반영되고 해당 턴의 비용이 다시 계산됩니다.`,
+        .join(", ")}). 같은 값이 이틀 연속 청구되면 그 날짜부터의 요율로 자동 반영되고 해당 턴의 비용이 다시 계산됩니다. Settings 의 모델 요율에서 지금 등록할 수도 있습니다.`,
     });
   }
   if (summary && summary.cost.model.unregistered_models.length > 0) {
@@ -316,7 +316,7 @@ export default function InsightsPage() {
       tone: "info",
       icon: AlertTriangle,
       children:
-        "AWS 청구서(Cost Explorer) 스냅샷이 아직 없습니다. 청구는 24~48시간 뒤에 반영되며, 그때부터 이 페이지의 Runtime 비용과 비교합니다.",
+        "AWS 청구서(Cost Explorer) 스냅샷이 아직 없습니다. 청구는 24~48시간 뒤에 반영되며, 그때부터 AgentCore 청구 비용이 채워집니다.",
     });
   }
   if (summary) {

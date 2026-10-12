@@ -46,9 +46,9 @@ class Thread(BaseModel):
     # after the record is renamed or deleted. Never authoritative: only
     # agent_record_id decides which agent may answer.
     agent_name: str = ""
-    # Model pinned onto a basic-chat thread (agent_record_id == BASIC_CHAT_RECORD_ID).
-    # Server-chosen from the allow-list on the first turn; later turns must name
-    # the same model. None on any other thread.
+    # Model the retired basic-chat path pinned onto its threads. Read once, on
+    # the turn that moves such a thread onto the default agent's record, then
+    # cleared (ThreadService._adopt_default_agent). Never written any more.
     basic_chat_model_id: Optional[str] = None
     # Execution target (agent_runtime_arn / harness_arn / qualifier) derived from
     # the pinned record the last time the registry was consulted. A cache, not a

@@ -1,11 +1,9 @@
 /**
- * Bedrock model catalog, used when composing or editing a harness and in the
- * per-thread override popover.
+ * Bedrock model catalog, used when composing or editing a harness.
  *
- * The harness definition owns the default model. A chat bound to a harness may
- * still override it per thread: InvokeHarness takes a per-request `model`
- * (measured 2026-09-23 — an earlier note here said it did not). Runtime agents
- * have no such field, so the chat offers no picker for them.
+ * The harness definition owns its default model. Per-thread overrides in the
+ * chat do NOT use this list: they offer the server's allow-list
+ * (GET /api/config → allowedModels), which is what a turn is accepted with.
  */
 
 export interface BedrockModel {
@@ -46,8 +44,8 @@ export const BEDROCK_MODELS: BedrockModel[] = [
     provider: "Anthropic",
   },
   {
-    id: "global.anthropic.claude-haiku-4-5-20251001-v1:0",
-    label: "Claude Haiku 4.5",
+    id: "global.anthropic.claude-haiku-5-5",
+    label: "Claude Haiku 5.5",
     provider: "Anthropic",
   },
   {

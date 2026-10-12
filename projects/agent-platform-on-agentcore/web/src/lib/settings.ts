@@ -54,3 +54,25 @@ export function putNavVisibility(hidden: MenuKey[]): Promise<NavVisibility> {
     body: JSON.stringify({ hidden }),
   });
 }
+
+export interface TeamConfig {
+  name: string;
+  label: string;
+  /** Empty for non-admin readers. */
+  execution_role_arn: string;
+  allowed_models: string[];
+  allowed_tools: string[];
+  daily_cost_alert_usd: number | null;
+  description: string;
+  managed_by: string;
+  status: string;
+}
+
+export interface TeamsResponse {
+  teams: TeamConfig[];
+  persisted: boolean;
+}
+
+export function fetchTeams(): Promise<TeamsResponse> {
+  return request<TeamsResponse>("/api/settings/teams");
+}

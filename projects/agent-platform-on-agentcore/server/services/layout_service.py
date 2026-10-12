@@ -27,16 +27,22 @@ LAYOUT_NAME = "insights-layout"
 # which is the whole reason `users` and `guardrail` needed no version bump. An id
 # dropped from here (the old `quality` widget, now folded into the leaderboard
 # drill-down; `rates`, now the Settings page) is silently removed from stored
-# layouts for the same reason.
+# layouts for the same reason. `teams` (per-team usage and policy denials) added 2026-10; `policy`
+# (gateway decisions and denials, split out of `teams`) on 2026-10-10.
+# `billed` folded into `cost_composition` on 2026-10-10; see `_merge_billed`.
+# The order is the default layout, read top to bottom by an organisation: overview,
+# spend and who spent it (team before person), what is used, then what policy and
+# guardrails stopped. Stored layouts keep their own order; only defaults move.
 WIDGET_IDS = (
     "kpi",
-    "leaderboard",
-    "cost_composition",
-    "model_mix",
-    "billed",
     "trend",
-    "reuse",
+    "cost_composition",
+    "teams",
     "users",
+    "leaderboard",
+    "model_mix",
+    "reuse",
+    "policy",
     "guardrail",
 )
 SPANS = ("half", "full")
@@ -103,7 +109,35 @@ def reconcile(stored):
         if widget_id not in seen:
             widgets.append({"id": widget_id, "span": "full", "visible": True})
 
-    return {"version": LAYOUT_VERSION, "widgets": widgets}
+    return {"version": LAYOUT_VERSION, "widgets": _merge_billed(raw, widgets)}
+
+
+def _merge_billed(raw, widgets):
+    """A layout saved while `billed` was its own widget, moved onto the merged one.
+
+    `billed` (AgentCore 청구 비용) was folded into `cost_composition` on 2026-10-10,
+    the same day the default order was regrouped for an organisation reading top
+    to bottom. A layout that still lists `billed` was saved before both, in the old
+    order, so it is laid out in WIDGET_IDS order instead — anchoring the merged
+    widget to a neighbour does not work, because reconcile appends missing ids and
+    the neighbour may be last. Each widget keeps its stored span and visibility;
+    the merged one is full width, visible if either old widget was. The next save
+    drops `billed`, after which the reader's own order is respected.
+    """
+    stored = {entry.get("id"): entry for entry in raw if isinstance(entry, dict)}
+    billed = stored.get("billed")
+    if billed is None:
+        return widgets
+    cost = next(w for w in widgets if w["id"] == "cost_composition")
+    merged = {
+        "id": "cost_composition",
+        "span": "full",
+        "visible": bool(billed.get("visible", True))
+        or ("cost_composition" in stored and cost["visible"]),
+    }
+    by_id = {w["id"]: w for w in widgets}
+    by_id["cost_composition"] = merged
+    return [by_id[widget_id] for widget_id in WIDGET_IDS]
 
 
 class LayoutService:

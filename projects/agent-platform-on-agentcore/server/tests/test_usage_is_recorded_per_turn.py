@@ -33,6 +33,9 @@ class StubRegistry:
 
     def get_record(self, record_id):
         return SimpleNamespace(status="APPROVED", agent_runtime_arn=RUNTIME_ARN, harness_arn=None, qualifier=None)
+    def chattable_record(self, record_id):
+        # The approval gate reads the chattable revision; these doubles have one.
+        return self.get_record(record_id)
 
 
 class StubThread:

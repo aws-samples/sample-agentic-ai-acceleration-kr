@@ -2,12 +2,15 @@
 Configuration settings for the FastAPI application
 """
 import json
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Tuple
 
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file.
 #
@@ -206,19 +209,40 @@ DYNAMODB_THREADS_TABLE = os.getenv("DYNAMODB_THREADS_TABLE", "bap-threads")
 # Bedrock Configuration
 BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "global.anthropic.claude-sonnet-5-5")
 
-# Basic chat: talk to the default runtime with an operator-curated model, without
-# picking a registry agent. Off until BASIC_CHAT_ALLOWED_MODELS names at least one
-# model. Use inference-profile ids (global.anthropic.…): Claude 5 foundation-model
-# ids are rejected by ConverseStream with an on-demand-throughput error.
-BASIC_CHAT_ALLOWED_MODELS = _csv("BASIC_CHAT_ALLOWED_MODELS")
-# Runtime that answers basic chat. Empty means the server's default runtime
-# (AGENT_RUNTIME_ARN), which is what the deployed stack uses.
-BASIC_CHAT_RUNTIME_ARN = os.getenv("BASIC_CHAT_RUNTIME_ARN", "").strip()
-# Synthetic record id pinned onto basic-chat threads. Not a registry id: the
-# thread also pins the model (Thread.basic_chat_model_id) because the memory
-# built under one model should not be continued under another unnoticed.
-BASIC_CHAT_RECORD_ID = "__basic_chat__"
-BASIC_CHAT_AGENT_NAME = "기본 채팅"
+# Models a per-thread override may pick, for every agent (runtime or harness).
+# The operator's ceiling: a team list (services/team_service.py) can only narrow
+# it. Empty = model overrides are refused and each agent runs its own default.
+# Use inference-profile ids (global.anthropic.…): Claude 5 foundation-model ids
+# are rejected by ConverseStream with an on-demand-throughput error.
+ALLOWED_MODELS = _csv("ALLOWED_MODELS")
+# The retired basic-chat path pinned this synthetic id onto its threads. Kept
+# only to recognise those threads: the next turn moves them onto the default
+# agent's record (services/agent_access.py). The usage rows that path wrote
+# under this id were removed from the ledger on 2026-10-10 (32 test turns), so
+# Insights no longer has to name it.
+LEGACY_BASIC_CHAT_RECORD_ID = "__basic_chat__"
+# Thread.metadata key holding the per-thread model / system-prompt override the
+# web resends on every turn. The name predates overrides on runtime agents and
+# stays so threads written under it keep their settings.
+OVERRIDES_METADATA_KEY = "harness_overrides"
+# Organization page (routes/org.py). The teams table holds what the IdP cannot:
+# team metadata, the role/policy the server provisioned, Entra group mappings
+# and the audit ledger. Empty = the page reports 501 and there are no teams.
+TEAMS_TABLE = os.getenv("TEAMS_TABLE", "").strip()
+# Managed policy every server-made team role carries as its permissions
+# boundary. Empty = the server cannot create roles, so it cannot create teams.
+TEAM_ROLE_BOUNDARY_ARN = os.getenv("TEAM_ROLE_BOUNDARY_ARN", "").strip()
+# Gateway policy engine the per-team Cedar policies are written to. Empty =
+# teams are created without gateway policies ("정책 미연결" in the UI).
+POLICY_ENGINE_ID = os.getenv("POLICY_ENGINE_ID", "").strip()
+MCP_GATEWAY_ARN = os.getenv("MCP_GATEWAY_ARN", "").strip()
+# Fully-qualified gateway actions (<target>___<tool>) every team role may call
+# beyond its own tool list, e.g. the web-search connector's tool.
+TEAM_SHARED_ACTIONS = _csv("TEAM_SHARED_ACTIONS")
+# Tools whose Cedar policy (written outside the server, e.g. the demo amount cap)
+# carries an argument condition. The server refuses them in a team's list: its
+# generated policies have none.
+TEAM_CONDITIONED_ACTIONS = _csv("TEAM_CONDITIONED_ACTIONS")
 
 # AgentCore Agent Registry (created by infra/modules/agent_registry)
 AGENT_REGISTRY_ID = os.getenv("AGENT_REGISTRY_ID", "")
@@ -229,6 +253,11 @@ AGENT_REGISTRY_ID = os.getenv("AGENT_REGISTRY_ID", "")
 # "1"/"true": force on. A registry that is configured but answers with an AWS
 # error degrades to the same fallback at read time (registry_service).
 AP_USE_REGISTRY = os.getenv("AP_USE_REGISTRY", "auto").strip().lower()
+# IAM role AWS Agent Registry assumes to SigV4-sign record synchronisation
+# fetches against servers on AgentCore Runtime/Gateway (service `agent-registry`).
+# The server task role needs iam:PassRole on it. Empty = the Register dialog
+# offers only unauthenticated synchronisation.
+REGISTRY_SYNC_ROLE_ARN = os.getenv("REGISTRY_SYNC_ROLE_ARN", "").strip()
 
 # Managed Agent Harness (infra/modules/iam, infra/modules/s3_skills)
 HARNESS_EXECUTION_ROLE_ARN = os.getenv("HARNESS_EXECUTION_ROLE_ARN", "")
@@ -252,6 +281,8 @@ USAGE_TIMEZONE = os.getenv("USAGE_TIMEZONE", "UTC")
 # Per-user preferences (dashboard layout). Absent means the layout routes serve
 # the default and accept no writes — the page still works, unpersisted.
 PREFS_TABLE = os.getenv("PREFS_TABLE", "")
+# The platform gateway whose policy-engine decision metrics Insights collects.
+MCP_GATEWAY_ID = os.getenv("MCP_GATEWAY_ID", "").strip()
 
 # Harness output sweep. A harness runs its tools inside AWS, so a file it produces
 # stays in its sandbox; the server collects it after the turn (see

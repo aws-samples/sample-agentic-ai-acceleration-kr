@@ -234,3 +234,46 @@ def test_list_tools_times_out_instead_of_hanging():
             _client_factory=hanging_client,
             _session_cls=HangingSession,
         )
+
+
+def test_list_tools_follows_next_cursor_across_pages():
+    """게이트웨이는 tools/list 를 6개씩 페이지로 준다. 첫 페이지만 읽으면 뒤에 붙인
+    타깃(platform-status, registry)의 툴이 UI 와 앱 탐색에서 사라진다."""
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+
+    from mcp_core.app_session import list_tools
+
+    @asynccontextmanager
+    async def client(url, **kwargs):
+        yield (None, None, None)
+
+    pages = {
+        None: SimpleNamespace(tools=[SimpleNamespace(name="a"), SimpleNamespace(name="b")], nextCursor="p2"),
+        "p2": SimpleNamespace(tools=[SimpleNamespace(name="registry___search")], nextCursor=None),
+    }
+
+    class PagedSession:
+        def __init__(self, read, write):
+            self.cursors = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def send_request(self, *args, **kwargs):
+            from mcp.types import LATEST_PROTOCOL_VERSION
+
+            return SimpleNamespace(protocolVersion=LATEST_PROTOCOL_VERSION)
+
+        async def send_notification(self, *args, **kwargs):
+            pass
+
+        async def list_tools(self, cursor=None):
+            self.cursors.append(cursor)
+            return pages[cursor]
+
+    tools = list_tools("https://g.example/mcp", timeout=2, _client_factory=client, _session_cls=PagedSession)
+    assert [t.name for t in tools] == ["a", "b", "registry___search"]

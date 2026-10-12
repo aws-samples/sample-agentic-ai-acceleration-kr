@@ -22,13 +22,14 @@ test("the client's widget list matches the server's", () => {
   // `users` and `guardrail` to serve the per-user and governance panels did.
   assert.deepEqual(WIDGET_IDS, [
     "kpi",
-    "leaderboard",
-    "cost_composition",
-    "model_mix",
-    "billed",
     "trend",
-    "reuse",
+    "cost_composition",
+    "teams",
     "users",
+    "leaderboard",
+    "model_mix",
+    "reuse",
+    "policy",
     "guardrail",
   ]);
 });
@@ -53,8 +54,8 @@ test("moving an unknown id is a no-op rather than a crash", () => {
 });
 
 test("toggleWidget flips visibility without reordering", () => {
-  const after = toggleWidget(layout(), "billed");
-  assert.equal(after.find((w) => w.id === "billed").visible, false);
+  const after = toggleWidget(layout(), "reuse");
+  assert.equal(after.find((w) => w.id === "reuse").visible, false);
   assert.deepEqual(after.map((w) => w.id), WIDGET_IDS);
 });
 
@@ -105,11 +106,48 @@ test("a layout saved before the cost widgets existed gets them appended", () => 
     version: 1,
     widgets: [
       { id: "kpi", span: "full", visible: true },
-      { id: "billed", span: "full", visible: true },
+      { id: "trend", span: "full", visible: true },
     ],
   });
   const ids = result.widgets.map((w) => w.id);
-  assert.deepEqual(ids.slice(0, 2), ["kpi", "billed"]);
+  assert.deepEqual(ids.slice(0, 2), ["kpi", "trend"]);
   assert.ok(ids.includes("cost_composition") && ids.includes("model_mix"));
   assert.ok(result.widgets.find((w) => w.id === "model_mix").visible);
+});
+
+test("a layout saved while billed was its own widget is laid out in the default order", () => {
+  const result = reconcileLayout({
+    version: 1,
+    widgets: [
+      { id: "kpi", span: "full", visible: true },
+      { id: "cost_composition", span: "half", visible: false },
+      { id: "model_mix", span: "half", visible: true },
+      { id: "billed", span: "full", visible: true },
+      { id: "guardrail", span: "half", visible: true },
+      { id: "users", span: "full", visible: true },
+    ],
+  });
+  const ids = result.widgets.map((w) => w.id);
+  assert.ok(!ids.includes("billed"));
+  assert.deepEqual(ids, WIDGET_IDS);
+  assert.equal(result.widgets.find((w) => w.id === "guardrail").span, "half", "stored span survives");
+  assert.deepEqual(result.widgets.find((w) => w.id === "cost_composition"), {
+    id: "cost_composition",
+    span: "full",
+    visible: true,
+  });
+  // Once saved without `billed`, the reader's own order wins.
+  const saved = reconcileLayout(result);
+  assert.deepEqual(reconcileLayout({ ...saved, widgets: moveWidget(saved.widgets, "cost_composition", "kpi") }).widgets[0].id, "cost_composition");
+});
+
+test("both old cost widgets hidden stays hidden after the merge", () => {
+  const result = reconcileLayout({
+    version: 1,
+    widgets: [
+      { id: "cost_composition", span: "half", visible: false },
+      { id: "billed", span: "full", visible: false },
+    ],
+  });
+  assert.equal(result.widgets.find((w) => w.id === "cost_composition").visible, false);
 });

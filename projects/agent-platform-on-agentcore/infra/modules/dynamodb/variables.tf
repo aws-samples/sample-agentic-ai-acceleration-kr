@@ -33,3 +33,8 @@ variable "allow_destroy" {
   type        = bool
   default     = false
 }
+
+variable "teams_table_name" {
+  type        = string
+  description = "Team metadata, Entra group mappings and the org audit ledger (server/repositories/team_repository.py)."
+}

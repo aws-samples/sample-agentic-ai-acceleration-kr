@@ -221,10 +221,11 @@ async def test_an_interrupted_turn_spawns_the_delayed_sweep(monkeypatch):
         except StopAsyncIteration:
             break
 
-    # Close the iterator to simulate browser disconnect
-    try:
-        await response.body_iterator.aclose()   # the browser going away
-    except GeneratorExit:
+    # A browser going away no longer interrupts anything — the run is drained
+    # by the broker's task. Stop does, through the broker; that is the path
+    # that must still schedule the recovery.
+    assert service.run_broker.cancel(THREAD) is True
+    async for _ in iterator:
         pass
 
     # The partial message was persisted under this id, so a file recovered minutes

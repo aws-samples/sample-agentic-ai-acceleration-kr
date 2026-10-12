@@ -20,7 +20,6 @@ import core.config as cfg  # noqa: E402
 from services import agent_access  # noqa: E402
 from services.agent_access import (  # noqa: E402
     AgentTargetMismatch,
-    BasicChatUnavailable,
     bind_execution,
     is_record_verdict,
 )
@@ -43,14 +42,17 @@ class Registry:
         if self.exc:
             raise self.exc
         return self.record
+    def chattable_record(self, record_id):
+        # The approval gate reads the chattable revision; these doubles have one.
+        return self.get_record(record_id)
 
 
 def _record(runtime=None, harness=None, qualifier=None):
     return SimpleNamespace(agent_runtime_arn=runtime, harness_arn=harness, qualifier=qualifier)
 
 
-def _thread(record_id="", target=None, model=None):
-    return SimpleNamespace(agent_record_id=record_id, agent_target=target, basic_chat_model_id=model)
+def _thread(record_id="", target=None, model=None, metadata=None):
+    return SimpleNamespace(agent_record_id=record_id, agent_target=target, basic_chat_model_id=model, metadata=metadata)
 
 
 def _bind(config, thread=None, registry=None, client=DEFAULT):
@@ -175,58 +177,111 @@ def test_other_lookup_failures_fail_closed():
         _bind({"registry_record_id": "rec-a"}, registry=Registry(exc=RuntimeError("boom")))
 
 
-# --- basic chat ---------------------------------------------------------------
+# --- the global model allow-list -----------------------------------------------
 
 
 @pytest.fixture
-def basic(monkeypatch):
-    monkeypatch.setattr(cfg, "BASIC_CHAT_ALLOWED_MODELS", [SONNET])
-    monkeypatch.setattr(cfg, "BASIC_CHAT_RUNTIME_ARN", "")
+def allowed(monkeypatch):
+    monkeypatch.setattr(cfg, "ALLOWED_MODELS", [SONNET])
 
 
-def test_basic_chat_binds_the_default_runtime_and_the_chosen_model(basic):
-    config, learned = _bind({"basic_chat": True, "basic_chat_model_id": SONNET})
-    assert config["agent_runtime_arn"] == DEFAULT.agent_runtime_arn
-    assert config["registry_record_id"] == cfg.BASIC_CHAT_RECORD_ID
-    assert config["registry_agent_name"] == cfg.BASIC_CHAT_AGENT_NAME
+def test_a_model_override_inside_the_allow_list_passes_for_any_record(allowed):
+    config, _ = _bind({"registry_record_id": "rec-a", "model_id": SONNET}, registry=Registry(_record(runtime=RUNTIME)))
     assert config["model_id"] == SONNET
+    config, _ = _bind({"model_id": SONNET})  # no record: the default runtime
+    assert config["model_id"] == SONNET and config["agent_runtime_arn"] == DEFAULT.agent_runtime_arn
+
+
+def test_a_model_override_outside_the_allow_list_is_refused_even_for_an_admin(allowed):
+    admin = SimpleNamespace(is_admin=True, teams=[])
+    with pytest.raises(AgentTargetMismatch):
+        _bind({"registry_record_id": "rec-a", "model_id": "global.anthropic.claude-opus-5-5"}, registry=Registry(_record(runtime=RUNTIME)))
+    with pytest.raises(AgentTargetMismatch):
+        bind_execution({"model_id": "global.anthropic.claude-opus-5-5"}, registry_service=Registry(), default_client=DEFAULT, caller=admin)
+
+
+def test_an_empty_allow_list_refuses_every_model_override_but_not_a_plain_turn(monkeypatch):
+    monkeypatch.setattr(cfg, "ALLOWED_MODELS", [])
+    with pytest.raises(AgentTargetMismatch):
+        _bind({"model_id": SONNET})
+    config, _ = _bind({"registry_record_id": "rec-a"}, registry=Registry(_record(runtime=RUNTIME)))
+    assert "model_id" not in config or not config["model_id"]
+
+
+# --- threads the retired basic-chat path left behind ---------------------------
+
+LEGACY = "__basic_chat__"
+DEFAULT_RECORD = SimpleNamespace(record_id="rec-default", name="bap_default", agent_runtime_arn=DEFAULT.agent_runtime_arn, harness_arn=None, qualifier="DEFAULT")
+
+
+@pytest.fixture
+def default_record(monkeypatch, allowed):
+    monkeypatch.setattr(agent_access, "default_record", lambda registry_service: DEFAULT_RECORD)
+
+
+def test_a_legacy_thread_is_moved_onto_the_default_record_with_its_model(default_record):
+    config, learned = _bind({}, thread=_thread(LEGACY, model=SONNET))
+    assert config["registry_record_id"] == "rec-default"
+    assert config["registry_agent_name"] == "bap_default"
+    assert config["model_id"] == SONNET
+    assert config["adopted_model_id"] == SONNET
+    assert config["agent_runtime_arn"] == DEFAULT.agent_runtime_arn
     assert learned["agent_runtime_arn"] == DEFAULT.agent_runtime_arn
 
 
-def test_basic_chat_refuses_a_foreign_runtime_or_a_harness(basic):
+def test_a_legacy_pin_outside_the_allow_list_is_dropped_not_refused(default_record):
+    config, _ = _bind({}, thread=_thread(LEGACY, model="global.anthropic.claude-haiku-4-5-20251001-v1:0"))
+    assert config["registry_record_id"] == "rec-default"
+    assert not config.get("model_id") and config["adopted_model_id"] is None
+
+
+def test_a_model_the_client_sends_wins_over_the_legacy_pin(default_record, monkeypatch):
+    monkeypatch.setattr(cfg, "ALLOWED_MODELS", [SONNET, "global.anthropic.claude-opus-5-5"])
+    config, _ = _bind({"model_id": "global.anthropic.claude-opus-5-5"}, thread=_thread(LEGACY, model=SONNET))
+    assert config["model_id"] == "global.anthropic.claude-opus-5-5" == config["adopted_model_id"]
+
+
+def test_a_legacy_thread_accepts_the_default_record_id_and_refuses_another(default_record):
+    config, _ = _bind({"registry_record_id": "rec-default"}, thread=_thread(LEGACY, model=SONNET))
+    assert config["registry_record_id"] == "rec-default"
     with pytest.raises(AgentTargetMismatch):
-        _bind({"basic_chat": True, "basic_chat_model_id": SONNET, "agent_runtime_arn": FOREIGN})
+        _bind({"registry_record_id": "rec-other"}, thread=_thread(LEGACY, model=SONNET))
+
+
+def test_an_old_client_basic_chat_request_binds_the_default_record(default_record):
+    # A tab loaded before the deploy still sends the retired fields and no record id.
+    config, _ = _bind({"basic_chat": True, "basic_chat_model_id": SONNET, "registry_agent_name": "기본 채팅"})
+    assert config["registry_record_id"] == "rec-default"
+    assert config["registry_agent_name"] == "bap_default"
+    assert config["model_id"] == SONNET
+    assert "basic_chat" not in config and "basic_chat_model_id" not in config
+
+
+def test_without_a_default_record_a_legacy_thread_is_refused(monkeypatch, allowed):
+    monkeypatch.setattr(agent_access, "default_record", lambda registry_service: None)
     with pytest.raises(AgentTargetMismatch):
-        _bind({"basic_chat": True, "basic_chat_model_id": SONNET, "harness_arn": HARNESS})
+        _bind({}, thread=_thread(LEGACY, model=SONNET))
 
 
-def test_basic_chat_refuses_a_model_outside_the_allow_list(basic):
-    with pytest.raises(BasicChatUnavailable):
-        _bind({"basic_chat": True, "basic_chat_model_id": "global.anthropic.claude-opus-5-5"})
-    with pytest.raises(BasicChatUnavailable):
-        _bind({"basic_chat": True})
+def test_legacy_translation_uses_the_deployed_fallback_when_the_registry_is_off(monkeypatch, allowed):
+    fallback = SimpleNamespace(record_id=f"deployed:{DEFAULT.agent_runtime_arn}", name="bap_default",
+                               agent_runtime_arn=DEFAULT.agent_runtime_arn, harness_arn=None, qualifier="DEFAULT")
+    monkeypatch.setattr(agent_access, "default_record", lambda registry_service: fallback)
+    config, learned = _bind({}, thread=_thread(LEGACY, model=SONNET), registry=Registry(exc=RegistryNotConfigured("off")))
+    assert config["registry_record_id"] == fallback.record_id and learned["agent_runtime_arn"] == DEFAULT.agent_runtime_arn
 
 
-def test_basic_chat_is_refused_when_not_configured(monkeypatch):
-    monkeypatch.setattr(cfg, "BASIC_CHAT_ALLOWED_MODELS", [])
-    with pytest.raises(BasicChatUnavailable):
-        _bind({"basic_chat": True, "basic_chat_model_id": SONNET})
+def test_a_translated_turn_is_not_a_legacy_turn_afterwards(default_record):
+    # Once ThreadService re-pins the thread, the next turn is an ordinary pinned turn.
+    config, _ = _bind({}, thread=_thread("rec-default", target={"agent_runtime_arn": DEFAULT.agent_runtime_arn, "harness_arn": None, "qualifier": "DEFAULT"}))
+    assert "adopted_model_id" not in config
 
 
-def test_a_dedicated_basic_chat_runtime_wins_over_the_default(monkeypatch, basic):
-    monkeypatch.setattr(cfg, "BASIC_CHAT_RUNTIME_ARN", RUNTIME)
-    config, _ = _bind({"basic_chat": True, "basic_chat_model_id": SONNET})
-    assert config["agent_runtime_arn"] == RUNTIME
-
-
-def test_a_basic_chat_thread_continues_with_its_pinned_model_when_the_request_omits_it(basic):
-    thread = _thread(cfg.BASIC_CHAT_RECORD_ID, model=SONNET)
-    config, _ = _bind({}, thread=thread)
-    assert config["basic_chat"] is True and config["model_id"] == SONNET
-
-
-def test_basic_chat_and_a_registry_record_cannot_be_combined(basic):
-    with pytest.raises(AgentTargetMismatch):
-        _bind({"basic_chat": True, "basic_chat_model_id": SONNET, "registry_record_id": "rec-a"})
-    with pytest.raises(AgentTargetMismatch):
-        _bind({"registry_record_id": "rec-a", "basic_chat_model_id": SONNET}, registry=Registry(_record(runtime=RUNTIME)))
+def test_a_resent_legacy_pin_outside_the_allow_list_is_dropped_like_the_pin(default_record):
+    # The new web seeds the thread's pinned model into its override and sends it
+    # as model_id on every turn. That is the pin coming back, not a choice: it
+    # must get the pin's rule (drop when no longer allowed), not a 403.
+    old = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+    config, _ = _bind({"model_id": old}, thread=_thread(LEGACY, model=old))
+    assert config["registry_record_id"] == "rec-default"
+    assert not config.get("model_id") and config["adopted_model_id"] is None

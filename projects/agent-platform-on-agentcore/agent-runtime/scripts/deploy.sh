@@ -138,6 +138,11 @@ load_config() {
     # off and builds the model as before. Set on bap_default
     # so the model streams reasoning into the UI's reasoning box.
     export REASONING_BUDGET="${REASONING_BUDGET:-0}"
+    # AgentCore Runtime platform version. V2 restores a prepared snapshot per
+    # instance (flat cold starts, usage-based memory billing); V1 re-initialises
+    # the container every time. `agentcore launch` cannot set this, so it is
+    # applied after launch by scripts/set_platform_version.py. Set V1 to roll back.
+    export PLATFORM_VERSION="${PLATFORM_VERSION:-V2}"
     # Platform server that owns the Agent Registry; empty disables auto-registration.
     export PLATFORM_API_URL="${PLATFORM_API_URL:-}"
     export SKIP_REGISTRY_SYNC="${SKIP_REGISTRY_SYNC:-false}"
@@ -381,10 +386,15 @@ launch_agent() {
 tag_runtime() {
     print_status "Tagging runtime for cost attribution (Platform=$PLATFORM, AgentName=$AGENT_NAME)..."
 
+    # No `| [0]` here: the CLI auto-paginates and applies --query per page, so
+    # indexing yields a "None" line for every page without this runtime and
+    # text output glues the pages together ("None\n<arn>"), which TagResources
+    # rejects as an invalid ARN once the region holds more than one page (10)
+    # of runtimes. A bare list prints nothing for empty pages.
     local arn
     arn=$(aws bedrock-agentcore-control list-agent-runtimes \
         --region "$REGION_NAME" \
-        --query "agentRuntimes[?agentRuntimeName=='$AGENT_NAME'].agentRuntimeArn | [0]" \
+        --query "agentRuntimes[?agentRuntimeName=='$AGENT_NAME'].agentRuntimeArn" \
         --output text 2>/dev/null)
 
     if [[ -z "$arn" || "$arn" == "None" ]]; then
@@ -408,6 +418,39 @@ tag_runtime() {
     else
         print_success "Runtime tagged for cost attribution: $arn"
     fi
+}
+
+# A V2 platform-version update prepares a snapshot and keeps the runtime in
+# UPDATING for minutes. `agentcore launch --auto-update-on-conflict` issues an
+# UpdateAgentRuntime of its own, which the service rejects with
+# ConflictException while a previous update is still running — so wait for the
+# live runtime (if there is one) to settle before launching.
+wait_for_runtime_ready() {
+    print_status "Waiting for any in-progress update on '$AGENT_NAME' to finish..."
+    local out
+    if out=$(python3 scripts/set_platform_version.py \
+            --name "$AGENT_NAME" --region "$REGION_NAME" --wait-only 2>&1); then
+        print_status "$out"
+    else
+        # "no runtime named ..." is the first deploy; anything else is reported
+        # but must not block a deploy that `agentcore launch` can still attempt.
+        print_warning "Pre-launch wait: $out"
+    fi
+}
+
+# `agentcore launch` leaves platformVersion alone (a fresh create defaults to
+# V1; an update keeps whatever is there), so the target version is enforced
+# here once the runtime is READY. The flip is a new runtime version with a new
+# snapshot, so this step itself takes minutes on V2.
+ensure_platform_version() {
+    print_status "Ensuring '$AGENT_NAME' runs on platform version $PLATFORM_VERSION..."
+    local out
+    if ! out=$(python3 scripts/set_platform_version.py \
+            --name "$AGENT_NAME" --region "$REGION_NAME" --version "$PLATFORM_VERSION" 2>&1); then
+        print_error "Platform version update failed: $out"
+        return 1
+    fi
+    print_success "$out"
 }
 
 # Function to check deployment status
@@ -586,6 +629,7 @@ print_summary() {
     print_status "Region: $REGION_NAME"
     print_status "Model: $MODEL_ID"
     print_status "Agent Name: $agent_name"
+    print_status "Platform Version: $PLATFORM_VERSION"
     print_status "Entrypoint: main.py"
     print_status "Configuration: .env"
     if [[ -n "$MCP_GATEWAY_URL" ]]; then
@@ -651,10 +695,14 @@ main() {
     fi
 
     # Launch the agent
+    wait_for_runtime_ready
     launch_agent
     
     # Check deployment status
     if check_status; then
+        # The runtime is live on whatever platform version it had; a failed flip
+        # is a failed deploy, not a warning — a silent V1 is what this guards.
+        ensure_platform_version || exit 1
         # Tag once the runtime exists and is READY, so the ARN resolves.
         tag_runtime
         register_in_registry

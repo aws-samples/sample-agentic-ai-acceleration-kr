@@ -9,13 +9,14 @@
 export const LAYOUT_VERSION = 1;
 export const WIDGET_IDS = [
   "kpi",
-  "leaderboard",
-  "cost_composition",
-  "model_mix",
-  "billed",
   "trend",
-  "reuse",
+  "cost_composition",
+  "teams",
   "users",
+  "leaderboard",
+  "model_mix",
+  "reuse",
+  "policy",
   "guardrail",
 ];
 const SPANS = ["half", "full"];
@@ -91,7 +92,35 @@ export function reconcileLayout(stored) {
     }
   }
 
-  return { version: LAYOUT_VERSION, widgets };
+  return { version: LAYOUT_VERSION, widgets: mergeBilled(raw, widgets) };
+}
+
+/**
+ * A layout saved while `billed` (AgentCore 청구 비용) was its own widget, moved
+ * onto the merged cost widget.
+ *
+ * `billed` was folded into `cost_composition` on 2026-10-10, the same day the
+ * default order was regrouped for an organisation reading top to bottom. A layout
+ * that still lists `billed` was saved before both, in the old order, so it is laid
+ * out in WIDGET_IDS order instead — anchoring the merged widget to a neighbour
+ * does not work, because reconciliation appends missing ids and the neighbour may
+ * be last. Each widget keeps its stored span and visibility; the merged one is
+ * full width and visible if either old widget was. The next save drops `billed`,
+ * after which the reader's own order is respected.
+ */
+function mergeBilled(raw, widgets) {
+  const billed = raw.find((entry) => typeof entry === "object" && entry !== null && entry.id === "billed");
+  if (!billed) return widgets;
+  const cost = widgets.find((w) => w.id === "cost_composition");
+  const storedCost = raw.some((entry) => typeof entry === "object" && entry !== null && entry.id === "cost_composition");
+  const merged = {
+    id: "cost_composition",
+    span: "full",
+    visible: Boolean(billed.visible ?? true) || (storedCost && cost.visible),
+  };
+  const byId = new Map(widgets.map((w) => [w.id, w]));
+  byId.set("cost_composition", merged);
+  return WIDGET_IDS.map((id) => byId.get(id));
 }
 
 /**

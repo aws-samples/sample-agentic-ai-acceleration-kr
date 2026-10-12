@@ -5,6 +5,28 @@
 
 import { authedFetch } from "@/lib/http";
 
+/**
+ * The thread is still running a turn (409). Right after Stop the server is
+ * still saving the interrupted turn for a moment, so this is usually transient;
+ * the message is for the user, the type is for the retry.
+ */
+export class RunInFlightError extends Error {
+  constructor(threadId: string) {
+    super("이전 응답이 아직 정리되는 중입니다. 잠시 후 다시 보내 주세요.");
+    this.name = "RunInFlightError";
+    this.threadId = threadId;
+  }
+  readonly threadId: string;
+}
+
+/** `attachThread` found no run in flight: the thread is done, re-read it. */
+export class NoActiveRunError extends Error {
+  constructor(threadId: string) {
+    super(`No run in flight on thread ${threadId}`);
+    this.name = "NoActiveRunError";
+  }
+}
+
 export interface ApiClientOptions {
   apiUrl?: string;
 }
@@ -97,16 +119,23 @@ export class ApiClient {
       command?: any;
       interrupt_before?: string[];
       interrupt_after?: string[];
-    }
+    },
+    // Aborting it ends the body read at once. Without it an abandoned reader
+    // sleeps until the next frame (up to a heartbeat) before it notices.
+    signal?: AbortSignal
   ): Promise<ReadableStream<Uint8Array>> {
     const response = await authedFetch(
       `${this.apiUrl}/threads/${threadId}/runs/stream`,
-      { method: "POST", body: JSON.stringify(request) }
+      { method: "POST", body: JSON.stringify(request), signal }
     );
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({ detail: response.statusText }));
-      throw new Error(`HTTP ${response.status}: ${error.detail || response.statusText}`);
+      const detail: string = error.detail || response.statusText;
+      if (response.status === 409 && /run in flight/.test(detail)) {
+        throw new RunInFlightError(threadId);
+      }
+      throw new Error(`HTTP ${response.status}: ${detail}`);
     }
 
     if (!response.body) {
@@ -114,6 +143,41 @@ export class ApiClient {
     }
 
     return response.body;
+  }
+
+  /**
+   * Follow a run already in flight on this thread: replay, then live.
+   *
+   * 404 means the run finished (or never was) between the thread read that
+   * said `busy` and this call — the stored record is the truth then, so the
+   * caller re-reads it. Signalled with its own error type so that path is not
+   * mistaken for a failure.
+   */
+  async attachThread(threadId: string, signal?: AbortSignal): Promise<ReadableStream<Uint8Array>> {
+    const response = await authedFetch(`${this.apiUrl}/threads/${threadId}/runs/stream`, { signal });
+
+    if (response.status === 404) {
+      throw new NoActiveRunError(threadId);
+    }
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: response.statusText }));
+      throw new Error(`HTTP ${response.status}: ${error.detail || response.statusText}`);
+    }
+    if (!response.body) {
+      throw new Error("No response body");
+    }
+    return response.body;
+  }
+
+  /**
+   * Stop the run on this thread. Aborting the fetch no longer does: a run
+   * outlives its connections so a closed tab cannot kill it, which means a
+   * Stop has to be said out loud.
+   */
+  async cancelRun(threadId: string) {
+    return this.request<{ cancelled: boolean }>(`/threads/${threadId}/runs/cancel`, {
+      method: "POST",
+    });
   }
 
   async listMcpTools(mcpServers: Record<string, any>) {

@@ -528,6 +528,35 @@ export function billedGap(diff) {
   return `청구서가 ${(Math.abs(pct) * 100).toFixed(1)}% ${direction} (${dollars})`;
 }
 
+/**
+ * One line of trust for the composition panel: the bill was compared with this
+ * page's Runtime figure on N complete days, and here is how far apart they were.
+ * `null` before any day has been compared — the panel then says nothing rather
+ * than "집계 대기", because the line is a footnote, not a figure.
+ */
+export function billedTrustNote(diff) {
+  if (!diff || diff.runtime_micros === null || diff.runtime_micros === undefined || !diff.days_compared) return null;
+  const through = diff.through ? ` (${diff.through} 까지)` : "";
+  return `AWS 청구서와 같은 날 Runtime 비용 ${diff.days_compared}일 비교: ${billedGap(diff)}${through}`;
+}
+
+/**
+ * What AgentCore billed this platform, per component, largest first.
+ *
+ * A $0 component is dropped: Cost Explorer lists a usage type the moment it is
+ * touched, and a row reading "Policy $0.0000" would be noise in a panel whose
+ * point is where the money went.
+ */
+export function billedComposition(billed) {
+  if (!billed || !billed.component) return [];
+  const rows = Object.entries(billed.component)
+    .filter(([, micros]) => micros !== null && micros !== undefined && micros > 0)
+    .map(([key, micros]) => ({ key, label: COMPONENT_LABELS[key] ?? key, micros }))
+    .sort((a, b) => b.micros - a.micros);
+  const total = rows.reduce((sum, row) => sum + row.micros, 0);
+  return rows.map((row) => ({ ...row, share: total > 0 ? row.micros / total : 0 }));
+}
+
 /** Micro-dollars as a number, for chart scales. */
 export function usd(micros) {
   if (micros === null || micros === undefined) return null;
@@ -596,6 +625,65 @@ export function costComposition(cost) {
   else push("memory", memory.billed_micros, "billed");
   const total = rows.reduce((sum, row) => sum + row.micros, 0);
   return rows.map((row) => ({ ...row, share: total > 0 ? row.micros / total : 0 }));
+}
+
+// Fixed slot per component, so a component keeps its hue when the window changes
+// and a bigger or smaller neighbour appears. Seven named slots and an eighth for
+// whatever else the bill lists: past eight a hue is no longer distinguishable.
+// `runtime` is the unsplit figure and never appears beside its two halves.
+const BREAKDOWN_SLOT = {
+  model: 0,
+  runtime_active: 1,
+  runtime: 1,
+  runtime_idle: 2,
+  gateway: 3,
+  memory: 4,
+  code_interpreter: 5,
+  browser: 6,
+  other: 7,
+};
+
+/**
+ * Every cost of the window, each component once — the composition and the bill
+ * in one list.
+ *
+ * The two used to be separate widgets that both listed Runtime, Gateway and
+ * Memory, from different sources and with different figures. A component the
+ * page meters (model tokens, Runtime, Gateway, Memory events) keeps its metered
+ * figure, because that one includes today and the bill lags 24–48 hours. A
+ * component only the bill knows about (Code Interpreter, Browser, Web Search,
+ * Evaluations, Policy, Data Transfer …) comes from the bill — it is the only
+ * figure there is. `source: "billed"` marks those, for the caption that says so.
+ *
+ * Rows are in fixed component order, not by size, and carry their colour slot.
+ * The bill's extras past the named slots fold into one "기타" row whose label
+ * keeps the names.
+ */
+export function costBreakdown(cost) {
+  if (!cost) return [];
+  const rows = costComposition(cost).map(({ share: _share, ...row }) => row);
+  const have = new Set(rows.map((row) => (row.key.startsWith("runtime") ? "runtime" : row.key)));
+  const extras = [];
+  for (const row of billedComposition(cost.billed)) {
+    if (have.has(row.key)) continue;
+    if (row.key in BREAKDOWN_SLOT && row.key !== "other") rows.push({ key: row.key, label: row.label, micros: row.micros, source: "billed" });
+    else extras.push(row);
+  }
+  rows.sort((left, right) => BREAKDOWN_SLOT[left.key] - BREAKDOWN_SLOT[right.key]);
+  if (extras.length > 0) {
+    rows.push({
+      key: "other",
+      label: extras.length === 1 ? extras[0].label : `기타 (${extras.map((row) => row.label).join(", ")})`,
+      micros: extras.reduce((sum, row) => sum + row.micros, 0),
+      source: "billed",
+    });
+  }
+  const total = rows.reduce((sum, row) => sum + row.micros, 0);
+  return rows.map((row) => ({
+    ...row,
+    colorIndex: BREAKDOWN_SLOT[row.key],
+    share: total > 0 ? row.micros / total : 0,
+  }));
 }
 
 /** Memory's share of the runtime figure: what a keep-warm session costs. */
@@ -704,7 +792,12 @@ export function rateCandidateNote(candidate) {
  */
 export function missingTiers(row) {
   const order = ["input", "output", "cache_read", "cache_write"];
-  return order.filter((tier) => !row?.tiers?.[tier]);
+  // The long card's tiers count only where the server sent them: a family with
+  // one card has no long tiers to be missing.
+  const long = ["long_input", "long_output", "long_cache_read", "long_cache_write"].filter(
+    (tier) => row?.tiers && tier in row.tiers,
+  );
+  return [...order, ...long].filter((tier) => !row?.tiers?.[tier]);
 }
 
 /**

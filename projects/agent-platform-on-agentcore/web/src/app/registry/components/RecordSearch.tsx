@@ -3,9 +3,16 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Search } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { DescriptorType } from "@/lib/registry";
+import type { DescriptorType, MetadataField } from "@/lib/registry";
 // Shared with the per-card TypeMarker so a type is drawn the same way in the
 // toolbar and in the grid.
 import { TYPE_OPTIONS } from "./types";
@@ -13,11 +20,19 @@ import { TYPE_OPTIONS } from "./types";
 /** Cap the registry's search API applies; there is no pagination past it. */
 const SEARCH_LIMIT = 20;
 
+/** Radix Select rejects an empty-string item value, so "clear" uses a sentinel. */
+const CLEAR = "__clear__";
+
 interface RecordSearchProps {
   query: string;
   onQueryChange: (query: string) => void;
   selectedTypes: DescriptorType[];
   onTypesChange: (types: DescriptorType[]) => void;
+  /** Filterable metadata fields; only enum fields get a control. */
+  metadataFields: MetadataField[];
+  /** Active metadata filters, keyed by field name. A missing key means no filter. */
+  metaFilters: Record<string, string>;
+  onMetaFiltersChange: (filters: Record<string, string>) => void;
   mode: "browse" | "search";
   resultCount: number;
   onClearQuery: () => void;
@@ -30,6 +45,9 @@ export function RecordSearch({
   onQueryChange,
   selectedTypes,
   onTypesChange,
+  metadataFields,
+  metaFilters,
+  onMetaFiltersChange,
   mode,
   resultCount,
   onClearQuery,
@@ -43,6 +61,16 @@ export function RecordSearch({
         : [...selectedTypes, type]
     );
   };
+
+  const setMetaFilter = (key: string, value: string | undefined) => {
+    const next = { ...metaFilters };
+    if (value) next[key] = value;
+    else delete next[key];
+    onMetaFiltersChange(next);
+  };
+
+  const enumFields = metadataFields.filter((field) => field.kind === "enum");
+  const activeMeta = Object.values(metaFilters).filter(Boolean).length;
 
   return (
     <>
@@ -87,8 +115,38 @@ export function RecordSearch({
           })}
         </div>
 
-        {selectedTypes.length > 0 && (
-          <Button variant="ghost" size="sm" onClick={() => onTypesChange([])}>
+        {enumFields.map((field) => (
+          <Select
+            key={field.name}
+            value={metaFilters[field.name] ?? ""}
+            onValueChange={(v) => setMetaFilter(field.name, v === CLEAR ? undefined : v)}
+          >
+            <SelectTrigger
+              aria-label={`${field.name} 필터`}
+              className="h-7 w-auto min-w-[7rem] shrink-0 gap-1.5 px-2.5 text-xs"
+            >
+              <SelectValue placeholder={field.name} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={CLEAR}>— 선택 안 함 —</SelectItem>
+              {field.options?.map((option) => (
+                <SelectItem key={option} value={option}>
+                  {option}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ))}
+
+        {(selectedTypes.length > 0 || activeMeta > 0) && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              onTypesChange([]);
+              onMetaFiltersChange({});
+            }}
+          >
             필터 해제
           </Button>
         )}
@@ -110,6 +168,7 @@ export function RecordSearch({
                 승인(Approved)된 레코드만 · 최대 {SEARCH_LIMIT}개 · 승인 직후에는
                 색인 반영이 몇 초~몇 분 지연될 수 있습니다
               </span>
+              {activeMeta > 0 && <span>· 메타데이터 필터 {activeMeta}개</span>}
             </>
           ) : (
             <>

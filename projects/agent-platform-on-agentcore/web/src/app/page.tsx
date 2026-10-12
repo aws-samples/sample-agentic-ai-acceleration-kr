@@ -5,7 +5,6 @@ import React, {
   useEffect,
   useMemo,
   useRef,
-  useState,
   Suspense,
 } from "react";
 import { useRouter } from "next/navigation";
@@ -23,10 +22,9 @@ import { ChatInterface } from "@/app/components/ChatInterface";
 import { ArtifactPanel } from "@/app/components/ArtifactPanel";
 import { useAppShell } from "@/app/components/AppShell";
 import { useThreadAgent } from "@/app/hooks/useThreadAgent";
+import { useDefaultAgent } from "@/app/hooks/useDefaultAgent";
 import { useClient } from "@/providers/ClientProvider";
 import type { SelectedAgent } from "@/lib/config";
-import { getCapabilities, type BasicChatCapability } from "@/lib/capabilities";
-import { basicChatAgent } from "@/lib/basicChat.mjs";
 import { artifactParam, parseArtifactParam } from "@/lib/artifacts";
 
 /**
@@ -172,36 +170,14 @@ function HomePageContent() {
   const resolvingAgent = loading && !problem ? lastAgentRef.current : null;
   const activeAgent = agent ?? resolvingAgent;
 
-  // Basic chat — the default runtime with an operator-allowed model — needs no
-  // registry selection. It stands in when nothing is selected, so a first visit
-  // can start talking, and it re-validates an explicit basic-chat selection
-  // against the current allow-list so a withdrawn model is not sent.
-  const [basicChat, setBasicChat] = useState<BasicChatCapability | undefined>();
-  useEffect(() => {
-    let cancelled = false;
-    getCapabilities()
-      .then((caps) => {
-        if (!cancelled) setBasicChat(caps.basicChat ?? { configured: false, models: [] });
-      })
-      .catch(() => {
-        if (!cancelled) setBasicChat({ configured: false, models: [] });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-  const basicAgent = useMemo<SelectedAgent | null>(
-    () => basicChatAgent(basicChat, config?.selectedAgent?.basicChatModelId),
-    [basicChat, config?.selectedAgent?.basicChatModelId]
-  );
-  // A thread's pin always wins. In a new chat an explicit basic-chat selection
-  // is replaced by its validated form; no selection at all falls back to it.
-  // Nothing is written to config here — a fallback is not a choice.
+  // The default agent stands in when nothing is selected, so a first visit can
+  // start talking. Shared with the switcher, which names it for the same reason.
+  const { defaultAgent, defaultLoading } = useDefaultAgent();
+  // A thread's pin always wins. In a new chat the selection wins, and no
+  // selection at all falls back to the default agent.
   const effectiveAgent: SelectedAgent | null = threadId
     ? activeAgent
-    : activeAgent?.basicChat
-      ? basicAgent
-      : (activeAgent ?? basicAgent);
+    : (activeAgent ?? defaultAgent ?? null);
 
   const newChat = (
     <Button
@@ -216,9 +192,9 @@ function HomePageContent() {
 
   // Only when there is nothing to keep on screen. Unmounting the chat over a
   // resolving pin is what killed the in-flight run; see resolvingAgent.
-  // The capability probe counts as loading too: rendering the picker before it
-  // answers would flash "select an agent" at someone basic chat is about to serve.
-  if ((loading || (!threadId && !activeAgent && basicChat === undefined)) && !effectiveAgent) {
+  // The default-agent lookup counts as loading too: rendering the picker before
+  // it answers would flash "select an agent" at someone it is about to serve.
+  if ((loading || (!threadId && !activeAgent && defaultLoading)) && !effectiveAgent) {
     return (
       <div className="flex flex-1 items-center justify-center">
         <p className="text-sm text-muted-foreground">Loading…</p>
@@ -235,16 +211,12 @@ function HomePageContent() {
       <p className="text-xs font-medium text-foreground">
         {problem === "unpinned"
           ? "어떤 에이전트와 대화했는지 기록되지 않아 이어갈 수 없습니다"
-          : problem === "legacy-basic"
-            ? "어떤 모델과 대화했는지 기록되지 않아 이어갈 수 없습니다"
-            : "이 대화의 에이전트를 찾을 수 없어 이어갈 수 없습니다"}
+          : "이 대화의 에이전트를 찾을 수 없어 이어갈 수 없습니다"}
       </p>
       <p className="mt-0.5 text-xs text-muted-foreground">
         {problem === "unpinned"
           ? "에이전트가 스레드에 기록되기 전에 만들어진 대화입니다. 이어서 보내면 어떤 에이전트의 기억에 쌓일지 알 수 없습니다."
-          : problem === "legacy-basic"
-            ? "모델이 스레드에 기록되기 전에 만들어진 기본 채팅입니다. 새 대화를 시작하면 선택한 모델로 이어갈 수 있습니다."
-            : "연결된 에이전트가 Registry에서 삭제되었거나 접근할 수 없거나, 기본 채팅 모델이 허용 목록에서 빠졌습니다."}
+          : "연결된 에이전트가 Registry에서 삭제되었거나 접근할 수 없습니다."}
       </p>
       <Button
         size="sm"
@@ -300,21 +272,13 @@ function HomePageContent() {
             onHistoryRevalidate={revalidateThreads}
             agentConfig={
               effectiveAgent
-                ? effectiveAgent.basicChat
-                  ? {
-                      // No ARN or record id: the server binds the default
-                      // runtime and refuses a model outside its allow-list.
-                      registryAgentName: effectiveAgent.name,
-                      basicChat: true,
-                      basicChatModelId: effectiveAgent.basicChatModelId,
-                    }
-                  : {
-                      agentRuntimeArn: effectiveAgent.agentRuntimeArn,
-                      harnessArn: effectiveAgent.harnessArn,
-                      qualifier: effectiveAgent.qualifier,
-                      registryRecordId: effectiveAgent.recordId,
-                      registryAgentName: effectiveAgent.name,
-                    }
+                ? {
+                    agentRuntimeArn: effectiveAgent.agentRuntimeArn,
+                    harnessArn: effectiveAgent.harnessArn,
+                    qualifier: effectiveAgent.qualifier,
+                    registryRecordId: effectiveAgent.recordId,
+                    registryAgentName: effectiveAgent.name,
+                  }
                 : // Nothing may be sent, so there is no agent to address. Leaving
                   // this unset means a stray send cannot reach the wrong one.
                   undefined

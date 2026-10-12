@@ -304,9 +304,9 @@ TOKEN=$(curl -s -X POST "$URL/api/auth/login" -H 'Content-Type: application/json
 curl -s -H "Authorization: Bearer $TOKEN" "$URL/api/config"
 ```
 
-Runtime 에이전트를 아직 붙이지 않았다면 채팅의 에이전트 선택에 **기본 채팅**은 나타나지
-않습니다. 기본 채팅은 Runtime 에이전트가 답하기 때문입니다. Harness 에이전트는 이 시점부터
-바로 만들어 사용할 수 있습니다.
+Runtime 에이전트를 아직 붙이지 않았다면 채팅 선택기 맨 위에 고정되는 **기본 에이전트**가
+없습니다. 기본 에이전트는 `agent_runtime_arn` 이 가리키는 Runtime 의 레코드이기 때문입니다.
+Harness 에이전트는 이 시점부터 바로 만들어 사용할 수 있습니다.
 
 ---
 
@@ -451,7 +451,7 @@ PLATFORM_ADMIN_USERNAME=admin@example.com PLATFORM_ADMIN_PASSWORD='<admin-passwo
 `AGENT_NAME=<project>_default` 처럼 이름을 따로 지정합니다.
 
 배포된 Runtime 의 ARN 을 설정 화면 Advanced 탭의 `agent_runtime_arn` 에 넣고 저장한 뒤,
-대시보드에서 **8번(2차 apply)** 을 다시 실행하면 채팅에 기본 채팅이 나타납니다. 이미 `완료`
+대시보드에서 **8번(2차 apply)** 을 다시 실행하면 그 Runtime 이 채팅의 기본 에이전트가 됩니다. 이미 `완료`
 인 단계도 `Enter` 로 다시 실행할 수 있습니다. 내장 툴 게이트웨이, MCP Apps 서버, Entra ID
 로그인을 붙이는 방법은 [`DEPLOYMENT.md` 의 추가 배포](../DEPLOYMENT.md#추가-배포)를 참고하세요.
 
