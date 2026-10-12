@@ -1,0 +1,9 @@
+strands-agents
+strands-agents-tools
+boto3
+bedrock-agentcore
+bedrock-agentcore-starter-toolkit
+# mcp 2.x renamed mcp.client.streamable_http.streamablehttp_client and removed
+# mcp.client.session.SUPPORTED_PROTOCOL_VERSIONS; this code targets the 1.x API.
+# Unpinned, a CodeBuild on 2026-09-13 pulled 2.x and every runtime died at import.
+mcp>=1.23,<2

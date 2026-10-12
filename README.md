@@ -22,6 +22,7 @@ Each project lives in its own folder under `projects/` with a dedicated README a
 | [agentops-kit](./projects/agentops-kit) | An e-commerce data-analytics agent that demonstrates a full AgentOps pipeline: Gateway → Observability → Evaluation → Improvement. AWS Seoul Summit 2026 demo. |
 | [claude-code-to-agentcore](./projects/claude-code-to-agentcore) | A step-by-step guide to promoting a Claude Code data-analytics agent (Skill, MCP, web search) to production on Amazon Bedrock AgentCore Runtime, Gateway, and Web Search with minimal code changes. |
 | [agentic-text-to-sql-on-aws](./projects/agentic-text-to-sql-on-aws) | A production-oriented agentic text-to-SQL solution on Amazon Bedrock AgentCore, where a Strands Graph orchestrator turns natural language into safe, validated SQL using Runtime-hosted MCP tools and streams results to a CopilotKit UI over the AG-UI protocol. |
+| [agent-platform-on-agentcore](./projects/agent-platform-on-agentcore) | A reference organizational agent platform on Amazon Bedrock AgentCore: code-deployed Runtime agents and no-code Harness agents share one chat UI, agents/MCP servers/skills are discovered and approved through AgentCore Registry, tools are consolidated behind AgentCore Gateway, and safety, quality, and cost are tracked with Bedrock Guardrails, AgentCore Evaluations, CloudWatch, and Cost Explorer. Deployed with Terraform via an installer TUI. |
 
 > This table is updated whenever a new project is added.
 

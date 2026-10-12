@@ -1,0 +1,4 @@
+# Copy to backend.hcl, fill in the account id, then:
+#   terraform init -backend-config=backend.hcl
+bucket         = "bap-tfstate-<account-id>"
+dynamodb_table = "bap-tflock"

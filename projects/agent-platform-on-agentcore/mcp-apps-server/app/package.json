@@ -1,0 +1,23 @@
+{
+  "name": "mcp-apps-server-views",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP App view: platform telemetry dashboard (index.html -> ../app.html), a single file.",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test src/*.test.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/ext-apps": "^1.7.5",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "chart.js": "^4.5.1",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0",
+    "vite-plugin-singlefile": "^2.0.0"
+  }
+}

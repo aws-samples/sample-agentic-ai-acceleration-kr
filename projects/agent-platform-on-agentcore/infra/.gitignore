@@ -1,0 +1,21 @@
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+!envs/standalone/hibernate.tfvars
+# Pre-save copies the installer keeps next to terraform.tfvars; same contents.
+*.bak-*
+# Backend configs name the state bucket, which embeds the account id.
+backend.hcl
+# Saved plans embed the variable values, passwords included.
+tfplan
+*.tfplan
+crash.log
+override.tf
+override.tf.json
+
+# builtin_tools_gateway is a Python script, not just HCL
+__pycache__/
+*.pyc

@@ -1,0 +1,166 @@
+[
+  {
+    "id": "aws-mcp-server",
+    "name": "AWS MCP Server",
+    "description": "Interact with AWS services and resources through AWS CLI commands. Create, update, and manage AWS resources across all available services. Replaces the AWS API MCP Server, which AWS has stopped developing.",
+    "category": "official",
+    "transport": "stdio",
+    "config": {
+      "command": "uvx",
+      "args": [
+        "mcp-proxy-for-aws@1.6.4",
+        "https://aws-mcp.us-east-1.api.aws/mcp",
+        "--metadata",
+        "AWS_REGION=us-east-1"
+      ]
+    },
+    "documentationUrl": "https://github.com/aws/mcp-proxy-for-aws",
+    "tags": ["aws", "api", "cli", "infrastructure"]
+  },
+  {
+    "id": "awslabs.aws-documentation-mcp-server",
+    "name": "AWS Documentation MCP Server",
+    "description": "Access AWS documentation and search through AWS services, features, and best practices.",
+    "category": "official",
+    "transport": "stdio",
+    "config": {
+      "command": "uvx",
+      "args": ["awslabs.aws-documentation-mcp-server@latest"]
+    },
+    "documentationUrl": "https://awslabs.github.io/mcp/servers/aws-documentation-mcp-server",
+    "tags": ["aws", "documentation", "search"]
+  },
+  {
+    "id": "aws-knowledge-mcp-server",
+    "name": "AWS Knowledge MCP Server",
+    "description": "Retrieve AWS regional availability information for products, APIs, and CloudFormation resources. Check service availability across AWS regions.",
+    "category": "official",
+    "transport": "stdio",
+    "config": {
+      "command": "uvx",
+      "args": ["awslabs.aws-knowledge-mcp-server@latest"]
+    },
+    "documentationUrl": "https://awslabs.github.io/mcp/servers/aws-knowledge-mcp-server",
+    "tags": ["aws", "knowledge", "availability", "regions"]
+  },
+  {
+    "id": "strands-agents",
+    "name": "Strands Agents MCP",
+    "description": "Access Strands Agents documentation and examples for multi-agent patterns.",
+    "category": "official",
+    "transport": "stdio",
+    "config": {
+      "command": "uvx",
+      "args": ["strands-agents-mcp-server"]
+    },
+    "documentationUrl": "https://github.com/strands-agents/mcp-server",
+    "tags": ["strands", "agents", "documentation"]
+  },
+  {
+    "id": "sequential-thinking",
+    "name": "Sequential Thinking MCP Server",
+    "description": "Supports structured thinking processes for solving complex problems. Enables step-by-step reasoning and problem decomposition.",
+    "category": "official",
+    "transport": "stdio",
+    "config": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ]
+    },
+    "documentationUrl": "https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking",
+    "tags": ["reasoning", "thinking", "problem-solving"]
+  },
+  {
+    "id": "filesystem",
+    "name": "FileSystem MCP Server",
+    "description": "Provides secure access to the local file system. Read and write files, browse and create directories, search and filter files.",
+    "category": "official",
+    "transport": "stdio",
+    "config": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/Users/username/Desktop",
+        "/path/to/other/allowed/dir"
+      ]
+    },
+    "documentationUrl": "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem",
+    "tags": ["filesystem", "file-management", "local"]
+  },
+  {
+    "id": "notionApi",
+    "name": "Notion MCP Server",
+    "description": "Interact with Notion databases and pages. Read, write, and manage Notion content through the MCP protocol.",
+    "category": "official",
+    "transport": "stdio",
+    "config": {
+      "command": "npx",
+      "args": ["-y", "@notionhq/notion-mcp-server"],
+      "env": {
+        "NOTION_TOKEN": "ntn_****"
+      }
+    },
+    "documentationUrl": "https://github.com/makenotion/notion-mcp-server",
+    "requiresAuth": true,
+    "authDescription": "Requires NOTION_TOKEN environment variable",
+    "tags": ["notion", "database", "productivity"]
+  },
+  {
+    "id": "brave-search",
+    "name": "Brave Search MCP Server",
+    "description": "Search the web using Brave Search API with real-time results. Provides web and local search capabilities.",
+    "category": "official",
+    "transport": "stdio",
+    "config": {
+      "command": "npx",
+      "args": ["-y", "@brave/brave-search-mcp-server", "--transport", "http"],
+      "env": {
+        "BRAVE_API_KEY": "YOUR_API_KEY_HERE"
+      }
+    },
+    "documentationUrl": "https://github.com/brave/brave-search-mcp-server",
+    "requiresAuth": true,
+    "authDescription": "Requires BRAVE_API_KEY environment variable",
+    "tags": ["search", "web", "brave"]
+  },
+  {
+    "id": "firecrawl-mcp",
+    "name": "Firecrawl MCP Server",
+    "description": "Web crawling and scraping capabilities. Extract content from websites and convert them to markdown format.",
+    "category": "official",
+    "transport": "stdio",
+    "config": {
+      "command": "npx",
+      "args": ["-y", "firecrawl-mcp"],
+      "env": {
+        "FIRECRAWL_API_KEY": "YOUR-API-KEY"
+      }
+    },
+    "documentationUrl": "https://github.com/firecrawl/firecrawl-mcp-server",
+    "requiresAuth": true,
+    "authDescription": "Requires FIRECRAWL_API_KEY environment variable",
+    "tags": ["web-scraping", "crawling", "content-extraction"]
+  },
+  {
+    "id": "perplexity",
+    "name": "Perplexity MCP Server",
+    "description": "Access Perplexity's Sonar AI model and search API for real-time web search, deep research, and advanced reasoning capabilities.",
+    "category": "official",
+    "transport": "stdio",
+    "config": {
+      "command": "npx",
+      "args": ["-y", "@perplexity-ai/mcp-server"],
+      "env": {
+        "PERPLEXITY_API_KEY": "your_key_here"
+      }
+    },
+    "documentationUrl": "https://github.com/perplexityai/modelcontextprotocol",
+    "requiresAuth": true,
+    "authDescription": "Requires PERPLEXITY_API_KEY environment variable",
+    "tags": ["search", "ai", "research", "perplexity"]
+  }
+]
+

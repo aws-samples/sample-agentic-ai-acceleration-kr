@@ -1,0 +1,10 @@
+# Test-only dependencies. Kept out of requirements.txt so `./install.sh` does
+# not pull a test framework into a user's install.
+#
+# The core/ tests run under system python3.13, but the UI tests need textual, so
+# they run in the venv — which then needs pytest too:
+#
+#   installer/.venv/bin/pip install -r installer/requirements-dev.txt
+#   installer/.venv/bin/python -m pytest installer/tests/
+pytest>=9.1.1
+pytest-asyncio>=1.0

@@ -228,7 +228,7 @@ jobs:
           DB_URL: postgresql+asyncpg://postgres:proof@127.0.0.1:5432/gwproof_ci
         run: |
           set -euo pipefail
-          uv run --with alembic --with asyncpg --with sqlalchemy --with pgvector \
+          uv run --with alembic --with asyncpg --with "sqlalchemy[asyncio]" --with pgvector \
             alembic upgrade head
           head=$(psql -h 127.0.0.1 -U postgres -d "${PROOF_DB}" -tA \
             -c "SELECT version_num FROM public.alembic_version")

@@ -1,0 +1,4 @@
+# Built from mcp-apps-server/app (npm run build). Committed so the Python-only
+# deploy path (agentcore launch) keeps working; reviewed via its sources, not
+# the minified blob.
+mcp-apps-server/app.html linguist-generated=true -diff
