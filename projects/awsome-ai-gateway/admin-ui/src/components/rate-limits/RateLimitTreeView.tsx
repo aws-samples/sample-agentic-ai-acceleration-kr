@@ -43,12 +43,6 @@ export function RateLimitTreeView({ nodes }: RateLimitTreeViewProps) {
   const hasMountedRef = useRef(false);
 
   const hasInactive = nodes.some(n => n.is_active === false);
-  // GLOBAL 은 한 번에 한 모델만 활성 한도를 가진다 — 패널이 저장 전에 확인받을 수 있게 그 노드를 넘긴다.
-  // ⚠️ 전부 비어 있는 행(값을 비우고 저장)은 아무것도 집행하지 않으므로 주인이 아니다. 주인으로 세면
-  //    해제할 것이 없는데도 확인을 요구한다(admin-api 의 409 판정도 같은 기준 — rpm/tpm 중 하나라도).
-  const globalSlotHolder =
-    nodes.find(n => n.scope === 'GLOBAL' && n.config && (n.config.rpm != null || n.config.tpm != null)) ??
-    null;
   const filteredNodes = showInactive
     ? nodes
     : nodes.filter(n => n.is_active !== false).map(n => ({
@@ -118,7 +112,7 @@ export function RateLimitTreeView({ nodes }: RateLimitTreeViewProps) {
         />
       </div>
       <div className="flex-1 p-6">
-        <RateLimitConfigPanel node={selectedNode} globalSlotHolder={globalSlotHolder} />
+        <RateLimitConfigPanel node={selectedNode} />
       </div>
       </div>
     </div>

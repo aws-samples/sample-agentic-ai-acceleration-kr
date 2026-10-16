@@ -25,23 +25,24 @@ export async function setRateLimitAction(formData: unknown): Promise<ActionResul
     return { success: false, error: 'Validation failed', fieldErrors };
   }
 
-  const { target_id, scope, release_alias, ...limits } = parsed.data;
-  // GLOBAL 슬롯 해제 동의(패널의 확인 대화상자) — 본문이 아니라 쿼리다(admin-api PUT /global).
-  const query = release_alias ? `?release_alias=${encodeURIComponent(release_alias)}` : '';
+  // GLOBAL 은 모델별이다(admin-api 0046) — 저장이 다른 모델의 한도를 해제하지 않으므로 '해제 동의'
+  // (release_alias)를 보내지 않는다. 그 값을 보내면 admin-api 는 409 다.
+  const { target_id, scope, ...limits } = parsed.data;
 
   try {
     // GLOBAL 의 target_id 는 UUID 가 아니라 model alias 다 — `claude-sonnet-4-6[1m]` 처럼 URL
     // 경로에서 인코딩이 필요한 문자가 실제로 들어 있다.
     await withRetry(() =>
       adminAPI.put(
-        `/admin/rate-limits/${scope.toLowerCase()}/${encodeURIComponent(target_id)}${query}`,
+        `/admin/rate-limits/${scope.toLowerCase()}/${encodeURIComponent(target_id)}`,
         limits,
       )
     );
     revalidatePath('/rate-limits');
     return { success: true, data: undefined };
   } catch (err) {
-    // 409 = 확인한 뒤 GLOBAL 슬롯 주인이 바뀌었다. 트리를 새로 받아 패널이 새 주인으로 다시 확인받게 한다.
+    // 409 = 서버 상태와 충돌(동시 수정, 또는 롤링 배포 중 이전 admin-api 의 단일 슬롯 409). 트리를 새로
+    // 받아 패널이 지금 상태를 보여 주게 한다.
     if (err instanceof APIError && err.status === 409) revalidatePath('/rate-limits');
     return { success: false, error: toErrorMessage(err) };
   }

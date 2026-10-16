@@ -12,10 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.audit import audit_logger
 from app.core.auth import CurrentUser
 from app.core.cache_invalidation import CacheInvalidationManager
-from app.core.exceptions import ConflictError, NotFoundError, ValidationError
+from app.core.exceptions import NotFoundError, ValidationError
 from app.models.auth import Team, User
 from app.models.model import ModelAlias, ModelStatus, RateLimitConfig, RateLimitScope
-from app.repositories._locks import advisory_xact_lock
 from app.repositories.model_repository import ModelRepository, RateLimitConfigRepository
 from app.repositories.user_repository import UserRepository
 from app.schemas.rate_limits import (
@@ -59,9 +58,9 @@ class RateLimitService:
         """이 세션의 rate-limit 변경이 쌓아 둔 캐시 무효화를 실행한다. **``session.commit()`` 뒤에** 호출한다.
 
         ⚠️ 커밋 전에 지우면 안 된다. 지운 뒤 · 커밋 전 사이에 들어온 게이트웨이 요청의 캐시 미스는
-           자기 커넥션으로 **커밋된(=옛)** 행을 읽어 300초 다시 캐시한다. GLOBAL 저장은 다른 모델의
-           한도를 해제하므로 해제된 한도가 콘솔이 '한도 없음' 으로 보여주는 동안 5분 더 집행됐고,
-           지운 개인 한도·새로 건 한도도 같은 창에서 5분씩 어긋났다(실 PG+Redis 재현:
+           자기 커넥션으로 **커밋된(=옛)** 행을 읽어 300초 다시 캐시한다. 바꾼 GLOBAL 한도는 콘솔이 새
+           값을 보여주는 동안 옛 값으로 5분 더 집행됐고, 지운 개인 한도·새로 건 한도도 같은 창에서
+           5분씩 어긋났다(실 PG+Redis 재현:
            tests/regression/test_high_rate_limit_invalidate_after_commit_real.py).
            실패는 CacheInvalidationManager 가 세션에 기록한다 — 커밋 뒤라 새 트랜잭션이 열리고
            CommittingRoute 가 응답 전에 커밋한다.
@@ -127,7 +126,6 @@ class RateLimitService:
         actor: CurrentUser,
         ip_address: str = "0.0.0.0",
         request_id: str = "",
-        release_alias: str | None = None,
     ) -> RateLimitResponse:
         # BR-RL-01: CPM/CPH not allowed for GLOBAL scope
         # (단기 비용 폭주 방어는 USER/TEAM 레벨에서. GLOBAL은 월 예산 엔진이 커버.)
@@ -140,32 +138,8 @@ class RateLimitService:
         if alias_exists is None:
             raise NotFoundError("ModelAlias", model_alias)
 
-        # ⚠️ GLOBAL 은 한 번에 한 모델만 — upsert 가 alias 와 무관하게 활성 행을 비활성화한다(0024 유니크
-        #    인덱스도 (scope, COALESCE(scope_id, nil))). 다른 모델이 **실제 한도**(rpm/tpm)를 들고 있으면
-        #    호출자가 그 alias 를 ``release_alias`` 로 명시했을 때만 해제한다 — 아니면 409. 예전엔 말없이
-        #    해제됐다(콘솔은 경고 문구만 띄웠다). 확인 화면을 본 뒤 다른 운영자가 슬롯을 바꿨어도 409 다.
-        #    잠금을 먼저 잡는다(upsert 와 같은 키, 같은 트랜잭션에서 재진입 가능) — 확인과 교체 사이에
-        #    다른 저장이 끼어들지 못한다. 전부 NULL 인 행은 아무것도 집행하지 않으므로 주인이 아니다.
-        await advisory_xact_lock(session, "rate_limit_configs", RateLimitScope.GLOBAL.value, None)
-        holder = await RateLimitConfigRepository(session).get_active(RateLimitScope.GLOBAL, None)
-        released = None
-        if (
-            holder is not None
-            and holder.model_alias not in (None, model_alias)
-            and (holder.rpm_limit is not None or holder.tpm_limit is not None)
-        ):
-            if release_alias != holder.model_alias:
-                raise ConflictError(
-                    f"The GLOBAL limit is held by {holder.model_alias} "
-                    f"(rpm={holder.rpm_limit}, tpm={holder.tpm_limit}); saving {model_alias} releases it. "
-                    f"Resend with release_alias={holder.model_alias} to confirm."
-                )
-            released = {
-                "model_alias": holder.model_alias,
-                "rpm": holder.rpm_limit,
-                "tpm": holder.tpm_limit,
-            }
-
+        # GLOBAL 은 모델별이다(0046) — upsert 는 이 alias 의 활성 행만 바꾸고 다른 모델의 GLOBAL 한도는
+        # 그대로 둔다. 해제할 것이 없으므로 확인(예전의 409 + release_alias)도 없다.
         return await self._set_rate_limit(
             session,
             scope=RateLimitScope.GLOBAL,
@@ -176,7 +150,6 @@ class RateLimitService:
             cache_key=f"ratelimit:config:global:{model_alias}",
             ip_address=ip_address,
             request_id=request_id,
-            released=released,
         )
 
     async def get_rate_limit_tree(self, session: AsyncSession) -> list[RateLimitTreeNode]:
@@ -199,11 +172,11 @@ class RateLimitService:
              로 남긴 뒤 무제한으로 취급한다) PUT 도 받으므로 트리에 있어야 한다. 상속할 TEAM
              이 없으니 inherited_from 은 항상 None 이다.
 
-        ⚠️ GLOBAL 은 현재 **한 번에 한 모델**만 활성 한도를 가질 수 있다. upsert 가 alias 와
-           무관하게 그 scope 의 활성 행을 전부 비활성화하고, 0024 의 유니크 인덱스도
-           ``(scope, COALESCE(scope_id, nil))`` 이다. 그래서 다른 모델의 GLOBAL 을 저장하면
-           앞 모델의 한도가 해제된다 — 콘솔은 그 사실을 저장 전에 경고한다
-           (admin-ui RateLimitConfigPanel ``globalSlotWarning``).
+        GLOBAL 한도는 **모델마다 따로** 활성이다(0046: 활성 GLOBAL 행은 model alias 당 1개 —
+        ``uq_rate_limit_configs_global_active``). 한 노드를 저장해도 다른 모델의 GLOBAL 노드는 그대로다
+        — upsert 가 그 alias 의 행만 바꾼다. gateway-proxy 도 GLOBAL 을 요청의 alias 로 읽고 카운터를
+        alias 별로 둔다(``{GLOBAL:*:<alias>}``). 그래서 같은 Bedrock model ID 를 공유하는 alias(예:
+        ``[1m]`` 변형)는 GLOBAL 한도와 카운터가 각각이다 — 합이 쿼터 아래가 되게 각자 잡아야 한다.
         """
         user_repo = UserRepository(session)
         rl_repo = RateLimitConfigRepository(session)
@@ -505,7 +478,6 @@ class RateLimitService:
         model_alias: str | None = None,
         ip_address: str = "0.0.0.0",
         request_id: str = "",
-        released: dict | None = None,
     ) -> RateLimitResponse:
         repo = RateLimitConfigRepository(session)
 
@@ -538,16 +510,18 @@ class RateLimitService:
         # USER/TEAM with model_alias=None covers all models → wildcard delete.
         # ⚠️ 지우는 것은 라우터가 커밋한 **뒤**다(invalidate_after_commit). 여기서는 대상만 쌓는다.
         sid = str(scope_id) if scope_id is not None else "NULL"
-        if model_alias is not None and scope != RateLimitScope.GLOBAL:
+        if model_alias is not None:
+            # GLOBAL: upsert 는 이 alias 의 행만 바꾼다(0046) — 다른 모델의 캐시는 여전히 맞으므로 이
+            # 모델의 키 하나만 지운다. alias 는 위에서 model_aliases 에 정확히 있는지 확인했으므로
+            # gateway-proxy 가 쓰는 키(model_config.alias = 그 행의 alias)와 글자까지 같다.
             _queue_invalidation(session, keys=(f"rl:config:{scope.value}:{sid}:{model_alias}",))
         else:
-            # ⚠️ GLOBAL 도 패턴으로 지운다. upsert 는 alias 와 무관하게 그 scope 의 활성 행을
-            #    **전부** 비활성화하므로(GLOBAL 은 한 번에 한 모델만 — get_rate_limit_tree 참조),
-            #    방금 해제된 **다른** 모델의 캐시(rl:config:GLOBAL:NULL:<그 모델>)가 남으면
-            #    gateway-proxy 는 콘솔이 "한도 없음" 으로 보여주는 동안에도 최대 5분 그 한도를
-            #    계속 집행한다.
             _queue_invalidation(session, patterns=(f"rl:config:{scope.value}:{sid}:*",))
 
+        after: dict = {"scope": scope.value, "rpm": data.rpm, "tpm": data.tpm}
+        if model_alias is not None:
+            # GLOBAL 은 모델별이다 — resource_id(새 행 id)만으로는 어느 모델의 한도인지 알 수 없다.
+            after["model_alias"] = model_alias
         await audit_logger.log(
             session,
             actor_user_id=actor.user_id,
@@ -555,11 +529,7 @@ class RateLimitService:
             action="SET_RATE_LIMIT",
             resource_type="RateLimitConfig",
             resource_id=str(config.id),
-            changes={
-                "after": {"scope": scope.value, "rpm": data.rpm, "tpm": data.tpm},
-                # GLOBAL 저장으로 해제된 다른 모델의 한도 — 감사 로그만 보고도 무엇이 풀렸는지 안다.
-                **({"released": released} if released else {}),
-            },
+            changes={"after": after},
             ip_address=ip_address,
             request_id=request_id,
         )

@@ -55,23 +55,24 @@ describe('setRateLimitAction', () => {
     expect(putMock.mock.calls[0][0]).toBe('/admin/rate-limits/global/us.anthropic%2Fclaude-x');
   });
 
-  it('GLOBAL 슬롯 해제 동의를 release_alias 쿼리로 보낸다 (alias 는 인코딩)', async () => {
+  it('release_alias 를 넘겨도 보내지 않는다 — GLOBAL 은 모델별이고 admin-api 는 그 값에 409 다', async () => {
+    // 단일 슬롯 시절의 '해제 동의' 다. 스키마에 없으므로 버려지고 URL 에도 본문에도 실리지 않는다.
+    // 대조군: 단일 슬롯 시절의 액션은 `?release_alias=...` 를 붙였다.
     await setRateLimitAction({
       target_id: 'claude-opus-4-7',
       scope: 'GLOBAL',
       rpm: 5,
       release_alias: 'claude-sonnet-4-6[1m]',
     });
-    expect(putMock).toHaveBeenCalledWith(
-      '/admin/rate-limits/global/claude-opus-4-7?release_alias=claude-sonnet-4-6%5B1m%5D',
-      { rpm: 5 },
-    );
+    expect(putMock).toHaveBeenCalledWith('/admin/rate-limits/global/claude-opus-4-7', { rpm: 5 });
   });
 
-  it('409(확인 뒤 슬롯 주인이 바뀜)면 트리를 새로 받게 한다 — 400 은 아니다 (대조군)', async () => {
+  it('409 면 트리를 새로 받게 한다 — 400 은 아니다 (대조군)', async () => {
     vi.mocked(revalidatePath).mockClear();
-    putMock.mockRejectedValueOnce(new APIError(409, 'conflict', 'The GLOBAL limit is held by x'));
-    const res = await setRateLimitAction({ target_id: 'a', scope: 'GLOBAL', rpm: 1, release_alias: 'y' });
+    putMock.mockRejectedValueOnce(
+      new APIError(409, 'conflict', 'The resource was modified concurrently. Please retry.'),
+    );
+    const res = await setRateLimitAction({ target_id: 'a', scope: 'GLOBAL', rpm: 1 });
     expect(res.success).toBe(false);
     expect(revalidatePath).toHaveBeenCalledWith('/rate-limits');
 

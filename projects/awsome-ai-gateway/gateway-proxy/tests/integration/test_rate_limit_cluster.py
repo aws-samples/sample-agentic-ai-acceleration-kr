@@ -15,6 +15,9 @@ mock·standalone 으로는 클러스터 모드 동작(fail-open 으로 enforceme
   1) 과거 패턴(다중 hash-tag 키 1 eval) → cross-slot 거부 재현(버그가 실재했음).
   2) 수정된 check_multi_scope_rpm/tpm·reserve_cost 가 클러스터에서 실제 enforce.
   3) fail-open 카운터 0 — 클러스터에서 무음 미집행이 없음(핵심 증거).
+  4) GLOBAL 은 모델별이다(0046) — 두 모델의 GLOBAL 키는 hash tag 가 달라 다른 슬롯에
+     있고, 모델마다 따로 eval 하므로 각자 한도대로 집행된다. 둘을 한 eval 에 묶으면
+     CROSSSLOT 이다(대조군).
 """
 
 from __future__ import annotations
@@ -143,3 +146,71 @@ async def test_split_tpm_and_cost_enforce_on_cluster(cluster):
     finally:
         rls.set_fail_open_metric(None)
         await cluster.aclose()
+
+
+@pytest.mark.asyncio
+async def test_two_models_global_limits_enforce_independently_on_cluster(cluster):
+    """모델 a(GLOBAL rpm 2, tpm 100)를 다 써도 모델 b(rpm 3, tpm 1000)는 자기 한도까지 통과."""
+    from redis.exceptions import RedisClusterException, RedisError
+
+    from app.services import rate_limit_service as rls
+    from app.services.lua_loader import LuaScriptLoader
+    from app.services.rate_limit_scope import (
+        RateLimitScope,
+        build_rl_key,
+        build_scope_descriptors,
+        build_tpm_key_group,
+    )
+
+    run = uuid.uuid4().hex[:8]
+    model_a = f"glob-a-{run}"
+    # 두 GLOBAL 키가 **다른 슬롯**에 있어야 아래 대조군(CROSSSLOT)이 의미가 있다.
+    slot_a = cluster.keyslot(build_rl_key(RateLimitScope.GLOBAL, None, model_a, "rpm"))
+    model_b = next(
+        m
+        for m in (f"glob-b{i}-{run}" for i in range(50))
+        if cluster.keyslot(build_rl_key(RateLimitScope.GLOBAL, None, m, "rpm")) != slot_a
+    )
+    keys = [build_rl_key(RateLimitScope.GLOBAL, None, m, "rpm") for m in (model_a, model_b)]
+    for m in (model_a, model_b):
+        keys += build_tpm_key_group(RateLimitScope.GLOBAL, None, m)
+
+    def _desc(model, rpm, tpm):
+        return build_scope_descriptors(
+            user_id=f"itg-{run}", team_id=None, model_alias=model,
+            user_rpm=None, user_tpm=None, team_rpm=None, team_tpm=None,
+            global_rpm=rpm, global_tpm=tpm,
+        )
+
+    spy = _FailOpenSpy()
+    rls.set_fail_open_metric(spy)
+    try:
+        svc = rls.RateLimitService()
+        desc_a, desc_b = _desc(model_a, 2, 100), _desc(model_b, 3, 1000)
+        seq_a = [(await svc.check_multi_scope_rpm(cluster, desc_a)).allowed for _ in range(3)]
+        seq_b = [(await svc.check_multi_scope_rpm(cluster, desc_b)).allowed for _ in range(4)]
+        assert seq_a == [True, True, False]
+        assert seq_b == [True, True, True, False]  # a 의 소진과 무관하다
+        assert (await svc.check_multi_scope_rpm(cluster, desc_a)).scope == "GLOBAL"
+
+        assert (await svc.check_multi_scope_tpm(cluster, desc_a, reserved_tokens=60)).allowed
+        assert not (await svc.check_multi_scope_tpm(cluster, desc_a, reserved_tokens=60)).allowed
+        assert (await svc.check_multi_scope_tpm(cluster, desc_b, reserved_tokens=60)).allowed
+        assert spy.count == 0  # 무음 미집행 없음
+
+        # 대조군 — 두 모델의 GLOBAL 키를 한 eval 에 묶으면 클러스터가 거부한다. 키가 다른
+        # 노드에 있으면 클라이언트가 보내기 전에(RedisClusterException), 같은 노드면 서버가
+        # (CROSSSLOT) 거부한다 — 어느 쪽이든 게이트웨이의 except 가 삼켜 fail-open 이 된다.
+        with pytest.raises((RedisError, RedisClusterException)) as crossslot:
+            await cluster.eval(
+                LuaScriptLoader.get("rate_limit_check"), 2, keys[0], keys[1],
+                "0", "req", "60000", "2", "5", "5", "GLOBAL", "GLOBAL",
+            )
+        msg = str(crossslot.value)
+        assert "CROSSSLOT" in msg.upper() or "same slot" in msg or "same key slot" in msg
+    finally:
+        rls.set_fail_open_metric(None)
+        for key in keys:
+            await cluster.delete(key)
+        await cluster.aclose()
+

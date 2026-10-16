@@ -115,16 +115,22 @@ def _recording_session(events: list[str]):
 
 
 @pytest.mark.parametrize(
-    "method, path, body, pattern",
+    "method, path, body, invalidation",
     [
-        ("PUT", f"/admin/rate-limits/user/{USER_ID}", {"rpm": 5}, f"rl:config:USER:{USER_ID}:*"),
-        ("PUT", f"/admin/rate-limits/team/{TEAM_ID}", {"rpm": 5}, f"rl:config:TEAM:{TEAM_ID}:*"),
-        ("PUT", "/admin/rate-limits/global/claude-opus-4-7", {"rpm": 5}, "rl:config:GLOBAL:NULL:*"),
-        ("DELETE", f"/admin/rate-limits/user/{USER_ID}", None, f"rl:config:USER:{USER_ID}:*"),
+        ("PUT", f"/admin/rate-limits/user/{USER_ID}", {"rpm": 5}, f"scan:rl:config:USER:{USER_ID}:*"),
+        ("PUT", f"/admin/rate-limits/team/{TEAM_ID}", {"rpm": 5}, f"scan:rl:config:TEAM:{TEAM_ID}:*"),
+        # GLOBAL 은 모델별(0046) — 그 모델의 키 하나만 지운다.
+        (
+            "PUT",
+            "/admin/rate-limits/global/claude-opus-4-7",
+            {"rpm": 5},
+            "del:rl:config:GLOBAL:NULL:claude-opus-4-7",
+        ),
+        ("DELETE", f"/admin/rate-limits/user/{USER_ID}", None, f"scan:rl:config:USER:{USER_ID}:*"),
     ],
 )
 async def test_mutations_invalidate_the_proxy_cache_only_after_commit(
-    client: AsyncClient, admin_headers: dict, test_app, method, path, body, pattern
+    client: AsyncClient, admin_headers: dict, test_app, method, path, body, invalidation
 ):
     events: list[str] = []
     test_app.dependency_overrides[get_db_session] = _recording_session(events)
@@ -146,12 +152,12 @@ async def test_mutations_invalidate_the_proxy_cache_only_after_commit(
         resp = await client.request(method, path, json=body, headers=admin_headers)
 
     assert resp.status_code == 200, resp.text
-    assert f"scan:{pattern}" in events, events  # 대조군 — 무효화 자체는 일어난다
+    assert invalidation in events, events  # 대조군 — 무효화 자체는 일어난다
     first_invalidation = min(i for i, e in enumerate(events) if e.startswith(("scan:", "del:")))
     assert "commit" in events[:first_invalidation], f"커밋 전에 캐시를 지웠다: {events}"
 
 
-# ── GLOBAL 슬롯 해제는 명시적 동의가 필요하다 ────────────────────────────────
+# ── GLOBAL 은 모델별이다 — 해제할 것이 없으므로 release_alias 는 거절한다 ──────────────────
 
 
 async def _put_global(client, headers, holder, query=""):
@@ -167,24 +173,49 @@ async def _put_global(client, headers, holder, query=""):
     return resp, MockRepo.return_value.upsert
 
 
-async def test_global_save_that_would_release_another_model_is_409(
+async def test_global_save_does_not_need_consent_while_another_model_has_a_limit(
     client: AsyncClient, admin_headers: dict, test_app
 ):
+    """다른 모델이 실제 GLOBAL 한도를 갖고 있어도 200 이다 — 그 한도는 그대로 남는다(0046).
+
+    대조군: 단일 슬롯 코드는 이 요청(``release_alias`` 없음)에 409 를 냈다(그 모델의 행을 읽어서).
+    """
     from app.core.db import get_db_session
 
     test_app.dependency_overrides[get_db_session] = _recording_session([])
+    test_app.state.redis.scan_iter = MagicMock(side_effect=lambda *a, **kw: _no_keys())
     holder = MagicMock(model_alias="claude-sonnet-4-6", rpm_limit=None, tpm_limit=200000)
 
     resp, upsert = await _put_global(client, admin_headers, holder)
-    assert resp.status_code == 409, resp.text
-    assert resp.json()["error"]["code"] == "conflict"
-    assert "claude-sonnet-4-6" in resp.json()["error"]["message"]
-    upsert.assert_not_awaited()
-
-    test_app.state.redis.scan_iter = MagicMock(side_effect=lambda *a, **kw: _no_keys())
-    resp, upsert = await _put_global(client, admin_headers, holder, "?release_alias=claude-sonnet-4-6")
-    assert resp.status_code == 200, resp.text  # 대조군 — 주인을 명시하면 저장된다
+    assert resp.status_code == 200, resp.text
     upsert.assert_awaited_once()
+    assert upsert.await_args.args[0].model_alias == "claude-opus-4-7"
+
+
+async def test_global_save_with_release_alias_is_409_and_changes_nothing(
+    client: AsyncClient, admin_headers: dict, test_app
+):
+    """``release_alias`` 는 단일 슬롯 시절 콘솔의 '해제 동의' 다. 롤링 배포 동안 이전 콘솔은 "그 모델의
+    한도가 해제된다" 고 확인받은 뒤 이 값을 보낸다 — 조용히 무시하면 운영자가 풀었다고 믿는 한도가
+    계속 집행된다. 그래서 아무것도 바꾸지 않고 409 다(이전 콘솔은 409 에 트리를 새로 받는다).
+
+    대조군: 단일 슬롯 코드는 주인을 정확히 지목한 이 요청을 200 으로 저장했다.
+    """
+    from app.core.db import get_db_session
+
+    events: list[str] = []
+    test_app.dependency_overrides[get_db_session] = _recording_session(events)
+    holder = MagicMock(model_alias="claude-sonnet-4-6", rpm_limit=None, tpm_limit=200000)
+
+    resp, upsert = await _put_global(
+        client, admin_headers, holder, "?release_alias=claude-sonnet-4-6"
+    )
+    assert resp.status_code == 409, resp.text
+    error = resp.json()["error"]
+    assert error["code"] == "conflict"
+    assert "claude-sonnet-4-6" in error["message"] and "per model" in error["message"]
+    upsert.assert_not_awaited()
+    assert "commit" not in events, events
 
 
 # ── alias 에 URL 메타문자('/', '[', ']') ──────────────────────────────────────

@@ -365,6 +365,8 @@ Admin UI → Rate Limits 페이지
 
 **Tree View**: 계층적으로 상속 관계를 시각화
 
+GLOBAL 노드는 모델(alias)마다 하나이고, 모델마다 따로 한도를 겁니다. 한 모델에 저장해도 다른 모델의 GLOBAL 한도는 바뀌지 않습니다(아래 API 참고의 GLOBAL 항목).
+
 설정 예:
 ```
 [GLOBAL] claude-opus
@@ -711,7 +713,7 @@ Request body:
 | PUT | `/admin/rate-limits/user/{user_id}` | 사용자 RL 설정 |
 | DELETE | `/admin/rate-limits/user/{user_id}` | 사용자 개인 RL 제거 — 팀이 있으면 팀 RL 을 다시 상속하고, 팀이 없으면 개인 한도 없이 GLOBAL 만 남는다 |
 | PUT | `/admin/rate-limits/team/{team_id}` | 팀 RL 설정 |
-| PUT | `/admin/rate-limits/global/{model}` | 글로벌 RL 설정 (`?release_alias=` — 아래 참고) |
+| PUT | `/admin/rate-limits/global/{model}` | 그 모델의 글로벌 RL 설정 — 다른 모델의 GLOBAL 한도는 그대로 (아래 참고) |
 
 Rate Limit API 는 모두 **ADMIN 전용**이다(개인 RL 제거 포함). TEAM_LEADER 와 DEVELOPER 는 403 이다.
 
@@ -721,18 +723,14 @@ Request body:
 { "rpm": 30, "tpm": 100000, "cpm": null, "cph": null }
 ```
 
-> ⚠️ **GLOBAL 한도는 한 번에 한 모델만 가질 수 있습니다.** 한 모델에 저장하면 다른 모델의 GLOBAL 한도가 해제됩니다.
-> 그래서 다른 모델이 실제 한도(rpm 또는 tpm)를 갖고 있으면 `PUT /admin/rate-limits/global/{model}` 은 **409** 를 돌려줍니다.
-> 해제에 동의하려면 현재 주인의 alias 를 쿼리로 넘깁니다.
+> **GLOBAL 한도는 모델마다 따로 걸립니다(migration 0046).** `PUT /admin/rate-limits/global/{model}` 은 그 모델의 한도만 바꾸고, 다른 모델의 GLOBAL 한도는 그대로 둡니다. Bedrock 쿼터가 모델별이기 때문입니다. 0046 이전에는 활성 GLOBAL 행이 전체에서 하나뿐이라 한 모델에 저장하면 다른 모델의 한도가 해제됐고, 그래서 409 와 `release_alias` 동의가 있었습니다. 이제 해제되는 것이 없으므로 둘 다 없습니다.
 >
-> ```
-> PUT /admin/rate-limits/global/claude-opus?release_alias=claude-sonnet
-> ```
->
-> - 확인한 뒤 다른 운영자가 주인을 바꿨다면(`release_alias` 가 현재 주인과 다르면) 다시 409 입니다.
-> - 같은 모델을 다시 저장할 때, 주인이 없을 때, 주인의 rpm·tpm 이 모두 비어 있을 때는 `release_alias` 없이도 200 입니다.
-> - 해제된 한도는 감사 로그의 `released` 에 남습니다. 콘솔은 저장 전에 해제될 한도를 보여 주고 확인을 받습니다.
+> - 한 모델의 한도를 지우려면 rpm·tpm 을 모두 비워 저장합니다(콘솔: 입력을 비우고 저장). GLOBAL 은 상속이 없으므로 빈 행은 한도 없음과 같습니다. 다른 모델에는 영향이 없습니다.
+> - DB 는 같은 모델의 대체 행 없이 GLOBAL 한도를 해제하는 커밋을 거부합니다(0046 의 `rl_global_release_guard`). API·콘솔의 저장과 비우기는 대체 행을 함께 넣으므로 영향이 없습니다. SQL 로 직접 해제해야 하면 [Upgrade · Rollback §4.4](../deployment/docs/eks-fargate/06-upgrade-rollback.md#44-migration-0046--global-rate-limit-을-모델별로) 의 정리 SQL 을 씁니다.
+> - `?release_alias=` 는 더 이상 받지 않습니다. 보내면 **409** 이고 아무것도 바뀌지 않습니다. 0046 이전 콘솔은 다른 모델의 한도가 "해제된다" 고 확인받은 뒤 이 값을 보냈습니다. 그 값을 무시하고 저장하면 운영자가 풀었다고 믿는 한도가 계속 집행되므로 거절합니다. 스크립트는 이 파라미터를 빼고 보냅니다.
+> - 게이트웨이는 GLOBAL 한도를 요청의 model alias 로 찾고 카운터도 alias 별로 둡니다. 같은 Bedrock model ID 를 쓰는 alias(예: `claude-sonnet-4-6` 와 `claude-sonnet-4-6[1m]`)는 한도와 카운터가 따로이므로, 그 쿼터를 나눠 쓰도록 각각 잡습니다.
 > - alias 에 `/` 나 `[1m]` 이 들어 있어도 됩니다. 경로에 넣을 때 URL 인코딩합니다.
+> - 업그레이드·롤백 순서와 0046 다운그레이드 조건은 [Upgrade · Rollback §4.4](../deployment/docs/eks-fargate/06-upgrade-rollback.md#44-migration-0046--global-rate-limit-을-모델별로) 에 있습니다.
 
 ### 키 관리
 

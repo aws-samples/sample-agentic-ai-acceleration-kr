@@ -13,7 +13,8 @@
  * 2. "최근 60초간 요청 없음" 의 거짓 단정 — `measured` 로 구분한다.
  * 3. cpm/cph 의 와이어 타입 — Decimal 은 JSON 문자열("0.5000"), 폼은 숫자로 보내야 한다.
  * 4. 되돌릴 방법 — 입력을 비우고 저장하는 것은 제거가 아니다. 제거 버튼은 자기 행이 있을 때만.
- * 5. GLOBAL 은 한 번에 한 모델만 — 다른 모델이 슬롯을 갖고 있으면 저장 전에 경고한다.
+ * 5. GLOBAL 은 모델별이다(admin-api 0046) — 노드마다 따로 저장되고, 다른 모델의 한도를 이유로 경고·확인하지
+ *    않는다(단일 슬롯 시절의 '해제 동의' release_alias 도 보내지 않는다 — admin-api 는 그 값에 409 다).
  */
 
 import { render, screen, waitFor } from '@testing-library/react';
@@ -174,7 +175,7 @@ describe('자기 설정이 있는 USER 노드', () => {
 describe('GLOBAL 노드', () => {
   it('선택 가능하고 CPM/CPH 는 비활성이며 alias 를 target 으로 저장한다', async () => {
     const user = userEvent.setup();
-    render(<RateLimitConfigPanel node={globalCapped} globalSlotHolder={globalCapped} />);
+    render(<RateLimitConfigPanel node={globalCapped} />);
 
     expect(cpmInput()).toBeDisabled();
     expect(cphInput()).toBeDisabled();
@@ -200,62 +201,35 @@ describe('GLOBAL 노드', () => {
     await waitFor(() => expect(fetchRateLimitUsage).toHaveBeenCalledWith('GLOBAL', globalCapped.id));
   });
 
-  it('다른 모델이 GLOBAL 슬롯을 갖고 있으면 저장 전에 경고한다 — 해제될 한도까지', async () => {
-    render(<RateLimitConfigPanel node={globalUncapped} globalSlotHolder={globalCapped} />);
-    await waitFor(() => expect(fetchRateLimitUsage).toHaveBeenCalled());
-    expect(screen.getByRole('alert')).toHaveTextContent(
-      `globalSlotWarning:${globalCapped.id},${globalCapped.config!.tpm} tpm`,
-    );
-  });
-
-  it('저장하면 해제될 한도를 보여 주고 확인을 받은 뒤에야 release_alias 와 함께 보낸다', async () => {
+  it('다른 모델에 GLOBAL 한도가 있어도 경고·확인 없이 바로 저장한다 — release_alias 를 보내지 않는다', async () => {
+    // 픽스처의 globalCapped(TPM 200000)가 한도를 가진 채로, 한도 없는 모델에 저장한다.
     const user = userEvent.setup();
-    render(<RateLimitConfigPanel node={globalUncapped} globalSlotHolder={globalCapped} />);
+    render(<RateLimitConfigPanel node={globalUncapped} />);
     await user.type(rpmInput(), '40');
 
     await user.click(screen.getByRole('button', { name: 'save' }));
-    // 첫 클릭은 저장이 아니다 — 무엇이 풀리는지 보여 준다.
-    expect(setRateLimitAction).not.toHaveBeenCalled();
-    expect(screen.getByRole('alertdialog')).toHaveTextContent(
-      `globalSlotConfirm:${globalCapped.id},${globalCapped.config!.tpm} tpm`,
-    );
 
-    await user.click(screen.getByRole('button', { name: 'releaseAndSave' }));
     await waitFor(() => expect(setRateLimitAction).toHaveBeenCalledTimes(1));
-    expect(setRateLimitAction.mock.calls[0][0]).toMatchObject({
+    expect(setRateLimitAction.mock.calls[0][0]).toEqual({
       target_id: globalUncapped.id,
       scope: 'GLOBAL',
       rpm: 40,
-      release_alias: globalCapped.id, // 서버는 이 동의 없이는 409
+      tpm: null,
+      cpm: undefined,
+      cph: undefined,
     });
-  });
-
-  it('확인에서 취소하면 저장하지 않는다', async () => {
-    const user = userEvent.setup();
-    render(<RateLimitConfigPanel node={globalUncapped} globalSlotHolder={globalCapped} />);
-    await user.click(screen.getByRole('button', { name: 'save' }));
-    await user.click(screen.getByRole('button', { name: 'cancel' }));
-
-    expect(screen.queryByRole('alertdialog')).toBeNull();
-    expect(setRateLimitAction).not.toHaveBeenCalled();
-  });
-
-  it('슬롯 주인 자신이거나 슬롯이 비어 있으면 경고·확인 없이 바로 저장한다 (대조군)', async () => {
-    const user = userEvent.setup();
-    const { unmount } = render(
-      <RateLimitConfigPanel node={globalCapped} globalSlotHolder={globalCapped} />,
-    );
-    await waitFor(() => expect(fetchRateLimitUsage).toHaveBeenCalled());
     expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+
+  it('GLOBAL 노드는 이 모델에만 걸린다고 알린다 — USER/TEAM 노드에는 없다 (대조군)', async () => {
+    const { unmount } = render(<RateLimitConfigPanel node={globalUncapped} />);
+    expect(screen.getByText(`globalPerModel:${globalUncapped.id}`)).toBeInTheDocument();
     unmount();
 
-    render(<RateLimitConfigPanel node={globalUncapped} globalSlotHolder={null} />);
+    render(<RateLimitConfigPanel node={teamNode} />);
     await waitFor(() => expect(fetchRateLimitUsage).toHaveBeenCalledTimes(2));
-    expect(screen.queryByRole('alert')).toBeNull();
-    await user.click(screen.getByRole('button', { name: 'save' }));
-    await waitFor(() => expect(setRateLimitAction).toHaveBeenCalledTimes(1));
-    expect(screen.queryByRole('alertdialog')).toBeNull();
-    expect(setRateLimitAction.mock.calls[0][0]).not.toHaveProperty('release_alias');
+    expect(screen.queryByText(/^globalPerModel/)).toBeNull();
   });
 });
 
@@ -301,7 +275,7 @@ describe('실시간 사용량 표시', () => {
 });
 
 describe('트리를 새로 받아도(revalidatePath) 운영자의 입력과 에러가 남는다', () => {
-  // 409 분기(lib/actions/rate-limits.ts)는 새 슬롯 주인을 보여 주려고 revalidatePath 로 트리를 다시 받는다.
+  // 409 분기(lib/actions/rate-limits.ts)는 지금 상태를 보여 주려고 revalidatePath 로 트리를 다시 받는다.
   // 내용이 같아도 노드는 **새 객체**다(M1 이후 선택은 id 로 매 렌더 새 트리에서 찾는다). 예전 리셋 effect 는
   // 노드 객체에 걸려 있어, 409 가 나는 순간 입력값과 409 문구가 함께 지워졌다.
   const fresh = (id: string): RateLimitTreeNode => {
@@ -309,23 +283,18 @@ describe('트리를 새로 받아도(revalidatePath) 운영자의 입력과 에�
     const all = copy.flatMap((n) => [n, ...n.children]);
     return all.find((n) => n.id === id)!;
   };
-  const CONFLICT = 'The GLOBAL limit is held by another model';
+  const CONFLICT = 'The resource was modified concurrently. Please retry.';
 
   it('409 뒤 같은 노드의 새 객체로 다시 그려도 입력값과 409 문구가 그대로다', async () => {
     const user = userEvent.setup();
     setRateLimitAction.mockResolvedValue({ success: false, error: CONFLICT });
-    const { rerender } = render(
-      <RateLimitConfigPanel node={globalUncapped} globalSlotHolder={globalCapped} />,
-    );
+    const { rerender } = render(<RateLimitConfigPanel node={globalUncapped} />);
     await user.type(rpmInput(), '40');
     await user.type(tpmInput(), '7000');
     await user.click(screen.getByRole('button', { name: 'save' }));
-    await user.click(screen.getByRole('button', { name: 'releaseAndSave' }));
     await waitFor(() => expect(screen.getByText(CONFLICT)).toBeInTheDocument());
 
-    rerender(
-      <RateLimitConfigPanel node={fresh(globalUncapped.id)} globalSlotHolder={fresh(globalCapped.id)} />,
-    );
+    rerender(<RateLimitConfigPanel node={fresh(globalUncapped.id)} />);
 
     expect(rpmInput()).toHaveValue(40);
     expect(tpmInput()).toHaveValue(7000);
@@ -362,17 +331,14 @@ describe('트리를 새로 받아도(revalidatePath) 운영자의 입력과 에�
     // 예전엔 입력칸은 새 저장값(77)으로 바뀌는데 409 문구는 남아, 운영자는 지금 값에 대한 충돌로 읽었다.
     const user = userEvent.setup();
     setRateLimitAction.mockResolvedValue({ success: false, error: CONFLICT });
-    const { rerender } = render(
-      <RateLimitConfigPanel node={globalUncapped} globalSlotHolder={globalCapped} />,
-    );
+    const { rerender } = render(<RateLimitConfigPanel node={globalUncapped} />);
     await user.type(rpmInput(), '40');
     await user.click(screen.getByRole('button', { name: 'save' }));
-    await user.click(screen.getByRole('button', { name: 'releaseAndSave' }));
     await waitFor(() => expect(screen.getByText(CONFLICT)).toBeInTheDocument());
 
     const changed = fresh(globalUncapped.id); // 다른 운영자가 이 모델에 rpm 77 을 저장했다
     changed.config = { target_id: changed.id, scope: 'GLOBAL', rpm: 77, tpm: null, cpm: null, cph: null };
-    rerender(<RateLimitConfigPanel node={changed} globalSlotHolder={changed} />);
+    rerender(<RateLimitConfigPanel node={changed} />);
 
     expect(rpmInput()).toHaveValue(77);
     expect(screen.queryByText(CONFLICT)).toBeNull();
