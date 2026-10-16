@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from decimal import ROUND_HALF_UP, Decimal
+from uuid import uuid4
 
 import structlog
 
@@ -11,8 +12,38 @@ from app.periods import current_kst_period
 from app.schemas.cost_stream import CostStreamEntry
 from app.schemas.domain import AuthContext, ModelConfigSchema, TokenUsage
 from app.services.account_credentials import effective_account_id
+from app.services.lua_loader import LuaScriptLoader
 
 logger = structlog.get_logger(__name__)
+
+#: 예산 차감 표지의 수명(초). 같은 차감 EVAL 이 두 번 오는 경우는 응답이 늦어 redis-py 가 다시
+#: 보내는 것뿐이고, 그 재시도는 첫 시도의 socket_timeout(운영 2초) + 백오프(최대 0.5초) 뒤에 온다 —
+#: 예약 표지(rate_limit_service._RESERVE_MARKER_TTL)와 같은 이유로 60초다. 표지는 차감 EVAL 마다
+#: 하나다(요청마다 사용자·팀, per-app 예산이면 앱까지). redis 7 실측 MEMORY USAGE 264바이트(결과
+#: JSON 포함), 초당 100요청 × 차감 3 × 60초 = 1만 8천 개를 실제로 만들면 used_memory +6.0MB.
+_DEDUCT_MARKER_TTL = 60
+
+
+async def _deduct_budget(redis, usage_key: str, config_key: str, cost_usd: Decimal) -> dict:
+    """budget_deduct EVAL 한 번 — 이 호출만의 표지(새 uuid)를 같은 hash tag 에 붙여 보낸다.
+
+    응답이 늦어 클라이언트(redis-py, redis_retries)가 같은 EVAL 을 다시 보내면 스크립트가 그 표지를
+    보고 아무것도 쓰지 않은 채 처음 결과를 돌려준다(budget_deduct.lua). 예전에는 그 요청의 비용이 월
+    예산 카운터에 두 번 들어갔다. 표지는 호출마다 새것이라 다른 차감과 섞이지 않고, 이름
+    (``budget-deducted:…``)은 ``budget:*`` 패턴에 걸리지 않는다.
+    """
+    head = usage_key[: usage_key.index("}") + 1]  # budget:<scope>:{<id>}
+    marker = "budget-deducted:" + head[len("budget:"):] + ":" + uuid4().hex
+    raw = await redis.eval(
+        LuaScriptLoader.get("budget_deduct"),
+        3,
+        usage_key,
+        config_key,
+        marker,
+        str(cost_usd),
+        str(_DEDUCT_MARKER_TTL),
+    )
+    return json.loads(raw)
 
 COST_PRECISION = Decimal("0.000001")
 
@@ -200,6 +231,8 @@ class CostRecorder:
                         rate_limit_state.get("tpm_descriptors", []),
                         rate_limit_state.get("tpm_reserved", 0),
                         0,  # actual=0 → 전액 환불
+                        reserved_keys=rate_limit_state.get("tpm_reserved_keys"),
+                        reservation_id=rate_limit_state.get("reservation_id"),
                     )
                 except Exception:
                     logger.warning(
@@ -217,6 +250,8 @@ class CostRecorder:
                             actual_cost=Decimal("0"),
                             reserved_cost=reserved_cost,
                             team_id=str(auth_context.team_id) if auth_context.team_id else None,
+                            reserved_keys=rate_limit_state.get("cost_reserved_keys"),
+                            reservation_id=rate_limit_state.get("reservation_id"),
                         )
                     except Exception:
                         logger.warning(
@@ -258,7 +293,6 @@ class CostRecorder:
         threshold_triggered = None
         if redis is not None:
             from app.services.budget_service import PER_APP_BUDGET_CLIENTS
-            from app.services.lua_loader import LuaScriptLoader
 
             # Redis Cluster hash tag: {<scope_id>} ensures usage/config keys
             # for the same user (or team) hash to the same slot, so Lua multi-key
@@ -270,27 +304,14 @@ class CostRecorder:
 
             result = None
             try:
-                raw = await redis.eval(
-                    LuaScriptLoader.get("budget_deduct"),
-                    2,
-                    user_usage_key,
-                    user_config_key,
-                    str(cost_usd),
-                )
-                result = json.loads(raw)
+                result = await _deduct_budget(redis, user_usage_key, user_config_key, cost_usd)
                 threshold_triggered = result.get("threshold_triggered")
             except Exception:
                 logger.exception("budget_deduct_failed", user_id=auth_context.user_id)
 
             # 팀 예산 차감
             try:
-                await redis.eval(
-                    LuaScriptLoader.get("budget_deduct"),
-                    2,
-                    team_usage_key,
-                    team_config_key,
-                    str(cost_usd),
-                )
+                await _deduct_budget(redis, team_usage_key, team_config_key, cost_usd)
             except Exception:
                 logger.warning("team_budget_deduct_failed", team_id=auth_context.team_id)
 
@@ -326,16 +347,14 @@ class CostRecorder:
                 client_usage_key = f"budget:user:{{{auth_context.user_id}}}:{client}:{period}"
                 client_config_key = f"budget:config:user:{{{auth_context.user_id}}}:{client}"
                 try:
-                    await redis.eval(
-                        LuaScriptLoader.get("budget_deduct"),
-                        2, client_usage_key, client_config_key, str(cost_usd),
-                    )
+                    await _deduct_budget(redis, client_usage_key, client_config_key, cost_usd)
                 except Exception:
                     logger.warning("client_budget_deduct_failed", client=client)
 
-        # 2. CPM/CPH 정산 (USER+TEAM 2 스코프, FR-4.6)
+        # 2. CPM/CPH 정산 (예약한 스코프·창만, FR-4.6)
         # reserved_cost는 rate_limit_state['cost_reserved'] (enforcement 주입) 우선,
-        # 없으면 legacy 파라미터 사용.
+        # 없으면 legacy 파라미터 사용. 조정할 키는 rate_limit_state['cost_reserved_keys'] 뿐이다 —
+        # 없으면 settle_cost 가 아무것도 쓰지 않는다(그 docstring).
         cost_reserved = reserved_cost
         if rate_limit_state and "cost_reserved" in rate_limit_state:
             cost_reserved = rate_limit_state["cost_reserved"]
@@ -349,6 +368,8 @@ class CostRecorder:
                     actual_cost=cost_usd,
                     reserved_cost=cost_reserved,
                     team_id=auth_context.team_id,
+                    reserved_keys=(rate_limit_state or {}).get("cost_reserved_keys"),
+                    reservation_id=(rate_limit_state or {}).get("reservation_id"),
                 )
             except Exception:
                 logger.warning("cost_settle_failed", user_id=auth_context.user_id)
@@ -363,7 +384,12 @@ class CostRecorder:
 
                 actual_tpm = compute_tpm_incr(usage)
                 await RateLimitService().settle_tpm(
-                    redis, tpm_descriptors, tpm_reserved, actual_tpm
+                    redis,
+                    tpm_descriptors,
+                    tpm_reserved,
+                    actual_tpm,
+                    reserved_keys=rate_limit_state.get("tpm_reserved_keys"),
+                    reservation_id=rate_limit_state.get("reservation_id"),
                 )
             except Exception:
                 logger.warning("tpm_settle_failed", user_id=auth_context.user_id)

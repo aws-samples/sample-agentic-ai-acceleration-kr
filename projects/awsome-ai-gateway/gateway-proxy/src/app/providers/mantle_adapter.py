@@ -14,6 +14,7 @@ from app.schemas.domain import TokenUsage
 from app.services.account_credentials import (
     ACCOUNT_UNAVAILABLE_BODY,
     ACCOUNT_UNAVAILABLE_STATUS,
+    CREDENTIAL_FAILURE_MARKER,
     AccountCredentialsUnavailable,
     redact_account_identifiers_bytes,
 )
@@ -66,13 +67,25 @@ class MantleAdapter(ProviderAdapter):
         url = f"{endpoint.rstrip('/')}/v1/messages"
         try:
             headers = await self._headers(profile, account)
-            resp = await self._http.post(url, content=request_body, headers=headers)
         except AccountCredentialsUnavailable:
             # alias 계정을 쓸 수 없다 — 502(폴백·서킷 대상)가 아니라 고정 500. 이 타입은 alias
             # 계정 mint 에서만 나온다(프로필·파드 경로의 실패는 아래 기존 502 그대로).
             return ACCOUNT_UNAVAILABLE_STATUS, ACCOUNT_UNAVAILABLE_BODY, {}, TokenUsage()
         except Exception:
-            logger.exception("mantle_invoke_failed", model_id=model_id)
+            # bearer 를 만들지 못했다(프로필 역할의 AssumeRole 실패·ProfileAssumeBackoff 등) —
+            # 상류를 부르지 않았다. 오늘과 같은 502 지만 서킷 브레이커에는 세지 않는다
+            # (CREDENTIAL_FAILURE_MARKER).
+            logger.exception("mantle_invoke_failed", model_id=model_id, stage="auth")
+            return (
+                502,
+                b'{"error":{"type":"provider_error","message":"Mantle call failed"}}',
+                {CREDENTIAL_FAILURE_MARKER: "1"},
+                TokenUsage(),
+            )
+        try:
+            resp = await self._http.post(url, content=request_body, headers=headers)
+        except Exception:
+            logger.exception("mantle_invoke_failed", model_id=model_id, stage="call")
             return (
                 502,
                 b'{"error":{"type":"provider_error","message":"Mantle call failed"}}',
@@ -124,7 +137,8 @@ class MantleAdapter(ProviderAdapter):
                     {"error": {"type": "provider_error", "message": "Mantle auth failed"}}
                 ).encode()
 
-            return 502, _auth_err(), {}, None
+            # 상류를 부르지 않았다 — 서킷 브레이커에 세지 않는다(invoke 의 같은 주석).
+            return 502, _auth_err(), {CREDENTIAL_FAILURE_MARKER: "1"}, None
 
         # Open the stream and read the status BEFORE returning, so a non-200 Mantle
         # response surfaces as the real HTTP status (not a 200 with a buried error).

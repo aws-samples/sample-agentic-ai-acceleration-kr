@@ -306,16 +306,24 @@ async def test_credentials_come_with_the_hard_expiry_of_those_credentials():
 # ── 프로필 경로(get_client) 는 오늘 그대로 ──────────────────────────────────────────
 
 
-async def test_the_profile_path_does_not_remember_failures():
-    """claude-code 프로필 경로: 실패한 요청은 in-account 폴백으로 서빙되고, **다음 요청은 다시
-    assume 을 시도한다**(오늘 동작). 신뢰 정책을 고치면 바로 그 계정으로 돌아가야 한다."""
+async def test_the_profile_path_remembers_a_failure_only_briefly():
+    """claude-code 프로필 경로: 실패한 요청은 in-account 폴백으로 서빙되고, 실패는
+    ``PROFILE_FAILURE_BACKOFF``(5초)만 기억한다 — 그 뒤 첫 요청이 다시 assume 을 시도한다.
+    신뢰 정책을 고치면 5초 안에 그 계정으로 돌아가야 한다(alias 의 30초가 아니다)."""
+    from app.services.account_credentials import PROFILE_FAILURE_BACKOFF
+
     now = [1000.0]
     sts, calls = _sts(fail_code="AccessDenied")
     prov = _provider(sts, now=lambda: now[0])
-    for _ in range(3):
-        with pytest.raises(Exception):
+    for at in (1000.0, 1000.0, 1000.0 + PROFILE_FAILURE_BACKOFF - 0.1):
+        now[0] = at
+        with pytest.raises(AccountCredentialsUnavailable):
             await prov.get_client(ROLE_PROFILE, "ap-northeast-2", "claude-code-ext")
-    assert len(calls) == 3
+    assert len(calls) == 1
+    now[0] = 1000.0 + PROFILE_FAILURE_BACKOFF
+    with pytest.raises(AccountCredentialsUnavailable):
+        await prov.get_client(ROLE_PROFILE, "ap-northeast-2", "claude-code-ext")
+    assert len(calls) == 2
 
 
 async def test_the_profile_path_shares_credentials_with_an_alias_on_the_same_role():

@@ -172,6 +172,9 @@ class RateLimitResult(BaseModel):
     # 멀티 스코프: 거부 시 어느 스코프에서 걸렸는지 표시
     scope: str | None = None              # 'USER' | 'TEAM' | 'GLOBAL'
     limit_type: str | None = None         # 'rpm' | 'tpm' | 'parallel'
+    # TPM 통과 시 실제로 예약한 (cur, prev, window 키, 버킷 번호) — 스코프마다 하나.
+    # 정산(settle_tpm)은 이것만 조정한다(rate_limit_service.settle_tpm).
+    reserved_keys: tuple[tuple[str, str, str, int], ...] = ()
 
 
 class CostLimitResult(BaseModel):
@@ -183,6 +186,9 @@ class CostLimitResult(BaseModel):
     retry_after: int | None = None
     reserved_cost: Decimal = Decimal("0")
     window_reset: int = 0
+    # 실제로 예약한 (cpm 키, cph 키) — 스코프마다 한 쌍, 키 이름에 창(window_ts)이 들어 있다.
+    # 정산(settle_cost)은 이 키만 조정한다(rate_limit_service.settle_cost).
+    reserved_keys: tuple[tuple[str, str], ...] = ()
 
 
 def split_cached_input(input_total: int, cached_tokens: int) -> tuple[int, int]:

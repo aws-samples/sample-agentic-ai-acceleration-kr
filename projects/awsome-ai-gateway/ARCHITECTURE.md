@@ -187,7 +187,7 @@ client=claude-code → routing_profiles row (backend=invoke, account_role_arn=37
   → invoke_model / invoke-with-response-stream, model id 는 profile.region(ap-ne-2)으로 rewrite
 ```
 
-**859 투명 폴백:** `BedrockAdapter._get_client` 는 `client_resolver`(374 assume+build)가 예외를 던지면 in-account 859 `fallback_client` 로 폴백한다 → **claude-code 는 절대 안 죽는다**(라이브 실증: 374 AccessDenied → 859 200). STS 클라이언트는 `mantle_assume_region`(기본 ap-northeast-2)에서 생성되며 creds 는 account-global 이라 재사용된다. cross-account 클라이언트 BotoConfig 는 in-account 와 동일(`max_pool_connections=50`, `read_timeout=stream_timeout(300s)`, `retries.total_max_attempts=bedrock_max_attempts`).
+**859 투명 폴백:** `BedrockAdapter._get_client` 는 `client_resolver`(374 assume+build)가 예외를 던지면 in-account 859 `fallback_client` 로 폴백한다 → **claude-code 는 절대 안 죽는다**(라이브 실증: 374 AccessDenied → 859 200). STS 클라이언트는 `mantle_assume_region`(기본 ap-northeast-2)에서 생성되며 creds 는 account-global 이라 재사용된다. STS 클라이언트 자신은 connect 3s · read 5s · standard 재시도 총 3회(`bedrock_account_client.STS_BOTO_CONFIG`)라, 응답 없는 STS 에서도 AssumeRole 한 번이 최대 약 27초다(botocore 기본값이면 약 315초). 이 경로(와 runtime·Mantle 의 프로필 경로)는 AssumeRole 실패를 (역할, ExternalId, 세션 이름)마다 5초 기억해(`PROFILE_FAILURE_BACKOFF`) 그 동안 STS 없이 곧바로 859 로 폴백하고, 줄 선 요청이 각자 STS 를 다시 기다리지 않는다. cross-account 클라이언트 BotoConfig 는 in-account 와 동일(`max_pool_connections=50`, `read_timeout=stream_timeout(300s)`, `retries.total_max_attempts=bedrock_max_attempts`).
 
 **즉시 롤백은 무배포:** `0022 downgrade` 가 claude-code 의 `account_role_arn`/`external_id` 를 NULL 로 되돌리면(코드가 `account_role_arn` NULL 이면 in-account adapter 사용), 다음 요청부터 859 in-account 로 복귀한다. 적용 후 Redis `routing_profile:claude-code` 캐시 키(TTL 5분)를 플러시하면 즉시 반영된다.
 
@@ -207,11 +207,11 @@ codex   → routing_profiles (backend=mantle, account_role_arn NULL, external_id
 
 MantleCredentialBroker.bearer_token(profile):
   cross-account(cowork): sts.assume_role(905 role, ExternalId=cowork-bedrock)  [859 gateway IRSA 신뢰]
-                           → temp creds (캐시 ~1h, refresh −300s skew, keyed by role_arn)
+                           → temp creds (캐시 ~1h, refresh −300s skew, keyed by (role_arn, ExternalId, gw-mantle))
   in-account(codex):    _in_account_creds — assume 없이 pod 자체 IRSA creds 직접 사용
   → BedrockTokenGenerator().get_token(creds, region)
       → bearer (캐시 30m, keyed by (cred_key, region), creds 만료 −60s 상한)
-        bearer 는 SigV4 regional-bound 이라 (role, region) 키잉
+        bearer 는 SigV4 regional-bound 이라 ((role, ExternalId, gw-mantle), region) 키잉
 adapter:
   cowork: MantleAdapter  → POST {endpoint}/v1/messages   (Anthropic Messages, model=anthropic.claude-opus-4-8)
   codex:  MantleOpenAIAdapter → POST {endpoint}/v1/responses (OpenAI Responses, GPT-5.5)
@@ -309,8 +309,12 @@ TEAM 미설정 = deny, USER 미설정 = pass. **per-app(client) 예산:** `PER_A
 ```
 INLINE (gateway-proxy, CostRecorder.finalize, ~1–2ms, fail-soft, DB I/O 없음):
   zero-usage guard(release TPM) → calculate_cost(input+output+cache_write[5m|1h]+cache_read)
-  → budget_deduct Lua (user + team, returns threshold_triggered)
-  → settle_cost(CPM/CPH USER+TEAM) → settle_tpm
+  → budget_deduct Lua (user + team, returns threshold_triggered. 차감 EVAL 마다 표지 — 늦은 응답의 재시도도 한 번만 차감)
+  → settle_cost(CPM/CPH — 예약한 스코프만, 스코프별 EVAL. 환불은 예약한 창의 키에서만, 예약한 창이 지난 추가 청구는 지금 창에. 예약마다 한 번만(정산 표지). TTL 없는 키를 만들지 않음)
+  → settle_tpm(예약한 스코프만. 환불은 예약한 버킷에서만 — 한 번 회전했으면 prev, 그보다 오래면 쓰지 않음. 예약한 버킷이 지난 추가분은 지금 버킷의 cur 에. 예약마다 한 번만)
+  (거부된 요청은 정산 상태가 없다 — 뒤 스코프·비용 단계가 거부하면 enforce 가 그 요청의 TPM·비용 예약을
+   그 자리에서 되돌린다. 예약 EVAL 도 예약 id 표지로 한 번만 반영된다 — 응답이 늦어 클라이언트가 다시
+   보낸 같은 EVAL 은 처음 결과를 돌려받고, RPM 은 이미 들어간 요청을 다시 세어 거부하지 않는다)
   → XADD cost:stream {CostStreamEntry(... client ...)}     (실패 시 CostStreamSpool 스풀링)
 
 OFFLOADED (cost-recorder-worker):

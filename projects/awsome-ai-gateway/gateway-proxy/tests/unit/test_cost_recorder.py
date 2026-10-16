@@ -121,6 +121,10 @@ async def test_finalize_zero_usage_only_settles_tpm_ki08(
     mock_redis.eval = AsyncMock(return_value=b'{}')
     mock_redis.xadd = AsyncMock()
 
+    from app.services.lua_loader import LuaScriptLoader
+    from app.services.rate_limit_scope import build_tpm_key_group
+
+    LuaScriptLoader._scripts.setdefault("rate_limit_tpm_settle", "-- mock")
     descriptors = [
         ScopeDescriptor(
             scope=RateLimitScope.USER,
@@ -156,16 +160,23 @@ async def test_finalize_zero_usage_only_settles_tpm_ki08(
         rate_limit_state={
             "tpm_descriptors": descriptors,
             "tpm_reserved": 5000,
+            "tpm_reserved_keys": tuple(
+                (*build_tpm_key_group(d.scope, d.scope_id, d.model_alias), 29_000_000)
+                for d in descriptors
+            ),
         },
     )
 
     assert cost == Decimal("0")
     # TPM settle만 호출 (actual=0, reserved=5000 → -5000 환불, scope 2개).
-    # settle_tpm 은 이제 파이프라인으로 묶어 incrby 한다(deepdive Q50).
+    # 정산은 예약한 스코프마다 rate_limit_tpm_settle EVAL 한 번(파이프라인, deepdive Q50).
     pipe = mock_redis.pipeline.return_value
-    assert pipe.incrby.call_count == 2
-    for call in pipe.incrby.call_args_list:
-        assert call.args[1] == -5000
+    assert pipe.incrby.call_count == 0
+    assert pipe.eval.call_count == 2
+    for call in pipe.eval.call_args_list:
+        # script, 4, cur, prev, window, 정산 표지, 차액, 예약 버킷, TTL, 표지 TTL
+        assert call.args[1] == 4 and call.args[6:8] == ("-5000", "29000000")
+        assert ":tpm-settled:" in call.args[5]
     # budget_deduct Lua / XADD 모두 호출 안 됨
     mock_redis.eval.assert_not_called()
     mock_redis.xadd.assert_not_called()

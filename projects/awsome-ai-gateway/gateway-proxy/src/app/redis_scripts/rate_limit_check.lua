@@ -14,6 +14,13 @@
 -- ARGV[5..(4+N)]          = 스코프별 limit (nil/0 이면 체크 스킵)
 -- ARGV[(5+N)..(4+2N)]     = 스코프별 이름 ('USER'/'TEAM'/'GLOBAL') — 에러 응답용
 --
+-- 같은 요청(같은 request_id)의 EVAL 이 다시 오면 — 응답이 늦어 클라이언트(redis-py,
+-- redis_retries)가 다시 보낸 것 — 그 멤버는 이미 들어 있다. ZADD 는 멤버가 같아 두 번 세지
+-- 않지만(원래 멱등), 예전에는 다시 보낸 EVAL 의 검사가 그 멤버까지 세어 한도에 닿았다고 보고
+-- 거부를 돌려줬다. 받아들여 한 칸을 쓴 요청이 429 를 받았다. 그래서 이 요청의 멤버가 이미 있는
+-- 스코프는 검사하지 않는다(처음 결과 = 통과). request_id 는 게이트웨이가 요청마다 만든 uuid 다
+-- (middleware/otel) — 클라이언트가 고를 수 없다.
+--
 -- Returns JSON:
 --   통과:  {allowed=true, scope=null, remaining=-1, retry_after=null, window_reset=null}
 --   거부:  {allowed=false, scope='USER'|'TEAM'|'GLOBAL', limit=N, remaining=0,
@@ -36,7 +43,8 @@ for i = 1, num_scopes do
         redis.call('ZREMRANGEBYSCORE', key, 0, window_start)
 
         local current = redis.call('ZCARD', key)
-        if current >= limit then
+        local admitted = redis.call('ZSCORE', key, request_id .. ':' .. tostring(i))
+        if not admitted and current >= limit then
             local scope_name = ARGV[4 + num_scopes + i]
 
             -- retry_after 계산 (가장 오래된 entry + window)

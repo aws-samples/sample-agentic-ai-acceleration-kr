@@ -184,7 +184,7 @@ async def test_credentials_refresh_before_hard_expiry():
     await _sign(signer, role_arn=role)
     assert sts.assume_role.call_count == 1
 
-    expires_at = signer._creds[role].expires_at
+    expires_at = signer._creds[(role, "", "gw-bedrock-openai")].expires_at
     # Just inside the skew window: still cached.
     now = expires_at - 301
     await _sign(signer, role_arn=role)

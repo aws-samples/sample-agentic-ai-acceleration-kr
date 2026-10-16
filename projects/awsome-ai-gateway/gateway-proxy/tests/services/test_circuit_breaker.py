@@ -52,7 +52,8 @@ async def test_halfopen_single_flight(fake_redis):
 async def test_record_success_clears_open(fake_redis):
     cb = CircuitBreakerService()
     pmid = "m"
-    await fake_redis.set(f"cb:{pmid}:open", "1")
+    # One hash tag per breaker ({pmid}), so the keys share a slot on Redis Cluster.
+    await fake_redis.set(f"cb:{{{pmid}}}:open", "1")
     result = await cb.record_success(fake_redis, pmid)
     assert result is True  # Lua short-circuits returning 1 when open flag present
-    assert await fake_redis.exists(f"cb:{pmid}:open") == 0
+    assert await fake_redis.exists(f"cb:{{{pmid}}}:open") == 0

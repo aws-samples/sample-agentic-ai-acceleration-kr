@@ -328,8 +328,73 @@ jobs:
         working-directory: ${{ env.PROJECT_DIR }}/gateway-proxy
         run: uv sync --frozen --all-extras --dev
 
+      # 진짜 Redis Cluster(3 primary + 3 replica). 클러스터 변형 테스트(REDIS_CLUSTER_URL)가 skip 되지
+      # 않게 한다 — 단일 노드는 CROSSSLOT 을 원리적으로 일으키지 않아, 스코프마다 EVAL 을 나눈 정산이
+      # 클러스터에서 실제로 맞는지는 클러스터로만 증명된다(deepdive Q50).
+      # ⚠️ 엔진은 prod ElastiCache 와 같은 Valkey 7 이다(deployment/terraform/modules/elasticache-valkey,
+      #    파라미터 그룹 family valkey7).
+      # 노드 6개를 컨테이너 하나에 띄우고 127.0.0.1 로 알린다. 노드끼리는 컨테이너 안에서, 러너의
+      # pytest 는 publish 한 포트로 같은 주소(127.0.0.1:7001-7006)에 닿는다.
+      # 이미지는 digest 로 고정한다 — `7.2` 태그는 패치 릴리스마다 움직여, 같은 커밋의 CI 가 다른
+      # 엔진에서 돌 수 있다. 이 digest 는 2026-10-15 의 `valkey/valkey:7.2`(= 7.2.14) 멀티아키
+      # index 다(linux/amd64 포함). 올릴 때는 `docker buildx imagetools inspect valkey/valkey:7.2`
+      # 의 Digest 로 바꾼다.
+      - name: Start a Valkey 7.2 cluster (3 primaries + 3 replicas)
+        env:
+          CLUSTER_CONTAINER: proof-valkey-cluster
+        run: |
+          set -euo pipefail
+          ports="7001 7002 7003 7004 7005 7006"
+          docker run -d --name "$CLUSTER_CONTAINER" --tmpfs /data \
+            -p 127.0.0.1:7001-7006:7001-7006 \
+            valkey/valkey:7.2@sha256:ef0f9fb533b1f06fb7aba6478d758ca1c077d49e2bcb2b4365a4ea7f50b6d42e \
+            sh -c "
+              for p in $ports; do
+                valkey-server --port \$p --cluster-enabled yes \
+                  --cluster-config-file /data/nodes-\$p.conf --cluster-node-timeout 5000 \
+                  --appendonly no --save '' --dir /data --cluster-announce-ip 127.0.0.1 \
+                  --daemonize yes --logfile /data/\$p.log
+              done
+              exec tail -f /dev/null"
+          for p in $ports; do
+            for i in $(seq 1 50); do
+              if docker exec "$CLUSTER_CONTAINER" valkey-cli -p "$p" ping 2>/dev/null | grep -q PONG; then
+                break
+              fi
+              sleep 0.2
+            done
+          done
+          docker exec "$CLUSTER_CONTAINER" valkey-cli --cluster create \
+            $(for p in $ports; do printf '127.0.0.1:%s ' "$p"; done) \
+            --cluster-replicas 1 --cluster-yes
+          # cluster_state:ok 와 3 primary + 3 replica 를 함께 기다린다. 대조군이기도 하다 — 노드가 덜 떠서
+          # 클러스터가 반쪽이면 "클러스터 증명" 이 아니다. ⚠️ create 직후에는 replica 가 아직 gossip 으로
+          # 퍼지지 않아 cluster nodes 에 primary 6 으로 보인다(실측) — 그래서 한 번 보고 끝내지 않는다.
+          state="" primaries="" replicas=""
+          for i in $(seq 1 60); do
+            state=$(docker exec "$CLUSTER_CONTAINER" valkey-cli -p 7001 cluster info \
+              | tr -d '\r' | grep '^cluster_state:' || true)
+            nodes=$(docker exec "$CLUSTER_CONTAINER" valkey-cli -p 7001 cluster nodes)
+            primaries=$(printf '%s\n' "$nodes" | grep -c 'master' || true)
+            replicas=$(printf '%s\n' "$nodes" | grep -c 'slave' || true)
+            if [ "$state" = "cluster_state:ok" ] && [ "$primaries" = "3" ] && [ "$replicas" = "3" ]; then
+              break
+            fi
+            sleep 1
+          done
+          docker exec "$CLUSTER_CONTAINER" valkey-cli -p 7001 cluster info \
+            | tr -d '\r' | grep -E '^cluster_(state|known_nodes|size):'
+          echo "primaries=${primaries} replicas=${replicas}"
+          if [ "$state" != "cluster_state:ok" ] || [ "$primaries" != "3" ] || [ "$replicas" != "3" ]; then
+            echo "::error::3 primary + 3 replica 클러스터가 되지 않았다 (${state:-<없음>}, primary ${primaries}, replica ${replicas})"
+            exit 1
+          fi
+
       - name: pytest · gateway-proxy (PROOF_DSN)
         working-directory: ${{ env.PROJECT_DIR }}/gateway-proxy
+        env:
+          # 위 스텝의 Valkey 클러스터. 없으면 클러스터 변형이 전부 skip 되고 아래 하한에서 실패한다.
+          REDIS_CLUSTER_URL: redis://127.0.0.1:7001
         run: |
           set -uo pipefail
           uv run pytest -q -p no:cacheprovider \
@@ -340,29 +405,57 @@ jobs:
             tests/regression/test_medium_long_context_tier.py \
             tests/regression/test_critical_stream_disconnect_ledger_gap.py \
             tests/regression/test_high_alias_account_real_db.py \
-            tests/regression/test_medium_websearch_nonstream_reservation_release.py > /tmp/proof3.txt 2>&1
+            tests/regression/test_medium_websearch_nonstream_reservation_release.py \
+            tests/regression/test_medium_cost_settle_reserved_scope.py \
+            tests/regression/test_medium_tpm_settle_reserved_bucket.py \
+            tests/regression/test_medium_reservation_release_on_denial.py \
+            tests/regression/test_medium_model_circuit_breaker.py \
+            tests/integration/test_rate_limit_cluster.py > /tmp/proof3.txt 2>&1
           status=$?
           tail -30 /tmp/proof3.txt
           if [ "$status" -ne 0 ]; then exit "$status"; fi
           passed=$(grep -oE "[0-9]+ passed" /tmp/proof3.txt | tail -1 | grep -oE "[0-9]+" || echo 0)
-          # 로컬 실측 기준선: 117 passed (실 DB 3 + 예약 해제 14 + 예산 정책 16 + 임계값 영속 18
+          # 로컬 실측 기준선: 227 passed, 0 skipped (실 DB 3 + 예약 해제 14 + 예산 정책 16 + 임계값 영속 18
           #   + long-context 티어 27: calculate_cost/tier/감사 16 + 웹서치 턴별 티어 9
           #     + 실 PG 마이그레이션 2
           #   + 스트림 끊김 원장 공백 10: 실 uvicorn 8 + 실 Redis 대사 2
           #   + alias 계정 9: 레지스트리 선택 → 트리거 사본 → 리졸버 → AccountTarget, 모델 id
           #   형제 계정 불일치·비활성 형제·전부 비활성(kill switch)
           #   + 웹서치 예약 정산 20: 첫 턴 alias 계정 실패 6(비스트리밍 출구 3 × 라우트 2)
-          #     + 스트리밍 대조 6(출구 3 × 라우트 2) + 나중 턴 실패 2 + 성공 경로 6).
+          #     + 스트리밍 대조 6(출구 3 × 라우트 2) + 나중 턴 실패 2 + 성공 경로 6)
+          #   + 비용 정산 스코프·창 33: 한도 구성 3(user/team/둘 다) + 한도 없음 1 + 분·시 경계를
+          #     넘긴 정산 1 + 예약한 창이 지난 추가 청구 2(분·시) + 만료된 cpm 키 1 + zero-usage
+          #     환불 2 + 추가 청구 1 + release 1 + 옛 모양의 정산 상태 1 + 옛 정산이 남긴 음수 1
+          #     + 같은 예약의 두 번째 정산은 표지에 막힘 2(부분 환불·차액 0), 각각 단일 노드·클러스터
+          #     = 32, + 클러스터의 CROSSSLOT 거부 1
+          #   + TPM 정산 버킷 34: 같은 버킷 3(부분·zero-usage·추가 청구) + 한 번 회전 1 + 두 번
+          #     회전 1 + 키 만료 1 + 예약한 버킷이 지난 추가분 4(회전·미회전·두 번·만료) + 회전 직후
+          #     거부의 TTL 1 + release 1 + 옛 모양의 상태 1 + fail-open 스코프 1 + 옛 정산이 남긴
+          #     음수 1 + 같은 예약의 두 번째 정산 2(부분 환불·차액 0), 각각 단일 노드·클러스터
+          #   + 거부된 요청의 예약 되돌리기 12: 비용 TEAM 거부 1 + 비용 거부의 TPM 1 + TPM TEAM 거부 1
+          #     + TPM GLOBAL 거부 1 + fail-closed 2(TPM·비용), 각각 단일 노드·클러스터
+          #   + 모델 서킷 브레이커 16: 프로필 X 의 STS 실패가 Y 의 브레이커를 열지 않음 2(비스트리밍·
+          #     스트리밍) + 파드 폴백 없는 native 2 + alias 계정 500 1 + 상류 502 는 연다(대조) 1
+          #     + 열림·half-open 시험 하나·성공하면 닫힘 1 + 배포 중 옛 이름 키와 독립·전부 TTL 1,
+          #     각각 단일 노드·클러스터
+          #   + 클러스터 rate-limit 15: 합친 EVAL 의 CROSSSLOT 재현 + RPM 분리 집행 + TPM·비용 분리 집행
+          #     + 늦은 응답과 클라이언트 재시도에도 한 번만(TPM·비용 예약, TPM·비용 정산 파이프라인, 월
+          #     예산 차감, RPM 은 429 로 바뀌지 않음) 6, 각각 단일 노드·클러스터 = 12 — 운영 설정
+          #     클라이언트가 TCP 프록시를 거친다.
+          #   클러스터 변형 57건은 위 Valkey 클러스터 스텝(REDIS_CLUSTER_URL)이 있어야 돈다 — 그 스텝이
+          #   빠지거나 실패하면 skip 으로 바뀌어 통과 수가 떨어지고 여기서 실패한다.
           #   예약 해제 14 중 4건(비-2xx 스트림 이중 환불: 메커니즘 1 + 라우터 2 + /v1/messages 1)이
           #   실 Redis 를 요구한다.
           # ⚠️ 예약 해제 파일은 REDIS_PROOF_URL 을 요구한다 — 환불은 incrbyfloat 로
           #    카운터를 움직이는 것이라, 가짜 Redis 로는 부호가 반대인 환불도 통과한다.
           #    원장 공백 파일의 대사 2건도 REDIS_PROOF_URL 이 없으면 skip 된다 — "카운터는 맞고
           #    원장만 짧다" 는 같은 실 Redis 에서 차감과 XADD 를 대사해야만 드러난다.
-          #    웹서치 예약 정산 20건도 전부 REDIS_PROOF_URL 이 없으면 skip 된다.
-          #    두 env 중 하나라도 안 걸리면 통과 수가 떨어져 여기서 실패한다.
-          if [ "${passed:-0}" -lt 117 ]; then
-            echo "::error::통과 ${passed} 건(기대 117) — PROOF_DSN/REDIS_PROOF_URL 이 안 걸려 skip 됐다."
+          #    웹서치 예약 정산 20건, 비용 정산·TPM 정산·거부 되돌리기의 단일 노드 변형 39건, 브레이커의
+          #    단일 노드 변형 8건, 늦은 응답 재시도의 단일 노드 변형 6건도 전부 REDIS_PROOF_URL 이 없으면
+          #    skip 된다.
+          #    세 env 중 하나라도 안 걸리면 통과 수가 떨어져 여기서 실패한다.
+          if [ "${passed:-0}" -lt 227 ]; then
+            echo "::error::통과 ${passed} 건(기대 227) — PROOF_DSN/REDIS_PROOF_URL/REDIS_CLUSTER_URL 이 안 걸려 skip 됐다."
             exit 1
           fi
 

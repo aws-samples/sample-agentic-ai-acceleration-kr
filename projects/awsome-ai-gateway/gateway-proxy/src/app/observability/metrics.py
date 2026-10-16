@@ -57,6 +57,23 @@ class GatewayMetrics:
             description="Rate-limit checks that failed open (enforcement skipped on error)",
             unit="1",
         )
+        # 정산 이상(kind = cost | tpm). 둘 다 0 이 정상이다.
+        #  - settle_clamped: 정산 결과가 음수가 될 뻔해 0 으로 둔 횟수 — 이 수정 이전 코드가
+        #    남긴 음수나 축출된 예약의 신호다. 예전에는 이 하한이 이중 환불을 조용히 가렸다.
+        #  - settle_duplicate: 이미 정산된 예약을 다시 정산하려 해 무시한 횟수 — 재시도된 명령이나
+        #    정산 상태 사본의 이중 정산 결함 신호다.
+        self.rl_settle_clamped_total: Counter = meter.create_counter(
+            "gateway_rl_settle_clamped_total",
+            description="Rate-limit settlements clamped at 0 instead of going negative",
+            unit="1",
+        )
+        self.rl_settle_duplicate_total: Counter = meter.create_counter(
+            "gateway_rl_settle_duplicate_total",
+            description=(
+                "Rate-limit settlements ignored because the reservation was already settled"
+            ),
+            unit="1",
+        )
         self.cache_hits_total: Counter = meter.create_counter(
             "gateway_cache_hits_total",
             description="Total Redis cache hits",
