@@ -62,6 +62,14 @@ class Settings(Screen):
             "되돌아가므로 읽기 전용입니다.\n\n" + body,
         )
 
+    def reload_after_destroy(self) -> None:
+        """Refresh reset fields without discarding unrelated unsaved edits."""
+        if not self.is_mounted:
+            return  # First compose will read the updated file.
+        for field in values.load_fields(self.app.env):
+            if field.variable.name in {"server_image", "web_image", "allow_destroy"}:
+                self._inputs[field.variable.name].value = field.value
+
     def on_input_changed(self, event: Input.Changed) -> None:
         name = event.input.id.removeprefix("in-")
         # Validate against the variables captured when the form was built. Re-reading

@@ -36,8 +36,8 @@ def destroy_protection_note(env) -> str:
     )
 
 
-def reset_tfvars_after_destroy(env, write) -> None:
-    """After a successful destroy only: a failed one still needs allow_destroy."""
+def reset_tfvars_after_destroy(env, write) -> bool:
+    """Reset after successful destroy; return whether Settings can reload it."""
     from installer.core import values
     from installer.core.files import WriteRefused
 
@@ -46,15 +46,16 @@ def reset_tfvars_after_destroy(env, write) -> None:
     except (WriteRefused, OSError) as exc:
         write(f"경고: tfvars 를 정리하지 못했습니다 ({exc}). 다음 설치 전에 "
               "server_image·web_image 줄을 지우고 allow_destroy 를 false 로 바꾸십시오.")
-        return
+        return False
     if result is None:
-        return
+        return True
     write("tfvars 정리: server_image·web_image 를 지우고 allow_destroy 를 false 로 "
           "되돌렸습니다 (삭제된 이미지를 가리키지 않고, 다음 설치는 삭제 보호가 켜진 채로).")
     if result.backup:
         write(f"이전 tfvars 백업: {result.backup}")
     if result.warning:
         write(f"경고: {result.warning}")
+    return True
 
 
 class Operations(Screen):
@@ -185,7 +186,8 @@ class Operations(Screen):
             if self.app._running_step == op.id:
                 self.app._running_step = None
         if op.id == "destroy" and result.ok:
-            reset_tfvars_after_destroy(self.app.env, log.write)
+            if reset_tfvars_after_destroy(self.app.env, log.write):
+                self.app.get_screen("settings").reload_after_destroy()
         set_text(self.query_one("#ops-result", Static),
                  format_failure(result) or "완료했습니다.")
         return result
