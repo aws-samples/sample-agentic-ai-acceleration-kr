@@ -14,7 +14,7 @@ from textual.binding import Binding
 from installer.core import env as envmod
 from installer.core import steps as stepsmod
 from installer.core.probe import ProbeOutcome, State
-from installer.core.runner import Command, Result, Runner
+from installer.core.runner import Command, Result, Runner, terminate_on_cancel
 from installer.core.steps import FileWrite
 
 
@@ -23,7 +23,8 @@ class RunnerShell:
 
     Probes are read-only and concurrent, so they spawn their own subprocesses
     rather than routing through the shared Runner (which is designed for
-    sequential step execution with cancellation).
+    sequential step execution with cancellation). Each call still owns its
+    process: a cancelled capture stops it, and only it.
     """
 
     async def capture(self, cmd: Command) -> tuple[int, str]:
@@ -36,12 +37,22 @@ class RunnerShell:
                 env=environ,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
+                # Its own process group, so cancelling reaches terraform's provider
+                # plugins without signalling the installer or sibling probes.
+                start_new_session=True,
             )
         except OSError as exc:
             message = f"실행할 수 없습니다: {cmd.argv[0]} ({exc})"
             return 127, message
 
-        output, _ = await proc.communicate()
+        try:
+            output, _ = await proc.communicate()
+        except asyncio.CancelledError:
+            # Once nothing reads the pipe, a chatty command (`plan -destroy`
+            # lists every resource) blocks on write and never exits — a real one
+            # sat holding the state lock and the destroy behind it failed.
+            await terminate_on_cancel(proc)
+            raise
         exit_code = proc.returncode or 0
         text = output.decode(errors="replace").rstrip("\n")
         return exit_code, text
@@ -72,6 +83,8 @@ class InstallerApp(App):
         self.states: dict[str, State] = {s.id: State.UNKNOWN for s in self.plan.steps}
         self.details: dict[str, str] = {}
         self._running_step: str | None = None
+        # Bumped by every refresh_states; only the newest refresh may write.
+        self._probe_generation = 0
 
     def on_mount(self) -> None:
         from installer.screens.dashboard import Dashboard
@@ -101,7 +114,15 @@ class InstallerApp(App):
             except Exception as exc:  # a probe must never take the app down
                 return step.id, ProbeOutcome(State.UNKNOWN, f"프로브 실패: {exc}")
 
+        self._probe_generation += 1
+        generation = self._probe_generation
         results = await asyncio.gather(*(one(s) for s in self.plan.steps))
+        # Refreshes overlap (dashboard mount, a settings save, `r`, the re-probe
+        # after a step), and the probe plans run without the state lock. One
+        # started before a destroy could finish after the post-destroy refresh
+        # and paint the pre-destroy state back; the newer refresh's answer wins.
+        if generation != self._probe_generation:
+            return self.states
         for step_id, outcome in results:
             self.states[step_id] = outcome.state
             self.details[step_id] = outcome.detail

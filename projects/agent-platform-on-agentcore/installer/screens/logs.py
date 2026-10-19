@@ -53,6 +53,7 @@ class LogScreen(Screen):
     def __init__(self, step_id: str) -> None:
         super().__init__()
         self.step_id = step_id
+        self._executing = False
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -73,7 +74,11 @@ class LogScreen(Screen):
         self.run_worker(self._run(log), exclusive=True)
 
     async def _run(self, log: RichLog) -> None:
-        result = await self.app.run_step(self.step_id, on_line=log.write)
+        self._executing = True
+        try:
+            result = await self.app.run_step(self.step_id, on_line=log.write)
+        finally:
+            self._executing = False
 
         if result.ok:
             set_text(self.query_one("#result", Static), "완료. 상태를 다시 점검합니다…")
@@ -109,4 +114,12 @@ class LogScreen(Screen):
         await self.app.cancel_current()
 
     def action_back(self) -> None:
+        # Leaving removes this screen and cancels its worker, which now stops the
+        # command — Escape mid-apply would abort it. Cancelling is Ctrl+C's job.
+        # Only this screen's own run counts: one refused because another step
+        # was running must not trap the user here.
+        if self._executing:
+            self.notify("실행 중입니다. 중단하려면 Ctrl+C 로 취소한 뒤 돌아가십시오.",
+                        severity="warning")
+            return
         self.app.pop_screen()

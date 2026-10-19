@@ -288,9 +288,13 @@ async def first_apply_done(env: Env, sh: Shell) -> ProbeOutcome:
     # images). Without them the plan always wants desired_count 0 -> 1 and, after
     # the images step, a new task definition — so a finished first apply read
     # 대기 forever on a real run.
+    #
+    # -lock=false: this plan is only read, never applied, and with the lock it
+    # held the state for tens of seconds — a destroy started meanwhile failed
+    # with "Error acquiring the state lock".
     plan_code, plan_out = await sh.capture(
-        _tf(env, "plan", "-detailed-exitcode", "-input=false", "-no-color",
-            *_first_apply_vars(env))
+        _tf(env, "plan", "-detailed-exitcode", "-input=false", "-lock=false",
+            "-no-color", *_first_apply_vars(env))
     )
     # -detailed-exitcode: 0 = no changes, 2 = changes pending, 1 = plan error.
     if plan_code == 2:

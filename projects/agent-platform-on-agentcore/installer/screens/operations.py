@@ -54,6 +54,10 @@ class Operations(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
+        # True from Enter until the command ends: preview, confirmation and the
+        # command itself. Not the re-probe after it — Enter may start the next.
+        self._busy = False
+        self._worker = None
         table = self.query_one("#ops", DataTable)
         table.add_columns("작업", "비고")
         self._ops = stepsmod.operations(self.app.env)
@@ -68,22 +72,37 @@ class Operations(Screen):
         NoActiveWorker unless it is awaited inside one, and a key binding is not a
         worker — so calling the async handler directly crashed every destructive
         operation. Verified on a real run before this wrapper existed.
+
+        A second Enter is refused here, before a worker exists. This used to be
+        `exclusive=True` with the busy check inside the worker — too late: the
+        new worker cancelled the running one first, so Enter again during a
+        destroy abandoned it (or, now that cancelling stops the process, would
+        abort it).
         """
-        self.run_worker(self._run_selected(), exclusive=True)
+        if self._busy or self.app.is_running:
+            what = self.app._running_step or "이전 작업의 미리보기/확인"
+            set_text(self.query_one("#ops-result", Static),
+                     f"다른 단계가 실행 중입니다: {what}")
+            return
+        table = self.query_one("#ops", DataTable)
+        self._busy = True
+        self._worker = self.run_worker(self._run_selected(self._ops[table.cursor_row]))
 
     def on_data_table_row_selected(self, _event) -> None:
         # Same shadowing as the dashboard: the focused DataTable consumes Enter
         # and emits RowSelected instead of letting the screen binding fire.
         self.action_run_selected()
 
-    async def _run_selected(self) -> None:
-        if self.app.is_running:
-            set_text(self.query_one("#ops-result", Static),
-                     f"다른 단계가 실행 중입니다: {self.app._running_step}")
-            return
+    async def _run_selected(self, op) -> None:
+        try:
+            result = await self._execute(op)
+        finally:
+            self._busy = False
+        if result is not None:
+            await self.app.refresh_states()
 
-        table = self.query_one("#ops", DataTable)
-        op = self._ops[table.cursor_row]
+    async def _execute(self, op):
+        """Preview, confirm and run op. The Result, or None if nothing ran."""
         log = self.query_one("#ops-output", RichLog)
         # The previous operation's verdict ("완료했습니다.") stayed on screen
         # under a running destroy; clear it so the footer line reflects this run.
@@ -94,10 +113,14 @@ class Operations(Screen):
             if op.id == "destroy":
                 # Always show the blast radius, dry-run included: `plan -destroy`
                 # is read-only, and the preview is the whole point of asking.
+                # -lock=false: nothing applies this plan, and holding the lock
+                # here is what failed the destroy it was previewing.
                 plan = Command(
                     argv=("terraform", f"-chdir={self.app.env.tf_dir}",
-                          "plan", "-destroy", "-no-color")
+                          "plan", "-destroy", "-lock=false", "-no-color")
                 )
+                set_text(self.query_one("#ops-result", Static),
+                         "삭제 계획을 확인하고 있습니다… (Ctrl+C 로 취소)")
                 code, out = await self.app.shell.capture(plan)
                 summary = [line for line in out.splitlines() if "Plan:" in line]
                 extra = summary[0] if summary else "삭제 계획을 읽을 수 없었습니다."
@@ -124,6 +147,13 @@ class Operations(Screen):
             log.write(f"[dry-run] {op.action.display()}")
             return
 
+        # The preview and the confirmation take a while, and a dashboard step can
+        # start meanwhile; never run two commands at once.
+        if self.app.is_running:
+            set_text(self.query_one("#ops-result", Static),
+                     f"다른 단계가 실행 중입니다: {self.app._running_step}")
+            return
+
         # Mark the app busy for the duration so `q` cancels instead of quitting
         # (leaving the tail/apply process behind), same as dashboard steps.
         self.app._running_step = op.id
@@ -134,10 +164,18 @@ class Operations(Screen):
                 self.app._running_step = None
         set_text(self.query_one("#ops-result", Static),
                  format_failure(result) or "완료했습니다.")
-        await self.app.refresh_states()
+        return result
 
     async def action_cancel(self) -> None:
-        await self.app.cancel_current()
+        if self.app.is_running:
+            await self.app.cancel_current()
+        elif self._busy and self._worker is not None:
+            # Still in the destroy preview: runner.cancel() has no process to
+            # stop yet, so cancel the worker — capture() then stops the plan.
+            # The message is set here, not in the worker: a worker cancelled by
+            # the app exiting finds its widgets already gone.
+            self._worker.cancel()
+            set_text(self.query_one("#ops-result", Static), "취소했습니다.")
 
     def action_back(self) -> None:
         self.app.pop_screen()

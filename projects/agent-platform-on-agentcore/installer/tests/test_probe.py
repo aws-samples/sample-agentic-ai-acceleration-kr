@@ -541,3 +541,15 @@ def test_transaction_search_pending_shows_the_full_cli_recipe():
     assert "put-resource-policy" in out.detail
     assert "update-trace-segment-destination" in out.detail
     assert "--region" in out.detail
+
+
+def test_first_apply_plan_does_not_take_the_state_lock():
+    """The plan is only read. With the lock it held the state for tens of
+    seconds and a destroy started meanwhile failed to acquire it."""
+    sh = FakeShell({
+        "output": (0, '{"server":"123.dkr.ecr.us-east-1.amazonaws.com/x/server"}'),
+        "plan": (0, "No changes."),
+    })
+    run(probe.first_apply_done(ENV, sh))
+    plans = [line for line in sh.calls if " plan " in line]
+    assert plans and all("-lock=false" in line for line in plans)

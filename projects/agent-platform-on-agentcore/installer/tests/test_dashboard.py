@@ -241,3 +241,127 @@ async def test_escape_closes_the_destroy_confirmation_as_cancel():
         await pilot.pause()
         assert not isinstance(app.screen, ConfirmScreen)
         assert "취소" in str(app.screen.query_one("#ops-result").render())
+
+
+class _HangingRunner:
+    """A command that runs until cancelled, counting how many were started."""
+
+    def __init__(self):
+        import asyncio
+
+        self.started = 0
+        self.cancelled = False
+        self._ev = asyncio.Event()
+
+    async def run(self, cmd, step_id, on_line):
+        from installer.core.runner import Result
+
+        self.started += 1
+        on_line("running…")
+        await self._ev.wait()
+        return Result(exit_code=130, cancelled=True, log_path=None, tail=())
+
+    async def cancel(self):
+        self.cancelled = True
+        self._ev.set()
+
+
+@pytest.mark.asyncio
+async def test_second_enter_on_operations_does_not_cancel_the_running_one():
+    """`exclusive=True` cancelled the running worker before the busy check ran,
+    so Enter again during a destroy abandoned it — now it would abort it."""
+    import asyncio
+
+    app = _app({})
+    app.dry_run = False
+    runner = _HangingRunner()
+    app.runner = runner
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("o")
+        await pilot.pause()
+        await pilot.press("down", "down", "enter")   # 서버 로그 tail
+        await asyncio.sleep(0.3)
+        assert app.is_running
+        await pilot.press("enter")
+        await asyncio.sleep(0.3)
+        assert runner.started == 1, "a second Enter must not start another run"
+        assert not runner.cancelled, "a second Enter must not cancel the running one"
+        assert app.is_running
+        assert "실행 중" in str(app.screen.query_one("#ops-result").render())
+        await pilot.press("ctrl+c")
+        await asyncio.sleep(0.3)
+        assert app.is_running is False
+
+
+@pytest.mark.asyncio
+async def test_ctrl_c_during_the_destroy_preview_stops_the_plan():
+    """runner.cancel() has nothing to stop during the preview; the preview
+    itself must be cancelled, and Enter must work again afterwards."""
+    import asyncio
+
+    from installer.screens.confirm import ConfirmScreen
+
+    class HangingShell:
+        def __init__(self):
+            self.commands = []
+            self.cancelled = False
+
+        async def capture(self, cmd):
+            self.commands.append(cmd.display())
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.cancelled = True
+                raise
+
+    app = _app({})
+    shell = HangingShell()
+    app.shell = shell
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("o")
+        await pilot.pause()
+        await pilot.press("down", "down", "down", "down", "enter")   # destroy
+        await asyncio.sleep(0.3)
+        assert shell.commands and "-lock=false" in shell.commands[0], \
+            "the preview must not take the state lock"
+        await pilot.press("enter")                   # refused, not restarted
+        await asyncio.sleep(0.2)
+        assert len(shell.commands) == 1 and not shell.cancelled
+        await pilot.press("ctrl+c")
+        await asyncio.sleep(0.3)
+        assert shell.cancelled, "Ctrl+C must stop the preview plan"
+        assert not isinstance(app.screen, ConfirmScreen)
+        assert "취소" in str(app.screen.query_one("#ops-result").render())
+        await pilot.press("enter")
+        await asyncio.sleep(0.3)
+        assert len(shell.commands) == 2, "Enter must work again after cancelling"
+
+
+@pytest.mark.asyncio
+async def test_escape_on_a_running_log_screen_keeps_the_step_running():
+    """Closing the log screen cancels its worker, and a cancelled worker now
+    stops its command — Escape must not become a way to abort an apply."""
+    import asyncio
+
+    from installer.screens.logs import LogScreen
+
+    app = _app({"preflight": State.DONE})
+    app.dry_run = False
+    runner = _HangingRunner()
+    app.runner = runner
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("down", "enter")           # bootstrap, a Command step
+        await asyncio.sleep(0.3)
+        assert isinstance(app.screen, LogScreen)
+        await pilot.press("escape")
+        await asyncio.sleep(0.2)
+        assert isinstance(app.screen, LogScreen), "Escape must not leave a running step"
+        assert app.is_running and not runner.cancelled
+        await pilot.press("ctrl+c")
+        await asyncio.sleep(0.3)
+        await pilot.press("escape")
+        await asyncio.sleep(0.2)
+        assert not isinstance(app.screen, LogScreen), "Escape works once it has ended"
