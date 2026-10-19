@@ -152,23 +152,27 @@ call PutLogEvents on the aws/spans Log Group` 오류가 납니다. 콘솔에서 
 REGION=ap-northeast-1
 ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
 
-# 1) 로그 리소스 정책
-aws logs put-resource-policy --region $REGION --policy-name TransactionSearchXRayAccess \
+# 1) 로그 리소스 정책. 변수는 ${ACCOUNT} 처럼 중괄호로 씁니다. zsh 는 $ACCOUNT:log-group 의
+#    ":l" 을 소문자 변환 수식어로 읽어 ARN 이 "...og-group:aws/spans" 로 깨지고, 그 정책으로는
+#    2) 가 "XRay does not have permission to call PutLogEvents" 로 거부됩니다 (bash 에서는 안 남).
+aws logs put-resource-policy --region "${REGION}" --policy-name TransactionSearchXRayAccess \
   --policy-document "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"TransactionSearchXRayAccess\",
     \"Effect\":\"Allow\",\"Principal\":{\"Service\":\"xray.amazonaws.com\"},\"Action\":\"logs:PutLogEvents\",
-    \"Resource\":[\"arn:aws:logs:$REGION:$ACCOUNT:log-group:aws/spans:*\",
-                 \"arn:aws:logs:$REGION:$ACCOUNT:log-group:/aws/application-signals/data:*\"],
-    \"Condition\":{\"ArnLike\":{\"aws:SourceArn\":\"arn:aws:xray:$REGION:$ACCOUNT:*\"},
-                  \"StringEquals\":{\"aws:SourceAccount\":\"$ACCOUNT\"}}}]}"
+    \"Resource\":[\"arn:aws:logs:${REGION}:${ACCOUNT}:log-group:aws/spans:*\",
+                 \"arn:aws:logs:${REGION}:${ACCOUNT}:log-group:/aws/application-signals/data:*\"],
+    \"Condition\":{\"ArnLike\":{\"aws:SourceArn\":\"arn:aws:xray:${REGION}:${ACCOUNT}:*\"},
+                  \"StringEquals\":{\"aws:SourceAccount\":\"${ACCOUNT}\"}}}]}"
+sleep 10   # 정책 전파 전에 2) 를 실행하면 같은 권한 오류가 납니다
 
 # 2) 스팬 목적지와 샘플링 비율
-aws xray update-trace-segment-destination --destination CloudWatchLogs --region $REGION
-aws xray update-indexing-rule --name Default --region $REGION \
+aws xray update-trace-segment-destination --destination CloudWatchLogs --region "${REGION}"
+aws xray update-indexing-rule --name Default --region "${REGION}" \
   --rule '{"Probabilistic":{"DesiredSamplingPercentage":10}}'
 ```
 
-다른 터미널에서 실행한 뒤 `r` 을 누르면 `완료` 로 바뀝니다. 목적지 변경이 반영되는 데 1~2분
-걸리며, 그동안은 비고에 `활성화 중입니다 (Status: PENDING)` 이 표시됩니다. 이 단계는 다른
+다른 터미널에서 실행한 뒤 `r` 을 누르면 `완료` 로 바뀝니다. 완료 판정은 목적지가 `CloudWatchLogs`
+이고 Status 가 `ACTIVE` 일 때입니다(`XRay` 는 기본값, 즉 꺼진 상태). 목적지 변경이 반영되는 데
+5분 안팎 걸리며, 그동안은 비고에 `활성화 중입니다 (Status: PENDING)` 이 표시됩니다. 이 단계는 다른
 단계의 선행 조건이 아니므로 나중에 해도 배포는 그대로 진행되며, 켜지 않으면 Trace 패널만
 비어 있게 됩니다.
 
