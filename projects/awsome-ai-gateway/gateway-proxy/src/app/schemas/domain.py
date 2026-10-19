@@ -31,8 +31,8 @@ class Role(str, Enum):
 class ProviderType(str, Enum):
     BEDROCK = "BEDROCK"
     OPENMODEL = "OPENMODEL"
-    BEDROCK_MANTLE = "BEDROCK_MANTLE"  # Cowork → 905 Bedrock Mantle (Tokyo Opus 4.8)
-    BEDROCK_MANTLE_OPENAI = "BEDROCK_MANTLE_OPENAI"  # Codex → 859 Bedrock Mantle GPT-5.5 (Ohio, Responses API)
+    BEDROCK_MANTLE = "BEDROCK_MANTLE"  # Cowork → cross-account Bedrock Mantle (Tokyo Opus 4.8)
+    BEDROCK_MANTLE_OPENAI = "BEDROCK_MANTLE_OPENAI"  # Codex → in-account Bedrock Mantle GPT-5.5/5.6 (Ohio, Responses API)
     # GPT-5.6 on the STANDARD Bedrock runtime plane (bedrock-runtime.{region}.amazonaws.com),
     # SigV4-signed, addressed through a cross-region inference profile (CRIS: us./global.
     # prefixed model id). Same OpenAI wires as BEDROCK_MANTLE_OPENAI (/v1/responses and
