@@ -4,10 +4,11 @@ from __future__ import annotations
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.screen import Screen
-from textual.widgets import Button, Footer, Header, Input, Label, Static, TabbedContent, TabPane
+from textual.widgets import Button, Header, Input, Label, Static, TabbedContent, TabPane
 
 from installer.core import values
 from installer.screens.safetext import set_text
+from installer.screens.footer import InstallerFooter
 
 
 class Settings(Screen):
@@ -30,7 +31,7 @@ class Settings(Screen):
                 yield VerticalScroll(Static(id="derived-body"))
         yield Static(id="save-status")
         yield Button("저장 (Ctrl+S)", id="save", variant="primary")
-        yield Footer()
+        yield InstallerFooter()
 
     def _pane(self, fields, tab: str):
         with VerticalScroll():

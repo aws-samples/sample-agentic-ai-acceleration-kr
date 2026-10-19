@@ -5,6 +5,7 @@ from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.screen import ModalScreen
 from installer.screens.safetext import set_text
+from installer.screens.footer import InstallerFooter
 from textual.widgets import Button, Input, Label, Static
 
 
@@ -34,6 +35,8 @@ class ConfirmScreen(ModalScreen[bool]):
             yield Static("", id="confirm-error")
             yield Button("실행", id="go", variant="error")
             yield Button("취소", id="cancel")
+
+        yield InstallerFooter()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "cancel":

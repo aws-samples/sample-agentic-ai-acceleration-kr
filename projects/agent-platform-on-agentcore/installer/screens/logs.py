@@ -4,12 +4,13 @@ from __future__ import annotations
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.screen import Screen
-from textual.widgets import Footer, Header, RichLog, Static
+from textual.widgets import Header, RichLog, Static
 
 from installer.core import diagnose
 from installer.core.probe import State
 from installer.core.runner import Result
 from installer.screens.safetext import set_text
+from installer.screens.footer import InstallerFooter
 
 _SECRET_NOTICE = (
     "이 로그에는 민감한 값이 포함될 수 있습니다 (terraform 출력에 tfvars 값이 "
@@ -60,7 +61,7 @@ class LogScreen(Screen):
             yield Static(_SECRET_NOTICE, id="warning")
             yield RichLog(id="output", highlight=False, markup=False, wrap=True)
             yield Static(id="result")
-        yield Footer()
+        yield InstallerFooter()
 
     def on_mount(self) -> None:
         log = self.query_one("#output", RichLog)

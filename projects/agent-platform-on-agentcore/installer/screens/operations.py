@@ -4,7 +4,7 @@ from __future__ import annotations
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.screen import Screen
-from textual.widgets import DataTable, Footer, Header, RichLog, Static
+from textual.widgets import DataTable, Header, RichLog, Static
 
 from installer.core import steps as stepsmod
 from installer.core.env import resolve_project
@@ -13,6 +13,7 @@ from installer.core.steps import FileWrite
 from installer.screens.confirm import ConfirmScreen
 from installer.screens.logs import format_failure
 from installer.screens.safetext import set_text
+from installer.screens.footer import InstallerFooter
 
 
 def destroy_protection_note(env) -> str:
@@ -51,7 +52,7 @@ class Operations(Screen):
             yield DataTable(id="ops", cursor_type="row")
             yield RichLog(id="ops-output", highlight=False, markup=False, wrap=True)
             yield Static(id="ops-result")
-        yield Footer()
+        yield InstallerFooter()
 
     def on_mount(self) -> None:
         table = self.query_one("#ops", DataTable)
