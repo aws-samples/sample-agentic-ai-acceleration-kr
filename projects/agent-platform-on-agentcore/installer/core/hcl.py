@@ -188,6 +188,16 @@ def set_var(text: str, key: str, rendered: str) -> str:
     return f"{text}{separator}{key} = {rendered}\n"
 
 
+def remove_var(text: str, key: str) -> str:
+    """Drop `key`'s single-line assignment, so the variable's default applies.
+
+    Not the same as setting it to "": terraform takes an empty string as a value,
+    and an empty image fails the apply (RegisterTaskDefinition: "Container.image
+    should not be null or empty") where an absent one falls back to the default.
+    """
+    return re.sub(rf"^[ \t]*{re.escape(key)}[ \t]*=.*(?:\n|\Z)", "", text, flags=re.M)
+
+
 def read_values(text: str) -> dict[str, str]:
     """Return {key: raw literal} for uncommented assignments."""
     out: dict[str, str] = {}

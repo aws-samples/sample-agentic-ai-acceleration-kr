@@ -84,12 +84,22 @@ variable "server_image" {
   EOT
   type        = string
   default     = "public.ecr.aws/docker/library/busybox:latest"
+  # `server_image = ""` is a value, not "unset": it passed plan and failed the
+  # apply at RegisterTaskDefinition. Remove the line to get the placeholder.
+  validation {
+    condition     = trimspace(var.server_image) != ""
+    error_message = "server_image is empty. Remove the line from terraform.tfvars to use the placeholder, or set a full image URI."
+  }
 }
 
 variable "web_image" {
   description = "Full ECR image URI for web, with tag. See `server_image` for why it starts as a placeholder."
   type        = string
   default     = "public.ecr.aws/docker/library/busybox:latest"
+  validation {
+    condition     = trimspace(var.web_image) != ""
+    error_message = "web_image is empty. Remove the line from terraform.tfvars to use the placeholder, or set a full image URI."
+  }
 }
 
 variable "agent_runtime_arn" {

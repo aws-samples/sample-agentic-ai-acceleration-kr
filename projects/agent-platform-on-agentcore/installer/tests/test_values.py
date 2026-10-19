@@ -136,3 +136,38 @@ def test_map_input_must_be_hcl_or_pairs():
     assert values.validate(var, "{}") is None
     assert values.validate(var, "a = b, c = d") is None
     assert values.validate(var, "just-a-string") is not None
+
+
+def _tfvars(tmp_path, monkeypatch, text):
+    from installer.core import files
+
+    path = tmp_path / "terraform.tfvars"
+    path.write_text(text)
+    monkeypatch.setattr(values, "_tfvars_path", lambda e: path)
+    monkeypatch.setattr(files, "is_git_ignored", lambda p: True)   # tmp_path is not in git
+    return path
+
+
+def test_reset_after_destroy_drops_images_and_restores_deletion_protection(
+    tmp_path, monkeypatch
+):
+    """The images name ECR repositories the destroy deleted; left in place, the
+    next first apply used them (and an emptied one fails the apply). And
+    allow_destroy = true would create the next install's tables unprotected."""
+    path = _tfvars(tmp_path, monkeypatch, (
+        'project = "bap"\n'
+        'server_image = "acct.dkr.ecr/bap/server:v1"\n'
+        'web_image = ""\n'
+        'allow_destroy = true\n'
+    ))
+    result = values.reset_after_destroy(ENV)
+    assert path.read_text() == 'project = "bap"\nallow_destroy = false\n'
+    assert result is not None and result.backup is not None
+    assert "bap/server:v1" in result.backup.read_text(), "the old values stay recoverable"
+    assert values.reset_after_destroy(ENV) is None, "a second run changes nothing"
+
+
+def test_reset_after_destroy_does_not_add_allow_destroy(tmp_path, monkeypatch):
+    path = _tfvars(tmp_path, monkeypatch, 'project = "bap"\n')
+    assert values.reset_after_destroy(ENV) is None
+    assert path.read_text() == 'project = "bap"\n'

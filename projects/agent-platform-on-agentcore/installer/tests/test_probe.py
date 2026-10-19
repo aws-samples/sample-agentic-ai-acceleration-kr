@@ -553,3 +553,27 @@ def test_first_apply_plan_does_not_take_the_state_lock():
     run(probe.first_apply_done(ENV, sh))
     plans = [line for line in sh.calls if " plan " in line]
     assert plans and all("-lock=false" in line for line in plans)
+
+
+def test_first_apply_step_applies_exactly_what_its_probe_plans():
+    """The two used to diverge: the step took the images from tfvars, the probe
+    planned placeholders. With the previous deployment's URIs still in tfvars,
+    every successful first apply read 대기 (2 to add, 2 to change, 2 to destroy)
+    and the images step stayed blocked."""
+    import shlex
+
+    from installer.core import steps as stepsmod
+
+    sh = FakeShell({
+        "output": (0, '{"server":"x"}'),
+        "plan": (0, "No changes."),
+    })
+    run(probe.first_apply_done(ENV, sh))
+    plan_call = next(c for c in sh.calls if " plan " in c)
+
+    argv = stepsmod.build_plan(ENV).by_id("first_apply").action.argv
+    flags = argv[argv.index("-auto-approve") + 1:]
+    assert flags == probe.first_apply_vars(ENV)
+    assert " ".join(shlex.quote(a) for a in flags) in plan_call
+    assert any(a.startswith("server_image=public.ecr.aws") for a in flags), \
+        "the first apply must not take the images from tfvars"

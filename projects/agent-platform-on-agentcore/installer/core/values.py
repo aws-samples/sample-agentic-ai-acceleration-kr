@@ -142,6 +142,29 @@ def save(env: Env, edits: dict[str, str]) -> files.WriteResult:
     return files.set_keys(_tfvars_path(env), updates, style="hcl")
 
 
+def reset_after_destroy(env: Env) -> files.WriteResult | None:
+    """Clear what a finished destroy left stale in tfvars. None if nothing was.
+
+    - server_image / web_image are removed, not emptied: they name images in ECR
+      repositories the destroy deleted. Left in place, the next install's first
+      apply used them, and an emptied value fails the apply outright.
+    - allow_destroy goes back to false, or the next install would create its
+      tables without deletion protection.
+    """
+    path = _tfvars_path(env)
+    if not path.is_file():
+        return None
+    before = path.read_text()
+    text = before
+    for name in ("server_image", "web_image"):
+        text = hcl.remove_var(text, name)
+    if "allow_destroy" in hcl.read_values(text):
+        text = hcl.set_var(text, "allow_destroy", hcl.render_value(False, "bool"))
+    if text == before:
+        return None
+    return files.write_secret_file(path, text)
+
+
 async def derived(env: Env, sh) -> dict[str, str]:
     """Read every Terraform output the .env files are built from."""
     code, out = await sh.capture(

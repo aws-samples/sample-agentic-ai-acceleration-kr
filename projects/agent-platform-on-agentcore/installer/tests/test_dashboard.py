@@ -365,3 +365,50 @@ async def test_escape_on_a_running_log_screen_keeps_the_step_running():
         await pilot.press("escape")
         await asyncio.sleep(0.2)
         assert not isinstance(app.screen, LogScreen), "Escape works once it has ended"
+
+
+async def _run_destroy(app, pilot):
+    import asyncio
+
+    from installer.screens.confirm import ConfirmScreen
+
+    await pilot.pause()
+    await pilot.press("o")
+    await pilot.pause()
+    await pilot.press("down", "down", "down", "down", "enter")   # destroy
+    for _ in range(20):
+        await pilot.pause(0.1)
+        if isinstance(app.screen, ConfirmScreen):
+            break
+    app.screen.query_one("#typed").value = app.screen.expected
+    await pilot.press("enter")
+    await asyncio.sleep(0.3)
+
+
+@pytest.mark.parametrize("exit_code, resets", [(0, True), (1, False)])
+@pytest.mark.asyncio
+async def test_only_a_successful_destroy_resets_tfvars(monkeypatch, exit_code, resets):
+    """A failed destroy is retried, and still needs allow_destroy = true."""
+    from installer.core import values
+    from installer.core.runner import Result
+
+    class PlanShell:
+        async def capture(self, cmd):
+            return 0, "Plan: 0 to add, 0 to change, 7 to destroy."
+
+    class DestroyRunner:
+        async def run(self, cmd, step_id, on_line):
+            return Result(exit_code=exit_code, cancelled=False, log_path=None, tail=())
+
+        async def cancel(self):
+            pass
+
+    calls = []
+    monkeypatch.setattr(values, "reset_after_destroy", lambda env: calls.append(env))
+    app = _app({})
+    app.dry_run = False
+    app.shell = PlanShell()
+    app.runner = DestroyRunner()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await _run_destroy(app, pilot)
+    assert bool(calls) is resets
