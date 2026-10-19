@@ -6,7 +6,7 @@
 
 > 사내 코딩 에이전트를 위한 통합 LLM 게이트웨이 (관리 콘솔 브랜드: **AWSome AI Gateway**)
 
-사내 코딩 에이전트(Claude Code / Codex / Cowork) 사용자를 위한 통합 LLM 게이트웨이. OIDC 인증 기반으로 Virtual Key를 자동 발급하고, 클라이언트별로 알맞은 백엔드(AWS Bedrock native / Bedrock Mantle)로 요청을 프록시합니다. 팀/사용자/앱(client)별 예산 관리, Rate Limit, 모델 접근 제어, 사용량 추적(ROI), 서버사이드 웹서치, 그리고 자연어로 운영 데이터를 질의하는 **AI BI 어시스턴트(admin-chat-agent)**를 제공합니다.
+사내 코딩 에이전트(Claude Code / Codex / Cowork) 사용자를 위한 통합 LLM 게이트웨이. OIDC 인증 기반으로 Virtual Key를 자동 발급하고, 클라이언트·모델별로 알맞은 백엔드(Bedrock native / Bedrock Mantle / bedrock-runtime OpenAI 호환)와 AWS 계정으로 요청을 프록시합니다. 팀/사용자/앱(client)별 예산 관리, Rate Limit, 모델 접근 제어, 사용량 추적(ROI), 서버사이드 웹서치, 그리고 자연어로 운영 데이터를 질의하는 **AI BI 어시스턴트(admin-chat-agent)**를 제공합니다.
 
 ---
 
@@ -16,9 +16,11 @@
 
 인증·과금·거버넌스는 단일 게이트웨이에서 처리하되, 요청은 클라이언트(client) 종류에 따라 서로 다른 계정·백엔드로 분기합니다. 게이트웨이의 백엔드 라우팅은 코드가 아니라 `model.routing_profiles` 테이블 row로 데이터 드리븐하게 결정되며(`RoutingProfileLoader`가 Redis TTL 300s 캐시), 미등록/disabled인 client는 기본 Bedrock 경로로 폴백합니다.
 
-> 위 다이어그램: Seoul 리전 EKS Fargate에서 게이트웨이 전 서비스가 돌고, 요청은 3개 AWS 계정의
-> Bedrock으로 분기(Claude Code / Cowork / Codex). AgentCore(Runtime + WebSearch Gateway), Cognito(SSO),
-> CloudWatch/CloudTrail/KMS가 함께 구성됩니다. 아래는 데이터플레인 상세(텍스트 다이어그램):
+> 위 다이어그램: Seoul 리전 EKS Fargate에서 게이트웨이 전 서비스가 돌고, 요청은 앱(또는 모델)별 AWS 계정의
+> Bedrock으로 분기됩니다(Claude Code / Cowork / Codex). 요청별 사용량(토큰·비용)은 Cost Management 워커가
+> Aurora에 기록하고, Bedrock 모델 호출 로그(프롬프트·응답 본문)는 **선택 기능**으로 켜면 CloudWatch Logs에,
+> 큰 본문은 S3에 저장되며 Admin API 감사 API(`/admin/audit/invocation-log/*`)로 대조·조회합니다. AgentCore(Runtime + WebSearch Gateway),
+> IAM Identity Center/Cognito(SSO), CloudWatch/CloudTrail/KMS가 함께 구성됩니다. 아래는 데이터플레인 상세:
 
 ```
 [Claude Code]  [Codex]  [Cowork]
@@ -33,14 +35,15 @@
           ┌───────────────────┼───────────────────────────────┐
           ▼                    ▼                               ▼
    claude-code               codex                          cowork
-   Bedrock NATIVE            Bedrock Mantle                 Bedrock Mantle
-   (boto3 invoke_model)      (OpenAI Responses API)         (Anthropic Messages)
-   계정 333344445555          계정 859 in-account             계정 222233334444
+   Bedrock NATIVE            Bedrock Mantle (기본) /         Bedrock Mantle
+   (boto3 invoke_model)      bedrock-runtime OpenAI 호환     (Anthropic Messages)
+                             (OpenAI Responses / Chat)
+   계정 333344445555          게이트웨이 계정(in-account)      계정 222233334444
    (ap-northeast-2)          (us-east-2, 오하이오)           (ap-northeast-1, 도쿄)
-   STS AssumeRole(374 role)  assume 없음 — pod IRSA 직접      STS AssumeRole(905 role)
-   ExternalId=claude-code-…  Mantle GPT-5.5                 ExternalId=cowork-…
-   실패 시 859 in-account     bearer(BedrockTokenGenerator)   Opus 4.8 (cowork-opus)
-   투명 폴백(절대 안 죽음)     httpx AsyncClient               httpx AsyncClient
+   STS AssumeRole            assume 없음 — pod IRSA 직접      STS AssumeRole
+   ExternalId=claude-code-…  GPT-5.6 Terra 기본(0028)        ExternalId=cowork-…
+   실패 시 게이트웨이 계정    Mantle bearer /                 Opus 4.8 (cowork-opus)
+   투명 폴백                  bedrock-runtime SigV4           httpx AsyncClient
           │
           ▼
    [Redis] + [Aurora PostgreSQL]   ← 예산/RateLimit/비용 스트림/집계
@@ -68,13 +71,14 @@ WebSearch(MCP over httpx, SigV4/IRSA, us-east-1 전용) 호출 → 결과 재투
 | 항목 | 계정 | region | 백엔드 | API 규격 | cross-account |
 |------|------|--------|--------|------|---------------|
 | 메인 배포 (게이트웨이 전 서비스 + Aurora + AgentCore Runtime/웹서치 GW + ECR) | `123456789012` | ap-northeast-2 | — | — | gateway-proxy IRSA 가 이 계정 |
-| claude-code | `333344445555` | ap-northeast-2 | Bedrock NATIVE (invoke_model) | Anthropic Messages | STS AssumeRole(ExternalId=`claude-code-bedrock`), 실패 시 859 in-account 투명 폴백 |
-| codex | `123456789012` (in-account) | us-east-2 | Bedrock Mantle GPT-5.5 | OpenAI Responses (`/v1/responses`) | 없음 — pod IRSA creds 직접 사용 |
+| claude-code | `333344445555` | ap-northeast-2 | Bedrock NATIVE (invoke_model) | Anthropic Messages | STS AssumeRole(ExternalId=`claude-code-bedrock`), 실패 시 게이트웨이 계정 in-account 투명 폴백 |
+| codex | `123456789012` (in-account) | us-east-2 | Bedrock Mantle GPT-5.6(기본 `codex-gpt-5.6-terra`) 또는 bedrock-runtime(`gpt-5.6-*`, `gpt-6*`) | OpenAI Responses (`/v1/responses`), Chat (`/v1/chat/completions`, runtime) | 없음 — pod IRSA creds 직접 사용 |
 | cowork | `222233334444` | ap-northeast-1 | Bedrock Mantle Opus 4.8 | Anthropic Messages | STS AssumeRole(ExternalId=`cowork-bedrock`) |
 
-- cross-account는 `STS AssumeRole(DurationSeconds=3600)` + 선택적 `ExternalId`. claude-code(374 native)의 클라이언트는 `BedrockAccountClientProvider`가 `(role_arn, region, external_id)` 키로 vend/캐시합니다. assume 실패 시 게이트웨이는 859 in-account 클라이언트로 투명 폴백하므로 claude-code 요청은 죽지 않습니다.
+- cross-account는 `STS AssumeRole(DurationSeconds=3600)` + 선택적 `ExternalId`. claude-code(native)의 클라이언트는 `BedrockAccountClientProvider`가 `(role_arn, region, external_id)` 키로 vend/캐시합니다. 앱 프로필 경로에서 assume 이 실패하면 게이트웨이 계정(in-account) 클라이언트로 투명 폴백하므로 claude-code 요청은 죽지 않습니다.
+- **모델(alias)별 대상 계정**(migration `0043`~`0045`): 관리 콘솔의 AWS 계정 레지스트리에 역할을 등록하고 모델마다 계정을 고르면, 세 경로(native / Mantle / bedrock-runtime) 모두 그 계정으로 서명해 호출합니다. 우선순위는 alias 계정 → 앱 프로필 계정 → 게이트웨이 IRSA 이고, alias 계정으로 전환하지 못하면 다른 계정으로 대신 호출하지 않고 HTTP 500 으로 끝납니다. 요청별 서빙 계정은 `usage.usage_logs.aws_account_id` 에 남습니다. 설정 절차: [`docs/guides/multi-account-bedrock-setup.md`](docs/guides/multi-account-bedrock-setup.md).
 - codex/cowork Mantle bearer는 `MantleCredentialBroker`가 assumed creds에서 `BedrockTokenGenerator`로 발급해 `(role, region)`으로 캐시합니다.
-- provider registry는 4개 어댑터: `BEDROCK`(boto3), `OPENMODEL`(httpx vLLM), `BEDROCK_MANTLE`(cowork), `BEDROCK_MANTLE_OPENAI`(codex).
+- provider registry는 5개 어댑터: `BEDROCK`(boto3), `OPENMODEL`(httpx vLLM), `BEDROCK_MANTLE`(cowork), `BEDROCK_MANTLE_OPENAI`(codex, Mantle), `BEDROCK_RUNTIME_OPENAI`(GPT-5.6/6, bedrock-runtime SigV4).
 
 > 컴포넌트·계정·데이터플레인 전체 상세는 레포 루트 [`ARCHITECTURE.md`](ARCHITECTURE.md) 참조.
 
@@ -154,16 +158,16 @@ AWSome AI Gateway는 **re-origination(요청 재구성 발신)** 방식입니다
 | 관점 | 타 오픈소스 | AWSome AI Gateway |
 |------|------------|-------------------|
 | 기본 집계 | provider usage 필드 사용 (동일) | provider usage 필드 사용 (동일) |
-| usage 필드 불완전/부재 시 | 로컬 tiktoken 근사 (Claude 모델에서 오차 발생) | **Bedrock invocationMetrics** 를 billable 기준으로 채택 + 추정 필요 시 **Bedrock CountTokens API** 사용 → AWS billing 단위와 정합 |
+| usage 필드 불완전/부재 시 | 로컬 tiktoken 근사 (Claude 모델에서 오차 발생) | **Bedrock invocationMetrics** 를 billable 기준으로 채택 + 추정 필요 시 **Bedrock CountTokens API** 사용(Bedrock 이 카운트를 지원하는 모델: Haiku 4.5, Sonnet 4.5/4.6, Opus 4.5/4.6). Opus 4.7 이후와 5 계열은 Bedrock 이 CountTokens 를 지원하지 않아 tiktoken 근사로 대신합니다 |
 
 ### 스트리밍 중단 시 비용 보존
 
 | 관점 | 타 오픈소스 | AWSome AI Gateway |
 |------|------------|-------------------|
 | 비용 기록 시점 | 스트림 자연 종료 시에만 실행 (all-or-nothing) | 스트리밍 중 텍스트 누적 + 중단 감지 시 부분 비용 기록 |
-| 중간 끊김 시 결과 | 이미 소비한 토큰 비용이 **0으로 기록** (계산 로직 자체를 건너뜀) | 끊긴 시점까지의 텍스트를 CountTokens API로 역산하여 **부분 비용 보존** |
+| 중간 끊김 시 결과 | 이미 소비한 토큰 비용이 **0으로 기록** (계산 로직 자체를 건너뜀) | 끊긴 시점까지의 텍스트를 역산하여 **부분 비용 보존**(지원 모델은 CountTokens API, 그 외는 근사) |
 
-→ "근사(inaccuracy)"와 "누락(loss)"은 다른 문제입니다. 타 오픈소스는 완료된 스트림은 부정확하게라도 기록하지만, 중간 끊김은 아무것도 기록하지 않습니다. 우리는 완료든 중단이든 Bedrock 정밀 토큰 카운트로 처리합니다.
+→ "근사(inaccuracy)"와 "누락(loss)"은 다른 문제입니다. 타 오픈소스는 완료된 스트림은 부정확하게라도 기록하지만, 중간 끊김은 아무것도 기록하지 않습니다. 우리는 중단된 스트림도 0이 아니라 끊긴 시점까지의 사용량으로 기록합니다.
 
 ### 비용 기록 워커 장애 대응
 
@@ -186,6 +190,8 @@ AWSome AI Gateway는 **re-origination(요청 재구성 발신)** 방식입니다
 
 - **게이트웨이 코어** — OIDC→Virtual Key 자동 발급, 3-client(claude-code/codex/cowork) × 2-API 규격(Anthropic Messages / OpenAI Responses) 라우팅, 클라이언트별 백엔드 분기(Bedrock native / Mantle). 팀/사용자/앱(client)별 예산(HARD_BLOCK/SOFT_WARNING/THROTTLE), Rate Limit(USER/TEAM/GLOBAL 3-scope), 팀별 모델 접근 제어(allowed_models), 자동 다운그레이드(TEAM scope), 사용량/ROI 집계(`reasoning_tokens`·`web_search_count` 서브메트릭 포함).
 - **멀티앱 거버넌스 (Phase 2)** — 사용자별 모델 allow-list(팀 정책 override, migration 0014, admin-api `GET/PUT/DELETE /admin/users/{id}/allowed-models`), 사용자별 클라이언트 ACL(allowed-clients — 특정 사용자에게 claude-code/codex/cowork 중 일부만 허용), 앱(client)별 예산·Rate Limit 분리. 3-client가 각기 다른 계정·백엔드로 라우팅되는 데이터드리븐 프로파일(`routing_profiles`)이 이 거버넌스의 기반입니다.
+- **모델별 AWS 계정** — 모델(alias)마다 호출·청구할 AWS 계정을 고릅니다(migration `0043`~`0045`, 관리 콘솔 모델 화면의 AWS 계정 패널). 쿼터·과금·모델 액세스가 그 계정 기준이 되고, 요청별 서빙 계정이 사용량 기록에 남습니다. 상세 [`docs/guides/multi-account-bedrock-setup.md`](docs/guides/multi-account-bedrock-setup.md).
+- **Bedrock 모델 호출 로그 감사(선택)** — Terraform 모듈 `bedrock-invocation-logging`(기본 off)을 켜면 Bedrock 이 프롬프트·응답 본문을 CloudWatch Logs 에, CloudWatch 에 담기 너무 큰 본문은 S3 에 씁니다(S3 전량 배달은 의도적으로 끔). admin-api `GET /admin/audit/invocation-log/{config,reconcile,{bedrock_request_id}}` 가 Logs Insights 로 게이트웨이 사용량 기록과 대조합니다.
 - **service-token** — 외부 시스템(비 OIDC)용 장수명 bearer 토큰 발급/회전. admin-api `POST/GET/DELETE /admin/service-tokens` + `/rotate`. 목록은 prefix만 노출하고 원문 토큰은 발급/회전 시 1회만 반환(migration 0015).
 - **Resilience** — readiness 게이트 `/health/ready`(열화/DB 풀 고갈 시 503, `/health`는 관대), 무효 VK 즉시 차단(무효키 폭주가 DB 커넥션 풀을 고갈시키지 못하도록 DB 세션을 안 엶), DB 풀 튜닝(`pool_timeout` 기본 10s fast-fail·`pool_recycle` 3600s·`pre_ping`), Redis 소켓 타임아웃/재시도 + rate-limit 회로 차단기, Redis 다운 시 in-memory rate-limit 근사 폴백, 응답 헤더 유출 방어(state에 값이 있을 때만 `X-*` 헤더 주입), 보안 이벤트 detector의 OrderedDict LRU(스푸핑된 IP churn OOM 방어), 비용 스트림 스풀링(Redis blip 시 XADD 실패 재발행).
 - **서버사이드 웹서치 (아키텍처 C)** — 게이트웨이가 `web_search` 툴을 주입하고 모델의 tool_use를 가로채 AgentCore Gateway 관리형 WebSearch(MCP over httpx, SigV4/IRSA)로 검색·재투입하는 서버사이드 방식. **클라이언트(Claude Code/Codex/Cowork) 무설정** — 그냥 질문하면 검색된 답이 옵니다. anthropic/responses 두 API 규격 지원, AgentCore 관리형 커넥터는 us-east-1 전용, 글로벌 kill-switch(`web_search_enabled`) 기본 off. 검색 횟수·토큰·비용을 per-client 추적. 검색 횟수·토큰·비용은 admin-ui 분석 화면과 `usage.usage_logs` 에서 per-client 로 확인한다.
@@ -216,26 +222,14 @@ AWSome AI Gateway는 **re-origination(요청 재구성 발신)** 방식입니다
 | 어드민 (운영자) | [`guides/admin-guide.md`](guides/admin-guide.md) | 사용자/팀 관리, 예산, Rate Limit, 모델, 모니터링, 사고 대응 |
 | 실사용자 (개발자) | [`guides/user-guide.md`](guides/user-guide.md) | CLI 설치·로그인·Claude Code 연동·트러블슈팅 (Claude Code 중심) |
 | 3-client 온보딩 (전 OS) | [`guides/QUICKSTART.md`](guides/QUICKSTART.md) | Claude Code / Codex / Cowork × macOS·Linux·Windows 붙이기 (단일 소스) |
+| 배포자 / 어드민 | [`docs/guides/multi-account-bedrock-setup.md`](docs/guides/multi-account-bedrock-setup.md) | 모델별 대상 AWS 계정 설정(역할·IAM·마이그레이션·콘솔·롤백) |
 
 배포 단계별 상세 절차: [`deployment/docs/eks-fargate/`](deployment/docs/eks-fargate/) — 01 사전조건 ~ 07 Cognito 온보딩 + `troubleshooting.md`. 시크릿 계약: [`deployment/docs/secrets-contract.md`](deployment/docs/secrets-contract.md).
 
-> **현재 deliverable 의 배포 환경**: AWS 계정 `123456789012` (ap-northeast-2)
-> 에 dev / prod 두 EKS Fargate 환경(둘 다 EKS 1.30) 운영. 구체 endpoint/Cognito
-> pool/ALB DNS 는 각 가이드의 **부록** 참조 — user-guide §B, admin-guide §D,
-> deployer-guide §E. claude-code(333)·cowork(222)는 cross-account, codex(123)는
-> in-account 로, 게이트웨이는 859 에서 각 백엔드로 라우팅합니다.
->
 > **다른 계정에 적용 시**: `terraform.tfvars` (gitignored), `backend.tf` 의
 > `-backend-config`, `values-eks-fargate-{dev,prod}.yaml` 안의 `# CHANGE_ME`
 > 마커 값(dev 8개 / prod 10개)을 본인 계정 값으로 교체. 자세한 절차는
 > deployer-guide §E.4 + §F (자사 계정 부트스트랩 체크리스트) 참조.
->
-> ⚠️ **prod 배포 주의**: `install-eks.sh`는 서비스별 `image.tag`를 `--set`으로
-> 주입하지 않아 태그는 전적으로 values 파일 핀에 의존합니다. dev values는
-> 서비스별로 명시 핀돼 있으나 prod values는 어떤 `image.tag`도 핀하지 않아,
-> 그대로 배포 시 전 서비스가 `Chart.appVersion`으로 폴백됩니다(migration이
-> 현재 head 미지원 이미지로 실패할 수 있음). prod values에 서비스별 태그를
-> 반드시 명시하세요.
 
 ---
 
@@ -251,7 +245,7 @@ Helm이 배포하는 워크로드는 6 Deployment + 1 Job이고, admin-chat-agen
 | **scheduler** | ROI 집계(aggregate_usage) + VK 만료 정리(expire_virtual_keys). **admin-api 이미지 재사용**(command=`python -m app.scheduler.main`), `replicaCount:1` 고정 singleton (Deployment) |
 | **notification-worker** | 예산 임계값 알림 발송 (기본 배포는 provider=mock, 미발송) (Deployment) |
 | **cost-recorder-worker** | Redis Stream → Aurora 비용 기록 + 일일 집계 (Deployment) |
-| **migration** | Alembic DB 마이그레이션. helm pre-install/pre-upgrade **Job**(head=`0028`) |
+| **migration** | Alembic DB 마이그레이션. helm pre-install/pre-upgrade **Job**(head=`0045`) |
 | **admin-chat-agent** | BI 어시스턴트. **EKS 미배포** — Bedrock AgentCore Runtime(arm64 microVM)에 호스팅되고, admin-api가 SigV4로 InvokeAgentRuntime 호출. 차트에는 `AGENTCORE_RUNTIME_ARN` env로만 연결 |
 
 ---
@@ -266,17 +260,16 @@ Helm이 배포하는 워크로드는 6 Deployment + 1 Job이고, admin-chat-agen
 | `admin-chat-agent/` | BI 어시스턴트 — Strands agents-as-tools + AgentCore Runtime, `lambdas/`(query_db/get_schema), `config/`(schema_whitelist, golden_examples), `tests/`(골든 테스트) |
 | `cost-recorder-worker/` | Redis Stream → Aurora 비용 기록 워커 |
 | `notification-worker/` | 예산 임계값 알림 워커 |
-| `db/` | Alembic 마이그레이션 소스 (`alembic.ini`·`env.py`·`versions/`·`init/`; head=`0028`) |
+| `db/` | Alembic 마이그레이션 소스 (`alembic.ini`·`env.py`·`versions/`·`init/`; head=`0045`) |
 | `gateway-cli/` | 사용자 CLI (`gateway-cli`, `api-key-helper`, `statusline` 콘솔 스크립트) |
 | `gateway-clients/` | claude-code/codex 격리 컨테이너 유틸(`claude-box`/`codex-box` + `gw.sh`). Cowork(GUI)은 제외 |
 | `scripts/` | 온보딩 스크립트(`onboard-macos-linux.sh`, `onboard-windows.ps1`) + IAM 스크립트 |
-| `deployment/charts/llm-gateway/` | Helm chart (active). values: `values.yaml`(base) + eks-fargate `{dev,prod,prod-loadtest}` (총 4개). on-prem 배포물은 `83b4ffe` 에서 제거됨 — EKS 전용 |
+| `deployment/charts/llm-gateway/` | Helm chart (active). values: `values.yaml`(base) + eks-fargate `{dev,prod,prod-loadtest}` (총 4개). EKS 전용 |
 | `deployment/terraform/environments/llm-gateway-{dev,prod}/` | Terraform workspace (active) |
-| `deployment/terraform/modules/` | VPC, EKS Fargate, Aurora, ElastiCache, Cognito, IRSA, ALB, ESO 모듈 |
+| `deployment/terraform/modules/` | VPC, EKS Fargate, Aurora, ElastiCache, Cognito, IRSA, ALB, ESO, Bedrock 호출 로그(`bedrock-invocation-logging`) 모듈 |
 | `deployment/docs/` | 단계별 배포 절차(`eks-fargate/`) + 시크릿 계약(`secrets-contract.md`) |
 | `docs/` | 스펙(`admin-chat-agent-spec.md`)·아키텍처 drawio·클라이언트 연동 가이드(`guides/connect.md`, `guides/COWORK-GATEWAY-SETUP.md`) |
 | `guides/` | 최종 가이드 (배포자/어드민/사용자/QUICKSTART) — 부록에 현재 운영 환경 값 |
-| `_archive/` | 옛 자산(옛 계정 `333344445555` charts·terraform 포함) + 마이그레이션 로그. 빌드/배포 미참조 — history 보존용 |
 
 ---
 
@@ -331,25 +324,6 @@ Admin UI 로그인 후 좌측 메뉴 **Chat** (또는 우하단 BI Chat 버튼)�
 동작: 자연어 → SQL Specialist 가 **검증된 SQL 자동 작성**(sqlglot AST + read-only role + LIMIT/timeout) → Aurora 조회 → 마크다운 표 + 막대/도넛 차트로 답변. 응답은 **실시간 스트리밍**되며, 긴 분석 중에도 heartbeat 로 연결이 유지됩니다.
 
 > 배포/운영 (AgentCore Runtime, Lambda BI 도구, `gateway_chat_reader` 역할) 절차는 [`admin-chat-agent/README.md`](admin-chat-agent/README.md) 와 [`docs/admin-chat-agent-spec.md`](docs/admin-chat-agent-spec.md) 참조.
-
----
-
-## AI BI 정확도 하네스
-
-LLM 의 환각·재계산을 막기 위한 **deterministic-tool-first** 설계. 답변·차트의
-모든 숫자는 실행 결과에서만 나오도록 강제합니다.
-
-- **deterministic-tool-first** — 답변/차트의 모든 숫자는 SQL 결과 셀 또는
-  execute_python 출력에서만. orchestrator 가 산문에서 합/평균/비율을 직접
-  계산·추론하지 않습니다.
-- **구조화 envelope** — 각 sub-agent 는 JSON envelope(`{sql,rows,...}` /
-  `{code,result_summary,...}` / `{verdict,...}` / `{kind,x,y}`) 만 반환. 마크다운
-  표·산문 금지. orchestrator 는 그 필드를 핸들로 인용.
-- **reconciliation gate** — 최종 텍스트의 숫자가 실행 결과에서 유래했는지
-  Python 으로 검사. 미유래 시 WARN(fail-soft, 차단 안 함). 퍼센트·연도·시간
-  표현(30일/90 days) 은 false-positive 필터로 제외.
-- **tool 투명성** — orchestrator 의 도구 호출이 `tool_call`/`tool_result` 이벤트로
-  스트리밍 → admin-ui 가 실행된 SQL·Python 코드·검증 결과를 그대로 렌더.
 
 ---
 
