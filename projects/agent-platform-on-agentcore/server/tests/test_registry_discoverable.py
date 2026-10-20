@@ -83,11 +83,13 @@ def _service(summaries, details=None, discoverable=None):
     return service, control, data
 
 
-def test_batch_get_chunks_by_100_and_indexes_by_id():
-    ids = [f"rec-{i}" for i in range(150)]
+def test_batch_get_chunks_by_25_and_indexes_by_id():
+    """25 per call, not the API's 100: a call's latency grows with its chunk and
+    the chunks run in parallel, so smaller chunks finish a listing sooner."""
+    ids = [f"rec-{i}" for i in range(60)]
     service, _, data = _service([], discoverable={i: _full(i) for i in ids})
     result = service.batch_get_discoverable(ids)
-    assert [len(c["entries"][0]["recordIds"]) for c in data.batch_calls] == [100, 50]
+    assert [len(c["entries"][0]["recordIds"]) for c in data.batch_calls] == [25, 25, 10]
     assert data.batch_calls[0]["entries"][0]["registryId"] == "reg-1"
     assert set(result) == set(ids)
 

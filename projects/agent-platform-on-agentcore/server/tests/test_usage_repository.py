@@ -107,20 +107,24 @@ def test_flags_are_set_not_added():
 def test_query_is_a_keyed_range_never_a_scan():
     """A string check on the condition would pass against the wrong shape."""
     table = StubTable(items=[{"pk": "AGENTS#2026-08", "sk": "D#2026-08-15#A#rec-1"}])
-    result = repo_with(table).query("AGENTS#2026-08", "2026-08-01", "2026-08-31")
+    result = repo_with(table).query("AGENTS#2026-08", "2026-08-01", "2026-08-31", ranges=4)
 
-    assert result == table.items
-    call = table.queries[0]
-    assert "KeyConditionExpression" in call
-    assert "FilterExpression" not in call, (
-        "a filter means rows were fetched and then discarded — the range must be keyed"
-    )
-
-    expression = call["KeyConditionExpression"].get_expression()
-    assert expression["operator"] == "AND"
-    pk_condition, sk_condition = expression["values"]
-    assert pk_condition.get_expression()["values"][1] == "AGENTS#2026-08"
-
-    sk_expression = sk_condition.get_expression()
-    assert sk_expression["operator"] == "BETWEEN"
-    assert list(sk_expression["values"][1:]) == ["D#2026-08-01", f"D#2026-08-31{SK_MAX}"]
+    # The window is read as several keyed day ranges at once; the stub answers
+    # each with the same item, so the merge is one copy per range.
+    assert len(result) == len(table.queries) >= 1
+    bounds = []
+    for call in table.queries:
+        assert "KeyConditionExpression" in call
+        assert "FilterExpression" not in call, (
+            "a filter means rows were fetched and then discarded — the range must be keyed"
+        )
+        expression = call["KeyConditionExpression"].get_expression()
+        assert expression["operator"] == "AND"
+        pk_condition, sk_condition = expression["values"]
+        assert pk_condition.get_expression()["values"][1] == "AGENTS#2026-08"
+        sk_expression = sk_condition.get_expression()
+        assert sk_expression["operator"] == "BETWEEN"
+        bounds.append(tuple(sk_expression["values"][1:]))
+    bounds.sort()
+    assert bounds[0][0] == "D#2026-08-01"
+    assert bounds[-1][1] == f"D#2026-08-31{SK_MAX}"

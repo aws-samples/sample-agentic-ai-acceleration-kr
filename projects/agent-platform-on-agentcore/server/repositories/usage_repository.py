@@ -10,6 +10,7 @@ an exact partition key, so putting the agent or user id in `pk` would make
 "list every agent for this month" unanswerable without a Scan.
 """
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -30,9 +31,33 @@ SK_MAX = "￿"
 _SPLITS = list("123456789abcdef")
 
 
-def month_shard(date: str) -> str:
+
+def month_shard(day: str) -> str:
     """`"2026-08-15"` -> `"2026-08"`."""
-    return date[:7]
+    return day[:7]
+
+
+def _day_ranges(start_date: str, end_date: str, parts: int) -> List[tuple]:
+    """Split an inclusive date window into at most `parts` contiguous
+    `(first_day, last_day)` ranges of near-equal length, in order. A window
+    shorter than `parts` days is one range per day."""
+    try:
+        first, last = date.fromisoformat(start_date), date.fromisoformat(end_date)
+    except ValueError:
+        return [(start_date, end_date)]
+    days = (last - first).days + 1
+    if days <= 1 or parts <= 1:
+        return [(start_date, end_date)]
+    parts = min(parts, days)
+    size, extra = divmod(days, parts)
+    ranges: List[tuple] = []
+    cursor = first
+    for index in range(parts):
+        length = size + (1 if index < extra else 0)
+        stop = cursor + timedelta(days=length - 1)
+        ranges.append((cursor.isoformat(), stop.isoformat()))
+        cursor = stop + timedelta(days=1)
+    return ranges
 
 
 def _dynamo_safe(value: Any) -> Any:
@@ -162,7 +187,12 @@ class UsageRepository(DynamoDBRepository):
             kwargs["ExclusiveStartKey"] = last
 
     def query(
-        self, pk: str, start_date: str, end_date: str, fields: Optional[Sequence[str]] = None
+        self,
+        pk: str,
+        start_date: str,
+        end_date: str,
+        fields: Optional[Sequence[str]] = None,
+        ranges: int = 1,
     ) -> List[Dict[str, Any]]:
         """Every counter in one partition between two dates, inclusive.
 
@@ -170,16 +200,40 @@ class UsageRepository(DynamoDBRepository):
         read cost, but it is most of this process's CPU: a row carries a dozen
         Number counters, each decoded to a Decimal, and the per-agent user rows
         `distinct_users` counts were 54k of them per summary at 1,000 people.
+
+        No filter on the sort key: DynamoDB rejects a `FilterExpression` over a
+        key attribute (ValidationException, seen live 2026-10-19), so one
+        record's rows out of `D#<day>#A#<record>` are read by exact key instead
+        (`get_many`, see `UsageService._record_rows`).
+
+        `ranges` > 1 reads the window as that many contiguous day ranges at
+        once (they partition it, so the merge is a plain concatenation). For a
+        wide roll-up partition — a 30-day month of AGENTS# at 300 agents is a
+        few MB, three or four 1 MB pages that used to be followed one after
+        another. Not for a per-record partition of a few rows: there it only
+        multiplies round trips, and the summary's per-agent prefetch made 2,500
+        Queries instead of 600 when every read was split.
         """
-        kwargs: Dict[str, Any] = {
-            "KeyConditionExpression": Key("pk").eq(pk)
-            & Key("sk").between(f"D#{start_date}", f"D#{end_date}{SK_MAX}")
-        }
+        base: Dict[str, Any] = {}
         if fields:
             names = {f"#p{i}": name for i, name in enumerate(dict.fromkeys(["sk", *fields]))}
-            kwargs["ProjectionExpression"] = ", ".join(names)
-            kwargs["ExpressionAttributeNames"] = names
-        return self._query_all(**kwargs)
+            base["ProjectionExpression"] = ", ".join(names)
+            base["ExpressionAttributeNames"] = names
+
+        def read(bounds: tuple) -> List[Dict[str, Any]]:
+            low, high = bounds
+            return self._query_all(
+                KeyConditionExpression=Key("pk").eq(pk)
+                & Key("sk").between(f"D#{low}", f"D#{high}{SK_MAX}"),
+                **dict(base),
+            )
+
+        bounds = _day_ranges(start_date, end_date, ranges)
+        if len(bounds) == 1:
+            return read(bounds[0])
+        with ThreadPoolExecutor(max_workers=len(bounds)) as pool:
+            pages = list(pool.map(read, bounds))
+        return [item for page in pages for item in page]
 
     def query_prefix(self, pk: str, sk_prefix: str) -> List[Dict[str, Any]]:
         """Every item in one partition whose sort key starts with `sk_prefix`."""

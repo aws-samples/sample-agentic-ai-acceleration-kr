@@ -351,10 +351,10 @@ def test_concurrent_callers_share_one_registry_read():
 
 
 def test_batch_get_chunks_run_side_by_side_and_merge():
-    ids = [f"rec-{i}" for i in range(250)]
+    ids = [f"rec-{i}" for i in range(60)]
     service, _, data = make_service([], discoverable={i: mcp(i) for i in ids})
     found = service.batch_get_discoverable(ids)
-    assert sorted(len(call) for call in data.batch_calls) == [50, 100, 100]
+    assert sorted(len(call) for call in data.batch_calls) == [10, 25, 25]
     assert set(found) == set(ids)
 
 

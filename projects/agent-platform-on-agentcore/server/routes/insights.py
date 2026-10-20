@@ -60,6 +60,7 @@ reader looks at is not a qualifier.
 """
 import hashlib
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional
 
@@ -574,15 +575,21 @@ def _harness_runtimes(usage: Any) -> Dict[str, str]:
         return {}
 
 
-def _collected(window: Dict[str, Any]) -> Dict[str, Any]:
-    """Everything the collector wrote for the window, or empty maps when it is
-    not configured. Reads DDB only."""
+_COLLECTED_KEYS = ("resources", "gateways", "memories", "sessions")
+
+
+def _collected(window: Dict[str, Any], keys: tuple = _COLLECTED_KEYS) -> Dict[str, Any]:
+    """What the collector wrote for the window — all four quantities, or only
+    `keys` — with empty maps for the rest and when it is not configured. Reads
+    DDB only. A page that shows one quantity asks for one: `sessions` is a row
+    per session per day, 2.5 s to read at 1,000 users, and the record page
+    shows none of it."""
     collector = _collector()
-    empty = {"resources": {}, "gateways": {}, "memories": {}, "sessions": {}}
+    empty = {key: {} for key in _COLLECTED_KEYS}
     if collector is None:
         return empty
     out = dict(empty)
-    for key in empty:
+    for key in keys:
         try:
             out[key] = getattr(collector, key)(window["start_date"], window["end_date"])
         except Exception:
@@ -958,13 +965,22 @@ def _compute_summary(
     except Exception:
         logger.warning("Could not read agent records", exc_info=True)
     usage.set_record_aliases(records)
-    totals = usage.agent_totals(window["start_date"], window["end_date"])
-    by_model = usage.agent_models(window["start_date"], window["end_date"])
-    names = _record_names(records)
-    harness_runtimes = _harness_runtimes(usage) if any(
-        getattr(r, "harness_arn", None) for r in records
-    ) else {}
-    collected = _collected(window)
+    # The wide ledger partitions this page folds, read at once into the request
+    # memo while the collector's day items are read beside them; one after
+    # another they were 18 s in-process at 300 records (bst, 2026-10-19).
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        collected_side = pool.submit(_collected, window)
+        usage.prefetch(
+            ["AGENTS#", "AGENT_MODELS#", "GUARDRAIL#", "GUARDRAIL_USERS#"],
+            window["start_date"], window["end_date"],
+        )
+        totals = usage.agent_totals(window["start_date"], window["end_date"])
+        by_model = usage.agent_models(window["start_date"], window["end_date"])
+        names = _record_names(records)
+        harness_runtimes = _harness_runtimes(usage) if any(
+            getattr(r, "harness_arn", None) for r in records
+        ) else {}
+        collected = collected_side.result()
     recon = _recon(window, usage)
 
     # Billed runtime per agent name, summed over the window's *complete* RECON
@@ -2153,6 +2169,15 @@ def record_insights(
     return out
 
 
+# The turn-event attributes the record page renders (`turn_events` adds the
+# keys it filters on). Anything the rows below read must be listed here.
+_RECORD_TURN_FIELDS = (
+    "turn_id", "thread_id", "ended_at", "status", "model_id", "input_tokens",
+    "output_tokens", "cache_read_tokens", "cache_write_tokens", "model_cost_micros",
+    "measured", "source", "owner_sub",
+)
+
+
 # What a non-admin may see of one turn on a record. An allow-list, so a field
 # added to the admin view later is not shown to everyone by default.
 _PUBLIC_TURN_FIELDS = (
@@ -2180,11 +2205,19 @@ def _compute_record_insights(
     days: int = Query(7),
     user: AuthUser = Depends(current_user),
 ) -> Dict[str, Any]:
-    """One agent: its counters, its cost, its models, its trend, its tools, its turns."""
+    """One agent: its counters, its cost, its models, its trend, its tools, its turns.
+
+    Two independent sets of reads, run side by side: the ledger (this record's
+    own rows, prefetched into the request memo) and the control planes (the
+    model map, the harness listing, the collector's day items). In series they
+    were 3.4 s for an agent record on bst at 300 records (2026-10-19), and the
+    page is one request, so its latency is the sum of everything it asks for.
+    """
     _require_configured()
     usage = _usage()
     usage.begin_read()
     window = _window(days)
+    start, end = window["start_date"], window["end_date"]
     # Records first: a turn written under a `deployed:<arn>` fallback id belongs
     # to the record that owns the ARN, and every read below folds it in.
     records: List[Any] = []
@@ -2193,13 +2226,52 @@ def _compute_record_insights(
     except Exception:
         logger.info("Registry unavailable for record %s", record_id, exc_info=True)
     usage.set_record_aliases(records)
-    counters = usage.record_totals(
-        record_id, window["start_date"], window["end_date"]
-    )
-    # The model the agent runs *now*, for the header. Cost never reads it: every
-    # turn was priced against the model it ran on, and `models` lists those.
-    model_id = usage.model_map().get(record_id)
-    by_model = usage.agent_models(window["start_date"], window["end_date"]).get(record_id, {})
+    record = next((r for r in records if r.record_id == record_id), None)
+
+    def control_planes() -> tuple:
+        model_id = usage.model_map().get(record_id)
+        if record is None:
+            return model_id, {}, {}
+        collected = _collected(window, keys=("resources",))
+        harness_runtimes = _harness_runtimes(usage) if getattr(record, "harness_arn", None) else {}
+        return model_id, collected, harness_runtimes
+
+    def reach_view() -> tuple:
+        # A skill or MCP record (not among the agent records) is *reached*, and
+        # its rollup reads every agent's totals and tool calls plus the harness
+        # listing — the bulk of its page, so it runs beside the record's own
+        # reads. Its own memo and read flag, folded into the request's below.
+        usage.begin_read()
+        reach, tools = _record_usage_view(usage, record_id, window)
+        return reach, tools, usage.reads_complete()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        side = pool.submit(control_planes)
+        reach_side = pool.submit(reach_view) if record is None else None
+        # On the request thread: the memo is thread-local (see `prefetch`).
+        usage.prefetch_reads(
+            [
+                *[(f"AGENT#{lid}#USERS#", usage._DISTINCT_FIELDS) for lid in usage._ledger_ids(record_id)],
+                *[(f"AGENT#{lid}#TOOLS#", None) for lid in usage._ledger_ids(record_id)],
+            ],
+            start,
+            end,
+        )
+        # The record's own AGENTS#/AGENT_MODELS# rows, by key (`_record_rows`);
+        # the three reads below share them.
+        counters = usage.record_totals(record_id, start, end)
+        by_model = usage.record_models(record_id, start, end)
+        distinct_users = usage.distinct_users(record_id, start, end)
+        daily = usage.daily_totals(start, end, record_id=record_id)
+        # Only the attributes the rows below render: the busiest agent's 8k
+        # events of a month are read whole to keep the last 100, and the
+        # decode of a dozen extra attributes each was most of that read.
+        turns = usage.turn_events(
+            start, end, agent_record_id=record_id, fields=list(_RECORD_TURN_FIELDS)
+        )[-100:]
+        # The model the agent runs *now*, for the header. Cost never reads it: every
+        # turn was priced against the model it ran on, and `models` lists those.
+        model_id, collected, harness_runtimes = side.result()
     models = [
         {
             "model_id": mid,
@@ -2216,10 +2288,7 @@ def _compute_record_insights(
 
     runtime_cost = None
     invocations = None
-    record = next((r for r in records if r.record_id == record_id), None)
     if record is not None:
-        collected = _collected(window)
-        harness_runtimes = _harness_runtimes(usage) if getattr(record, "harness_arn", None) else {}
         runtime_days = {}
         for arn in _runtime_arns_of(record, harness_runtimes):
             for day, item in collected["resources"].get(arn, {}).items():
@@ -2231,11 +2300,13 @@ def _compute_record_insights(
     # whose own turn/token counters are always zero — it is reached, not run. Its
     # Usage tab shows the agents that reach it and their traffic instead, and
     # `tools` is the calls that went through it; for an agent, `tools` is its own.
-    reach, tool_totals = _record_usage_view(usage, record_id, window)
+    if reach_side is not None:
+        reach, tool_totals, reach_complete = reach_side.result()
+        if not reach_complete:
+            usage._reads.complete = False
+    else:
+        reach, tool_totals = _record_usage_view(usage, record_id, window)
 
-    turns = usage.turn_events(
-        window["start_date"], window["end_date"], agent_record_id=record_id
-    )[-100:]
     turns.reverse()
     return {
         "record_id": record_id,
@@ -2248,12 +2319,8 @@ def _compute_record_insights(
         "model_cost_micros": counters["model_cost_micros"] if counters["priced_turns"] > 0 else None,
         "runtime_cost_micros": runtime_cost,
         "invocations": invocations,
-        "distinct_users": usage.distinct_users(
-            record_id, window["start_date"], window["end_date"]
-        ),
-        "daily": usage.daily_totals(
-            window["start_date"], window["end_date"], record_id=record_id
-        ),
+        "distinct_users": distinct_users,
+        "daily": daily,
         "tools": [
             {"name": name, "tool_calls": count, "metric": "calls"}
             for name, count in sorted(

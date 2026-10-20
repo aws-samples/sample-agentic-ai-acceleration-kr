@@ -204,8 +204,11 @@ _ACTION_TO_REASON = {
 
 # ListRegistryRecords omits descriptors; approved records are recovered in bulk
 # (BatchGetDiscoverableRegistryRecord, this many ids per call) and only the rest
-# fan out one GetRegistryRecord each.
-_BATCH_GET_MAX = 100
+# fan out one GetRegistryRecord each. The API takes 100 per call, but its
+# latency grows with the chunk and the chunks run in parallel (`fan_out`): 100
+# ids read as 4×25 took 0.8 s against 1.5 s as 1×100 (bst, 2026-10-19), and a
+# cold listing of 313 records is built from this.
+_BATCH_GET_MAX = 25
 # How long a record's team is trusted when a pinned thread re-checks visibility.
 TEAM_CACHE_SECONDS = 60
 # How long an assembled listing is served before the registry is read again.
@@ -1639,18 +1642,19 @@ class RegistryService:
         )
         summaries = [summary for listing in listings for summary in listing]
 
-        def arn_of(summary: RegistryRecordSummary) -> Optional[str]:
-            try:
-                detail = self._listed_record(summary)
-            except Exception as exc:
-                logger.warning("Could not read MCP record %s: %s", summary.record_id, exc)
-                return None
-            return gateway_arn_of(detail.descriptor_content) or (
+        # Descriptors in bulk (`record_details`): one memoised Get per record
+        # was 62 calls against a 10 TPS quota on the first /registry/deployed
+        # after every deploy — 11.6 s live (bst, 2026-10-19).
+        live = [s for s in summaries if not is_deprecated(s)]
+        details = self.record_details(live)
+        for summary in live:
+            detail = details.get(summary.record_id)
+            if detail is None:
+                logger.warning("Could not read MCP record %s", summary.record_id)
+                continue
+            arn = gateway_arn_of(detail.descriptor_content) or (
                 detail.source_arn if ":gateway/" in (detail.source_arn or "") else None
             )
-
-        live = [s for s in summaries if not is_deprecated(s)]
-        for summary, arn in zip(live, fan_out(arn_of, live)):
             if arn:
                 index.setdefault(arn, summary)
         return index

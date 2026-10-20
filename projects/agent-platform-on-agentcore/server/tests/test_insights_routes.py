@@ -363,6 +363,31 @@ def test_a_record_route_returns_that_records_trend_and_tools():
     assert isinstance(body["tools"], list)
 
 
+def test_a_record_route_reads_only_the_collector_quantities_it_shows():
+    """The record page shows its runtime's cost and invocations — the collector's
+    `resources` — and used to read `sessions`, `gateways` and `memories` too.
+    `sessions` alone was 2.5 s at 1,000 users (one row per session per day)."""
+
+    read = []
+
+    class Counting:
+        def __getattr__(self, name):
+            def reader(start_date, end_date):
+                read.append(name)
+                return {}
+            return reader
+
+    insights._collector_override = Counting()
+    try:
+        wire(usage_with_one_agent(), StubTelemetry())
+        body = insights.record_insights(record_id="rec-1", days=7, user=user())
+        assert body["totals"]["turns"] == 7
+        assert body["runtime_cost_micros"] is None
+        assert read == ["resources"]
+    finally:
+        insights._collector_override = None
+
+
 def test_me_returns_the_callers_own_usage():
     wire(
         UsageService(
@@ -554,7 +579,7 @@ def test_the_user_leaderboard_is_admin_only():
     assert "users" in body
 
 
-SHARED_RUNTIME = "arn:aws:bedrock-agentcore:us-east-1:1:runtime/shared-KlMnO13579"
+SHARED_RUNTIME = "arn:aws:bedrock-agentcore:us-east-1:1:runtime/shared-KPDg0uGYgb"
 
 
 class ArnRecord:
@@ -579,9 +604,9 @@ def telemetry_for(records, metrics):
 def test_two_records_sharing_a_runtime_are_not_counted_twice():
     """Measured on the live registry, and the aliases do not line up.
 
-        harness_builtin_test_agent  runtime/harness_builtin_test_agent-KlMnO13579
-        builtin_test_agent          harness/builtin_test_agent-OpQrS99001
-                                  + runtime/harness_builtin_test_agent-KlMnO13579
+        harness_builtin_test_agent  runtime/harness_builtin_test_agent-KPDg0uGYgb
+        builtin_test_agent          harness/builtin_test_agent-PHlomQuVSu
+                                  + runtime/harness_builtin_test_agent-KPDg0uGYgb
 
     One physical runtime, two records, and their rows carry byte-identical vended
     figures because they describe the same thing. Summing the rows counted its hours
@@ -595,7 +620,7 @@ def test_two_records_sharing_a_runtime_are_not_counted_twice():
     The per-record rows stay: each record really did serve its turns, and an operator
     comparing two records wants both. It is the *totals* that count runtimes.
     """
-    harness_arn = "arn:aws:bedrock-agentcore:us-east-1:1:harness/twin-OpQrS99001"
+    harness_arn = "arn:aws:bedrock-agentcore:us-east-1:1:harness/twin-PHlomQuVSu"
     result = telemetry_for(
         [
             ArnRecord("rec-a", runtime_arn=SHARED_RUNTIME),

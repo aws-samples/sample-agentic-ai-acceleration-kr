@@ -79,9 +79,30 @@ export async function proxyToBackend(
     if (!STRIP_RESPONSE_HEADERS.has(key.toLowerCase())) responseHeaders.set(key, value);
   });
 
-  return new Response(upstream.body, {
+  let body = upstream.body;
+  if (body && shouldGzip(request.headers.get("accept-encoding"), upstream.headers.get("content-type"))) {
+    body = body.pipeThrough(new CompressionStream("gzip"));
+    responseHeaders.set("content-encoding", "gzip");
+    responseHeaders.append("vary", "accept-encoding");
+  }
+
+  return new Response(body, {
     status: upstream.status,
     statusText: upstream.statusText,
     headers: responseHeaders,
   });
+}
+
+/**
+ * JSON answers are compressed here, on the browser leg. Next gzips its own
+ * static output but not a Route Handler's streamed body, and the upstream is
+ * asked for identity (see STRIP_REQUEST_HEADERS), so the registry listing went
+ * to the browser as 233 KB of JSON — 1.3 s over the Internet against 0.17 s
+ * for a small response (bst, 2026-10-19). Only JSON: an event stream must not
+ * be buffered by a compressor, and files are what they are.
+ */
+export function shouldGzip(acceptEncoding: string | null, contentType: string | null): boolean {
+  if (!acceptEncoding || !contentType) return false;
+  if (!/\bgzip\b/.test(acceptEncoding)) return false;
+  return /^application\/json\b/i.test(contentType);
 }
