@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -207,6 +207,22 @@ export default function RegistryPage() {
     }
   };
 
+  // `/registry?record=<id>` opens that record: the Organization page's team
+  // sheet links each approved record here. Closing the panel drops the query so
+  // a reload shows the plain catalog.
+  const linkedRecord = useRef<string | null>(null);
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get("record");
+    if (!id || linkedRecord.current) return;
+    linkedRecord.current = id;
+    void openDetail(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const onDetailOpenChange = (open: boolean) => {
+    setDetailOpen(open);
+    if (!open && window.location.search.includes("record=")) router.replace("/registry");
+  };
+
   const chatWithAgent = (record: RegistryRecordSummary) => {
     if (!isChattable(record)) return;
     saveConfig({
@@ -390,7 +406,7 @@ export default function RegistryPage() {
 
       <RecordDetailPanel
         open={detailOpen}
-        onOpenChange={setDetailOpen}
+        onOpenChange={onDetailOpenChange}
         detail={detail}
         harness={harness}
         isAdmin={isAdmin && registryEnabled}

@@ -52,6 +52,9 @@ export function TeamsTab() {
       : <p className="text-xs text-muted-foreground">불러오는 중…</p>;
   }
   const current: OrgTeam | null = data.teams.find((t) => t.name === selected) ?? null;
+  // Every team the platform made itself says the same thing; the column only
+  // tells teams apart once one was made elsewhere (Terraform, an older stack).
+  const showManagedBy = data.teams.some((t) => t.managed_by !== "platform");
 
   return (
     <div className="flex flex-col gap-4">
@@ -71,7 +74,7 @@ export function TeamsTab() {
       <table className="w-full text-xs">
         <thead>
           <tr className="text-left text-muted-foreground">
-            <th className="py-1">팀</th><th>관리</th><th>상태</th><th className="text-right">구성원</th><th className="text-right">허용 모델</th><th>정책</th><th className="text-right">30일 비용</th><th className="text-right">오늘 / 일일 경고</th>
+            <th className="py-1">팀</th>{showManagedBy && <th>관리</th>}<th>상태</th><th className="text-right">구성원</th><th className="text-right">허용 모델</th><th>정책</th><th className="text-right">30일 비용</th><th className="text-right">오늘 / 일일 경고</th>
           </tr>
         </thead>
         <tbody>
@@ -82,7 +85,7 @@ export function TeamsTab() {
             return (
               <tr key={t.name} className="cursor-pointer border-t hover:bg-muted/40" onClick={() => setSelected(t.name)}>
                 <td className="py-1.5"><div className="font-medium">{t.label || t.name}</div><div className="text-xxs text-muted-foreground">team:{t.name}</div></td>
-                <td><ToneBadge label={managedByLabel(t)} tone="muted" /></td>
+                {showManagedBy && <td><ToneBadge label={managedByLabel(t)} tone="muted" /></td>}
                 <td><ToneBadge label={s.label} tone={s.tone} /></td>
                 <td className="text-right">{t.members}</td>
                 <td className="text-right">{t.allowed_models.length === 0 ? "전체" : t.allowed_models.length}</td>
@@ -95,7 +98,7 @@ export function TeamsTab() {
               </tr>
             );
           })}
-          {data.teams.length === 0 && <tr><td colSpan={8} className="py-6 text-center text-muted-foreground">팀이 없습니다. 새 팀을 만드세요.</td></tr>}
+          {data.teams.length === 0 && <tr><td colSpan={showManagedBy ? 8 : 7} className="py-6 text-center text-muted-foreground">팀이 없습니다. 새 팀을 만드세요.</td></tr>}
         </tbody>
       </table>
       <TeamCreateDialog open={creating} onOpenChange={setCreating} onCreated={() => void load()} policiesEnabled={data.policies_enabled} />

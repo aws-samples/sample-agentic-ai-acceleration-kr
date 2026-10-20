@@ -151,8 +151,9 @@ export const addTeamMember = (name: string, sub: string) =>
   request<void>(`/api/org/teams/${enc(name)}/members/${enc(sub)}`, { method: "PUT" });
 export const removeTeamMember = (name: string, sub: string) =>
   request<void>(`/api/org/teams/${enc(name)}/members/${enc(sub)}`, { method: "DELETE" });
+export type TeamRecord = { record_id: string; name: string; descriptor_type?: string | null };
 export const fetchTeamRecords = (name: string) =>
-  request<{ records: { record_id: string; name: string }[] }>(`/api/org/teams/${enc(name)}/records`);
+  request<{ records: TeamRecord[] }>(`/api/org/teams/${enc(name)}/records`);
 
 export function fetchOrgUsers(params: UserFilter = {}) {
   const qs = new URLSearchParams();

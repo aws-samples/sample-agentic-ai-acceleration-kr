@@ -42,6 +42,9 @@ export function UsersTab() {
 
   const rows: OrgUser[] = useMemo(() => sortUsers(filterUsers(users ?? [], { q, team, role, provider, status }), sort.key, sort.dir), [users, q, team, role, provider, status, sort]);
   const current = users?.find((u) => u.sub === selected) ?? null;
+  // One sign-in provider says nothing per row; the column, its filter and the
+  // freshness note only appear once both Cognito and Entra users exist.
+  const showProvider = new Set((users ?? []).map((u) => u.provider)).size > 1;
   const header = (key: SortKey, label: string, right = false) => (
     <th className={`cursor-pointer select-none ${right ? "text-right" : ""}`} onClick={() => setSort((s) => ({ key, dir: s.key === key && s.dir === "desc" ? "asc" : "desc" }))}>
       {label}{sort.key === key ? (sort.dir === "desc" ? " ↓" : " ↑") : ""}
@@ -62,20 +65,22 @@ export function UsersTab() {
         <select className="h-8 rounded-md border bg-background pl-2 pr-8 text-xs" value={role} onChange={(e) => setRole(e.target.value)}>
           <option value="">모든 역할</option><option value="admin">admin</option><option value="user">user</option>
         </select>
-        <select className="h-8 rounded-md border bg-background pl-2 pr-8 text-xs" value={provider} onChange={(e) => setProvider(e.target.value)}>
-          <option value="">모든 공급자</option><option value="cognito">Cognito</option><option value="entra">Entra</option>
-        </select>
+        {showProvider && (
+          <select className="h-8 rounded-md border bg-background pl-2 pr-8 text-xs" value={provider} onChange={(e) => setProvider(e.target.value)}>
+            <option value="">모든 공급자</option><option value="cognito">Cognito</option><option value="entra">Entra</option>
+          </select>
+        )}
         <select className="h-8 rounded-md border bg-background pl-2 pr-8 text-xs" value={status} onChange={(e) => setStatus(e.target.value)}>
           <option value="">모든 상태</option><option value="CONFIRMED">활성</option><option value="FORCE_CHANGE_PASSWORD">임시 비밀번호</option><option value="disabled">비활성</option>
         </select>
-        <span className="ml-auto text-xxs text-muted-foreground">{rows.length} / {users.length}명 · Cognito 는 지금, Entra 는 마지막 로그인 기준</span>
+        <span className="ml-auto text-xxs text-muted-foreground">{rows.length} / {users.length}명{showProvider && " · Cognito 는 지금, Entra 는 마지막 로그인 기준"}</span>
         <Button size="sm" variant="outline" onClick={() => void load(true)}><RefreshCw className="mr-1 size-3" />새로 고침</Button>
         <Button size="sm" onClick={() => setInviting(true)}><UserPlus className="mr-1 size-3" />초대</Button>
       </div>
       <table className="w-full text-xs">
         <thead>
           <tr className="text-left text-muted-foreground">
-            {header("email", "사용자")}<th>공급자</th><th>역할</th><th>팀</th><th>상태</th><th>마지막 로그인</th>{header("turns_30d", "30일 턴", true)}{header("model_cost_micros_30d", "30일 비용", true)}
+            {header("email", "사용자")}{showProvider && <th>공급자</th>}<th>역할</th><th>팀</th><th>상태</th><th>마지막 로그인</th>{header("turns_30d", "30일 턴", true)}{header("model_cost_micros_30d", "30일 비용", true)}
           </tr>
         </thead>
         <tbody>
@@ -84,7 +89,7 @@ export function UsersTab() {
             return (
               <tr key={u.sub} className="cursor-pointer border-t hover:bg-muted/40" onClick={() => setSelected(u.sub)}>
                 <td className="py-1.5"><div className="font-medium">{u.email || u.sub}</div>{u.name && <div className="text-xxs text-muted-foreground">{u.name}</div>}</td>
-                <td><ToneBadge label={providerLabel(u.provider)} tone="muted" /></td>
+                {showProvider && <td><ToneBadge label={providerLabel(u.provider)} tone="muted" /></td>}
                 <td>{u.role}</td>
                 <td className="text-muted-foreground">{u.teams.join(", ") || "—"}</td>
                 <td><ToneBadge label={s.label} tone={s.tone} /></td>
@@ -94,11 +99,11 @@ export function UsersTab() {
               </tr>
             );
           })}
-          {rows.length === 0 && <tr><td colSpan={8} className="py-6 text-center text-muted-foreground">조건에 맞는 사용자가 없습니다.</td></tr>}
+          {rows.length === 0 && <tr><td colSpan={showProvider ? 8 : 7} className="py-6 text-center text-muted-foreground">조건에 맞는 사용자가 없습니다.</td></tr>}
         </tbody>
       </table>
       <InviteDialog open={inviting} onOpenChange={setInviting} teams={teams} onInvited={() => void load(true)} />
-      <UserSheet user={current} teams={teams} selfSub={me?.sub ?? ""} onClose={() => setSelected(null)} onChanged={() => void load(true)} />
+      <UserSheet user={current} teams={teams} showProvider={showProvider} selfSub={me?.sub ?? ""} onClose={() => setSelected(null)} onChanged={() => void load(true)} />
     </div>
   );
 }

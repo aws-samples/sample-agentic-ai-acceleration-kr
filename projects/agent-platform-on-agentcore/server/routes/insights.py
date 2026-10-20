@@ -1433,6 +1433,64 @@ def user_leaderboard(
     )
 
 
+@router.get("/users/{sub}")
+def user_insights(
+    sub: str,
+    days: int = Query(30),
+    user: AuthUser = Depends(current_user),
+) -> Dict[str, Any]:
+    """One person's row of the leaderboard, read by exact key. **Admin only.**
+
+    The Organization user sheet opens one person; the leaderboard reads every
+    person's rows to answer that. This reads only theirs — their USERS# day items
+    and one (agent, day) item per agent — so it does not grow with the head count.
+    Runtime cost per person needs the session owners of the whole window and is
+    left to the leaderboard.
+    """
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required.")
+    _require_configured()
+    usage = _usage()
+    usage.begin_read()
+    window = _window(_supported_days(days))
+    start, end = window["start_date"], window["end_date"]
+    totals = usage.user_totals_for(sub, start, end)
+    daily = usage.user_daily_for(sub, start, end)
+    records: List[Any] = []
+    try:
+        records = list(usage.registry.agent_records())
+    except Exception:
+        logger.warning("Could not read agent records", exc_info=True)
+    usage.set_record_aliases(records)
+    names = _record_names(records)
+    agents = sorted(
+        ({"record_id": rid, "name": names.get(rid, rid), "turns": turns}
+         for rid, turns in usage.user_agents_for(sub, [r.record_id for r in records], start, end).items()),
+        key=lambda entry: (-entry["turns"], entry["name"]),
+    )
+    row = None
+    if totals.get("turns"):
+        row = {
+            "sub": sub,
+            "agents": agents[:USER_AGENTS_SHOWN],
+            "agents_total": len(agents),
+            "other_agent_turns": sum(entry["turns"] for entry in agents[USER_AGENTS_SHOWN:]),
+            "active_days": len(daily),
+            "daily": [{"date": day, **counters} for day, counters in sorted(daily.items())],
+            **{key: int(totals.get(key) or 0) for key in (
+                "turns", "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
+                "failed_turns", "threads_started", "interrupted_turns", "tool_calls",
+                "unmeasured_turns", "priced_turns", "unpriced_turns",
+            )},
+            "model_cost_micros": int(totals.get("model_cost_micros") or 0) if totals.get("priced_turns") else None,
+        }
+    return {
+        **_window_fields(window),
+        "sources": {"usage": usage.reads_complete()},
+        "user": row,
+    }
+
+
 def _compute_user_leaderboard(
     days: int = Query(7),
     user: AuthUser = Depends(current_user),

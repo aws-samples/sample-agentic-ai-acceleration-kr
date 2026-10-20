@@ -441,7 +441,10 @@ def _team_records(name: str) -> List[Dict[str, Any]]:
     except Exception as exc:
         logger.warning("Registry unavailable for team record check", exc_info=True)
         raise RegistryReadFailed(str(exc)) from exc
-    return [{"record_id": r.record_id, "name": getattr(r, "name", "")} for r in records if team_of(r) == name]
+    return [
+        {"record_id": r.record_id, "name": getattr(r, "name", ""), "descriptor_type": getattr(r, "descriptor_type", None)}
+        for r in records if team_of(r) == name
+    ]
 
 
 @router.get("/teams/{name}/records")

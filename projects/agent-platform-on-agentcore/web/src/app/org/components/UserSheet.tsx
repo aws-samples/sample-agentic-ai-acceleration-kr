@@ -6,18 +6,18 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { formatMicros } from "@/app/insights/insightsFormat.mjs";
 import { deleteOrgUser, resetUserPassword, updateOrgUser, type OrgUser } from "@/lib/org";
 import { providerLabel, userStatusLabel } from "../orgTable.mjs";
 import { ToneBadge } from "./ToneBadge";
+import { UserUsage } from "./UserUsage";
 
 /**
  * One person. Cognito: role, teams, enabled, reset, delete (delete asks for
  * the email to be typed). Entra: read-only with the group ids the token
  * carried, because the server cannot write to Entra.
  */
-export function UserSheet({ user, teams, selfSub, onClose, onChanged }: {
-  user: OrgUser | null; teams: string[]; selfSub: string; onClose: () => void; onChanged: () => void;
+export function UserSheet({ user, teams, selfSub, showProvider, onClose, onChanged }: {
+  user: OrgUser | null; teams: string[]; selfSub: string; showProvider: boolean; onClose: () => void; onChanged: () => void;
 }) {
   const [role, setRole] = useState<"admin" | "user">("user");
   const [picked, setPicked] = useState<string[]>([]);
@@ -53,10 +53,14 @@ export function UserSheet({ user, teams, selfSub, onClose, onChanged }: {
         <SheetHeader>
           <SheetTitle className="flex items-center gap-2">{user.email || user.sub} <ToneBadge label={status.label} tone={status.tone} /></SheetTitle>
           <SheetDescription>
-            {providerLabel(user.provider)} · {user.name || "—"} · 30일 턴 {user.turns_30d} · 비용 {user.turns_30d > 0 ? formatMicros(user.model_cost_micros_30d) : "—"}
-            {user.last_login && ` · 마지막 로그인 ${user.last_login.slice(0, 10)}`}
+            {[showProvider && providerLabel(user.provider), user.name, user.last_login && `마지막 로그인 ${user.last_login.slice(0, 10)}`].filter(Boolean).join(" · ") || "—"}
           </SheetDescription>
         </SheetHeader>
+
+        <section className="mt-4">
+          <h4 className="text-xs font-semibold">최근 30일 사용량</h4>
+          <UserUsage sub={user.sub} />
+        </section>
 
         {!cognito ? (
           <section className="mt-4 grid gap-2 text-xs">

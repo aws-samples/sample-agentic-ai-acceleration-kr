@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { Loader2, Trash2, UserMinus, UserPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,13 +11,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { BEDROCK_MODELS } from "@/lib/models";
 import {
   addTeamMember, deleteOrgTeam, fetchGatewayTools, fetchOrgUsers, fetchTeamMembers, fetchTeamRecords,
-  removeTeamMember, updateOrgTeam, type OrgTeam, type OrgUser,
+  removeTeamMember, updateOrgTeam, type OrgTeam, type OrgUser, type TeamRecord,
 } from "@/lib/org";
-import { formatMicros } from "@/app/insights/insightsFormat.mjs";
 import { isToolPattern, providerLabel, shortTool, teamStatusLabel, managedByLabel } from "../orgTable.mjs";
 import { budgetLabel, budgetTone, formatBudgetCell } from "../teamBudget.mjs";
 import { ToolPatternControls } from "./ToolPatternControls";
 import { ToneBadge } from "./ToneBadge";
+import { TeamUsage } from "./TeamUsage";
+import { TypeMarker } from "@/app/registry/components/types";
 
 /**
  * One team: settings (saved → role/policy reapplied), live members, approved
@@ -32,7 +34,7 @@ export function TeamSheet({ team, onClose, onChanged }: { team: OrgTeam | null; 
   const [alert, setAlert] = useState("");
   const [known, setKnown] = useState<{ tools: string[]; shared: string[]; conditioned: string[] } | null>(null);
   const [members, setMembers] = useState<OrgUser[] | null>(null);
-  const [records, setRecords] = useState<{ record_id: string; name: string }[] | null>(null);
+  const [records, setRecords] = useState<TeamRecord[] | null>(null);
   const [candidates, setCandidates] = useState<OrgUser[]>([]);
   const [pick, setPick] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -95,7 +97,7 @@ export function TeamSheet({ team, onClose, onChanged }: { team: OrgTeam | null; 
         <SheetHeader>
           <SheetTitle className="flex items-center gap-2">{team.label || team.name} <ToneBadge label={status.label} tone={status.tone} /></SheetTitle>
           <SheetDescription>
-            team:{team.name} · {managedByLabel(team)} 관리 · 30일 비용 {team.turns_30d > 0 ? formatMicros(team.model_cost_micros_30d) : "—"} · 오늘 {formatBudgetCell(team.today_cost_micros, team.daily_cost_alert_usd)}
+            team:{team.name}{external && ` · ${managedByLabel(team)} 관리`} · 오늘 {formatBudgetCell(team.today_cost_micros, team.daily_cost_alert_usd)}
             {budgetWord && <span className="ml-1.5"><ToneBadge label={budgetWord} tone={budget.tone} /></span>}
           </SheetDescription>
         </SheetHeader>
@@ -106,7 +108,12 @@ export function TeamSheet({ team, onClose, onChanged }: { team: OrgTeam | null; 
           </p>
         )}
 
-        <section className="mt-4 grid gap-3">
+        <section className="mt-4">
+          <h4 className="text-xs font-semibold">최근 30일 사용량</h4>
+          <TeamUsage team={team.name} />
+        </section>
+
+        <section className="mt-6 grid gap-3">
           <h4 className="text-xs font-semibold">설정</h4>
           {external && <p className="text-xxs text-muted-foreground">실행 역할과 게이트웨이 정책은 외부({team.managed_by})에서 만들어져 여기서 바꾼 허용 모델·툴은 하네스 allowedTools 에만 반영됩니다. 삭제는 이 행만 지웁니다.</p>}
           <div className="grid grid-cols-2 gap-3">
@@ -176,7 +183,16 @@ export function TeamSheet({ team, onClose, onChanged }: { team: OrgTeam | null; 
           <h4 className="text-xs font-semibold">이 팀의 승인 레코드 {records ? records.length : ""}</h4>
           <p className="text-xxs text-muted-foreground">Registry 에서 레코드의 team 메타데이터를 이 팀 이름으로 지정하고 승인하면 여기에 나타납니다.</p>
           {records === null ? <p className="mt-1 text-xxs text-muted-foreground">{loadFailed ? "불러오지 못했습니다" : "불러오는 중…"}</p> : records.length === 0 ? <p className="mt-1 text-xxs text-muted-foreground">—</p> : (
-            <ul className="mt-1 text-xs">{records.map((r) => <li key={r.record_id}>{r.name || r.record_id}</li>)}</ul>
+            <ul className="mt-1 space-y-1 text-xs">
+              {records.map((r) => (
+                <li key={r.record_id}>
+                  <Link href={`/registry?record=${encodeURIComponent(r.record_id)}`} className="flex items-center gap-2 hover:underline">
+                    <TypeMarker type={r.descriptor_type} />
+                    {r.name || r.record_id}
+                  </Link>
+                </li>
+              ))}
+            </ul>
           )}
         </section>
 

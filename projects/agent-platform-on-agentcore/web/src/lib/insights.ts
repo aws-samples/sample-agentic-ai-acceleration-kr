@@ -695,6 +695,18 @@ export function fetchUserLeaderboard(days: number): Promise<UserLeaderboard> {
   return request<UserLeaderboard>(`/api/insights/users?days=${days}`);
 }
 
+/** One person's leaderboard row, read by exact key; runtime cost is the leaderboard's alone. */
+export interface UserInsights extends WindowFields {
+  sources: { usage: boolean };
+  /** null when the person took no turn in the window. */
+  user: Omit<UserUsageRow, "runtime_cost_micros" | "total_cost_micros" | "guardrail_interventions"> | null;
+}
+
+/** `/api/insights/users/{sub}`, admin only: the Organization user sheet. */
+export function fetchUserInsights(sub: string, days: number): Promise<UserInsights> {
+  return request<UserInsights>(`/api/insights/users/${encodeURIComponent(sub)}?days=${days}`);
+}
+
 export interface TeamUsageRow {
   team: string;
   label: string;

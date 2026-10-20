@@ -26,7 +26,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from boto3.dynamodb.conditions import Attr
 
@@ -1082,22 +1082,84 @@ class UsageService:
         replaces grew with the head count: 3-4.5 s for /insights/me at 1,000
         people and a busy month (2026-10-18), on every user's own page.
         """
-        get_many = getattr(self.repository, "get_many", None)
-        if get_many is None:
+        items = self._user_rows_for(sub, start_date, end_date)
+        if items is None:
             return self.user_totals(start_date, end_date).get(sub, {})
-        keys = [(f"USERS#{month_shard(day)}", f"D#{day}#U#{sub}") for day in _days(start_date, end_date)]
-        try:
-            items = get_many(keys)
-        except Exception:
-            self._reads.complete = False
-            logger.warning("Usage read failed: USERS# rows of %s", sub, exc_info=True)
-            return {}
         if not items:
             return {}
         totals = self._blank()
         for item in items:
             self._fold(totals, item)
         return totals
+
+    def _user_rows_for(self, sub: str, start_date: str, end_date: str) -> Optional[List[Dict[str, Any]]]:
+        """One person's USERS# day items by exact key, or None when the repository
+        cannot read by key (the caller falls back to the partition read)."""
+        get_many = getattr(self.repository, "get_many", None)
+        if get_many is None:
+            return None
+        keys = [(f"USERS#{month_shard(day)}", f"D#{day}#U#{sub}") for day in _days(start_date, end_date)]
+        try:
+            return list(get_many(keys))
+        except Exception:
+            self._reads.complete = False
+            logger.warning("Usage read failed: USERS# rows of %s", sub, exc_info=True)
+            return []
+
+    def user_daily_for(self, sub: str, start_date: str, end_date: str) -> Dict[str, Dict[str, int]]:
+        """`user_daily()[sub]` from the same exact-key read as `user_totals_for`."""
+        items = self._user_rows_for(sub, start_date, end_date)
+        if items is None:
+            return self.user_daily(start_date, end_date).get(sub, {})
+        out: Dict[str, Dict[str, int]] = {}
+        for item in items:
+            sort_key = str(item.get("sk", ""))
+            turns = int(item.get("turns") or 0)
+            if not sort_key.startswith("D#") or turns <= 0:
+                continue
+            bucket = out.setdefault(
+                sort_key[2:12], {"turns": 0, "failed_turns": 0, "model_cost_micros": 0, "unpriced_turns": 0}
+            )
+            bucket["turns"] += turns
+            for key in ("failed_turns", "model_cost_micros", "unpriced_turns"):
+                bucket[key] += int(item.get(key) or 0)
+        return out
+
+    def user_agents_for(
+        self, sub: str, record_ids: Iterable[str], start_date: str, end_date: str
+    ) -> Dict[str, int]:
+        """`agent_user_matrix(...)[sub]` without reading anyone else: one exact key
+        per (record ledger id, day), so it costs records x days / 100 BatchGets
+        rather than every person's rows of every agent."""
+        record_ids = list(record_ids)
+        get_many = getattr(self.repository, "get_many", None)
+        if get_many is None:
+            return self.agent_user_matrix(record_ids, start_date, end_date).get(sub, {})
+        keys: List[Tuple[str, str]] = []
+        owner: Dict[str, str] = {}
+        for record_id in record_ids:
+            for ledger_id in self._ledger_ids(record_id):
+                owner[f"AGENT#{ledger_id}#USERS#"] = record_id
+                keys.extend(
+                    (f"AGENT#{ledger_id}#USERS#{month_shard(day)}", f"D#{day}#U#{sub}")
+                    for day in _days(start_date, end_date)
+                )
+        if not keys:
+            return {}
+        try:
+            items = get_many(keys)
+        except Exception:
+            self._reads.complete = False
+            logger.warning("Usage read failed: AGENT#*#USERS# rows of %s", sub, exc_info=True)
+            return {}
+        out: Dict[str, int] = {}
+        for item in items:
+            pk = str(item.get("pk", ""))
+            record_id = owner.get(pk[: pk.rfind("#USERS#") + len("#USERS#")])
+            turns = int(item.get("turns") or 0)
+            if record_id and turns > 0:
+                out[record_id] = out.get(record_id, 0) + turns
+        return out
 
     def team_totals(self, start_date: str, end_date: str) -> Dict[str, Dict[str, int]]:
         """Per-team aggregates, keyed by team name."""

@@ -446,6 +446,7 @@ def test_every_insights_route_is_sync():
         insights.record_insights,
         insights.composition,
         insights.my_insights,
+        insights.user_insights,
     ):
         assert not inspect.iscoroutinefunction(handler), handler.__name__
 
@@ -1048,3 +1049,36 @@ def test_a_user_row_lists_the_top_agents_and_counts_the_rest():
     assert row["agents_total"] == 12
     assert row["other_agent_turns"] == 1 + 2
     assert sum(a["turns"] for a in row["agents"]) + row["other_agent_turns"] == 78
+
+
+def test_one_persons_row_is_admin_only_and_reads_only_them():
+    wire(
+        UsageService(
+            repository=StubRepo({
+                f"USERS#{_current_month}": [
+                    {"sk": f"D#{_today_str}#U#sub-1", "turns": Decimal(4), "failed_turns": Decimal(1),
+                     "threads_started": Decimal(2), "model_cost_micros": Decimal(1500), "priced_turns": Decimal(4)},
+                    {"sk": f"D#{_today_str}#U#sub-2", "turns": Decimal(99)},
+                ],
+                f"AGENT#rec-1#USERS#{_current_month}": [
+                    {"sk": f"D#{_today_str}#U#sub-1", "turns": Decimal(4)},
+                ],
+            }),
+            registry=StubRegistry([]),
+            harness=StubHarness(),
+        ),
+        StubTelemetry(),
+    )
+    try:
+        insights.user_insights("sub-1", days=30, user=user(sub="sub-1"))
+    except HTTPException as exc:
+        assert exc.status_code == 403
+    else:
+        raise AssertionError("expected 403")
+
+    body = insights.user_insights("sub-1", days=30, user=user(sub="admin-1", is_admin=True))
+    row = body["user"]
+    assert body["days"] == 30
+    assert (row["turns"], row["failed_turns"], row["threads_started"], row["model_cost_micros"]) == (4, 1, 2, 1500)
+    assert row["active_days"] == 1 and row["daily"][0]["turns"] == 4
+    assert insights.user_insights("nobody", days=30, user=user(sub="admin-1", is_admin=True))["user"] is None

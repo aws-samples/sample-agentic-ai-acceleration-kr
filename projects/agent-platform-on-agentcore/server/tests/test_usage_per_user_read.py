@@ -67,3 +67,23 @@ def test_one_person_matches_the_everyone_read():
         assert svc.user_totals_for(sub, "2026-09-25", "2026-10-08") == everyone.get(sub, {})
     # One batch per call, spanning both months.
     assert {pk for pk, _ in repo.batches[0]} == {"USERS#2026-09", "USERS#2026-10"}
+
+
+def test_one_persons_days_and_agents_match_the_everyone_reads():
+    rnd = random.Random(7)
+    repo = SummingRepo()
+    svc = UsageService(repository=repo)
+    days = [f"2026-09-{d:02d}" for d in range(25, 31)] + [f"2026-10-{d:02d}" for d in range(1, 6)]
+    for n in range(200):
+        svc.record_turn(
+            agent_record_id=rnd.choice(["rec-1", "rec-2"]), owner_sub=rnd.choice(["a", "b"]),
+            input_tokens=rnd.randint(1, 900), output_tokens=rnd.randint(1, 90), date=rnd.choice(days),
+            tool_calls={}, turn_id=f"t{n}", failed=rnd.random() < 0.1, model_calls=1,
+        )
+    start, end = "2026-09-27", "2026-10-04"
+    for sub in ("a", "nobody"):
+        assert svc.user_daily_for(sub, start, end) == svc.user_daily(start, end).get(sub, {})
+    repo.batches.clear()
+    assert svc.user_agents_for("a", ["rec-1", "rec-2"], start, end) == svc.agent_user_matrix(["rec-1", "rec-2"], start, end)["a"]
+    # Exact keys only: one batch for every (agent, day), no partition reads of everyone.
+    assert len(repo.batches) == 1 and all(sk.endswith("#U#a") for _, sk in repo.batches[0])
