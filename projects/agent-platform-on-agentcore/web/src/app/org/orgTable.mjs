@@ -24,14 +24,25 @@ export function teamStatusLabel(team) {
 }
 
 const NUMERIC = new Set(["turns_30d", "model_cost_micros_30d"]);
+// Read off the row as the table shows it: teams as their list, status as its label.
+const SORT_VALUE = {
+  teams: (u) => (u.teams || []).join(", "),
+  status: (u) => userStatusLabel(u).label,
+};
 
+/** Words start A→Z; figures and dates start biggest/newest first. */
+export function firstSortDirection(key) {
+  return NUMERIC.has(key) || key === "last_login" ? "desc" : "asc";
+}
+
+/** Stable sort; a blank text value (no team, never logged in) stays last in either direction. */
 export function sortUsers(users, key, direction = "desc") {
   const sign = direction === "asc" ? 1 : -1;
+  const value = SORT_VALUE[key] || ((u) => u[key] ?? (NUMERIC.has(key) ? 0 : ""));
   return users
-    .map((u, i) => [u, i])
-    .sort(([a, ia], [b, ib]) => {
-      const va = a[key] ?? (NUMERIC.has(key) ? 0 : "");
-      const vb = b[key] ?? (NUMERIC.has(key) ? 0 : "");
+    .map((u, i) => [u, i, value(u)])
+    .sort(([, ia, va], [, ib, vb]) => {
+      if (!NUMERIC.has(key) && (va === "") !== (vb === "")) return va === "" ? 1 : -1;
       const cmp = NUMERIC.has(key) ? va - vb : String(va).localeCompare(String(vb));
       return cmp !== 0 ? cmp * sign : ia - ib;
     })
@@ -144,4 +155,26 @@ export function parseEmails(text) {
     if (email && !out.includes(email)) out.push(email);
   }
   return out;
+}
+
+/**
+ * The Organization directory's pick, as the address holds it: `?team=<name>`,
+ * `?view=users|noteam`, or nothing for 모든 팀. The users tab the directory
+ * replaced (`?tab=users`) still lands on 모든 사용자.
+ *
+ * @typedef {{kind: "teams"} | {kind: "users"} | {kind: "noteam"} | {kind: "team", name: string}} OrgView
+ * @param {URLSearchParams} params
+ * @returns {OrgView}
+ */
+export function viewFromParams(params) {
+  const team = params.get("team");
+  if (team) return { kind: "team", name: team };
+  const view = params.get("view") ?? (params.get("tab") === "users" ? "users" : null);
+  return view === "users" || view === "noteam" ? { kind: view } : { kind: "teams" };
+}
+
+/** @param {OrgView} view @returns {string} the `/org` query for it, `""` for 모든 팀. */
+export function viewQuery(view) {
+  if (view.kind === "team") return `?team=${encodeURIComponent(view.name)}`;
+  return view.kind === "teams" ? "" : `?view=${view.kind}`;
 }

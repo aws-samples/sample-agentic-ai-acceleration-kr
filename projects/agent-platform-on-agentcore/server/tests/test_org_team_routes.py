@@ -117,6 +117,7 @@ class Record:
         self.record_id = f"r-{team}"
         self.name = f"agent-{team}"
         self.descriptor_type = "A2A"
+        self.description = f"{team} 업무 에이전트"
 
 
 class Registry:
@@ -274,7 +275,7 @@ def test_team_records_lists_approved_records_of_that_team():
     wire(registry=Registry(["hr", "finance"]))
     org.create_team(TeamCreate(name="hr"), user=ADMIN)
     out = org.team_records("hr", user=ADMIN)
-    assert out["records"] == [{"record_id": "r-hr", "name": "agent-hr", "descriptor_type": "A2A"}]
+    assert out["records"] == [{"record_id": "r-hr", "name": "agent-hr", "descriptor_type": "A2A", "description": "hr 업무 에이전트"}]
 
 
 def test_501_without_table():

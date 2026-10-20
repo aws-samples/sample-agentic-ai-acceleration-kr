@@ -442,7 +442,8 @@ def _team_records(name: str) -> List[Dict[str, Any]]:
         logger.warning("Registry unavailable for team record check", exc_info=True)
         raise RegistryReadFailed(str(exc)) from exc
     return [
-        {"record_id": r.record_id, "name": getattr(r, "name", ""), "descriptor_type": getattr(r, "descriptor_type", None)}
+        {"record_id": r.record_id, "name": getattr(r, "name", ""), "descriptor_type": getattr(r, "descriptor_type", None),
+         "description": getattr(r, "description", None)}
         for r in records if team_of(r) == name
     ]
 

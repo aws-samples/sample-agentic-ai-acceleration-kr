@@ -151,7 +151,7 @@ export const addTeamMember = (name: string, sub: string) =>
   request<void>(`/api/org/teams/${enc(name)}/members/${enc(sub)}`, { method: "PUT" });
 export const removeTeamMember = (name: string, sub: string) =>
   request<void>(`/api/org/teams/${enc(name)}/members/${enc(sub)}`, { method: "DELETE" });
-export type TeamRecord = { record_id: string; name: string; descriptor_type?: string | null };
+export type TeamRecord = { record_id: string; name: string; descriptor_type?: string | null; description?: string | null };
 export const fetchTeamRecords = (name: string) =>
   request<{ records: TeamRecord[] }>(`/api/org/teams/${enc(name)}/records`);
 

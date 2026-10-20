@@ -16,11 +16,11 @@ import { parseEmails } from "../orgTable.mjs";
  * switch off the server mints one and this dialog shows it exactly once —
  * it is not stored anywhere, so the admin has to pass it on now.
  */
-export function InviteDialog({ open, onOpenChange, teams, onInvited }: {
-  open: boolean; onOpenChange: (o: boolean) => void; teams: string[]; onInvited: () => void;
+export function InviteDialog({ open, onOpenChange, teams, initialTeams = [], onInvited }: {
+  open: boolean; onOpenChange: (o: boolean) => void; teams: string[]; initialTeams?: string[]; onInvited: () => void;
 }) {
   const [text, setText] = useState("");
-  const [picked, setPicked] = useState<string[]>([]);
+  const [picked, setPicked] = useState<string[]>(initialTeams);
   const [role, setRole] = useState<"admin" | "user">("user");
   const [sendEmail, setSendEmail] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -33,7 +33,7 @@ export function InviteDialog({ open, onOpenChange, teams, onInvited }: {
   useEffect(() => { openRef.current = open; }, [open]);
 
   const emails = parseEmails(text);
-  const reset = () => { setText(""); setPicked([]); setRole("user"); setSendEmail(true); setResult(null); setError(null); };
+  const reset = () => { setText(""); setPicked(initialTeams); setRole("user"); setSendEmail(true); setResult(null); setError(null); };
 
   const submit = async () => {
     setBusy(true); setError(null);

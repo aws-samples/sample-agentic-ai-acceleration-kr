@@ -16,8 +16,11 @@ import {
   providerLabel,
   shortTool,
   sortUsers,
+  firstSortDirection,
   teamStatusLabel,
   managedByLabel,
+  viewFromParams,
+  viewQuery,
   toggleEntry,
   userStatusLabel,
 } from "./orgTable.mjs";
@@ -46,6 +49,24 @@ test("sortUsers orders by turns, cost and email, stable on ties", () => {
   assert.deepEqual(sortUsers(users, "email", "asc").map((u) => u.sub), ["a", "b", "c", "e"]);
   assert.deepEqual(sortUsers(users, "model_cost_micros_30d", "desc").map((u) => u.sub), ["b", "a", "c", "e"]);
   assert.deepEqual(users.map((u) => u.sub), ["a", "b", "c", "e"], "input untouched");
+});
+
+test("sortUsers orders by role, team, status and last login; blanks stay last either way", () => {
+  assert.deepEqual(sortUsers(users, "role", "asc").map((u) => u.sub), ["a", "b", "c", "e"]);
+  assert.deepEqual(sortUsers(users, "role", "desc").map((u) => u.sub), ["b", "c", "e", "a"]);
+  assert.deepEqual(sortUsers(users, "teams", "asc").map((u) => u.sub), ["b", "c", "e", "a"]);
+  assert.deepEqual(sortUsers(users, "teams", "desc").map((u) => u.sub), ["c", "e", "b", "a"]);
+  // By the label a person reads in the column, not the raw Cognito value.
+  assert.deepEqual(sortUsers(users, "status", "asc").map((u) => u.sub), ["e", "c", "b", "a"]);
+  assert.deepEqual(sortUsers(users, "last_login", "desc").map((u) => u.sub), ["e", "a", "b", "c"]);
+  assert.deepEqual(sortUsers(users, "last_login", "asc").map((u) => u.sub), ["e", "a", "b", "c"]);
+});
+
+test("a column's first click sorts words A→Z and figures and dates biggest first", () => {
+  assert.equal(firstSortDirection("email"), "asc");
+  assert.equal(firstSortDirection("role"), "asc");
+  assert.equal(firstSortDirection("turns_30d"), "desc");
+  assert.equal(firstSortDirection("last_login"), "desc");
 });
 
 test("filterUsers matches email or name, team, role, provider and status", () => {
@@ -101,4 +122,16 @@ test("in-flight rows older than five minutes are stale, ready rows never", () =>
   assert.equal(isStaleInFlight(team({ status: "provisioning", updated_at: "" }), now), true);
   assert.equal(isStaleInFlight(team({ status: "ready", updated_at: "2026-01-01T00:00:00Z" }), now), false);
   assert.equal(driftTitle({ kind: "stale_deleting", team: "hr" }), "삭제 멈춤 · hr");
+});
+
+test("the directory pick survives the address, and the old users tab still lands on everyone", () => {
+  const parse = (q) => viewFromParams(new URLSearchParams(q));
+  assert.deepEqual(parse(""), { kind: "teams" });
+  assert.deepEqual(parse("team=finance"), { kind: "team", name: "finance" });
+  assert.deepEqual(parse("view=noteam"), { kind: "noteam" });
+  assert.deepEqual(parse("tab=users"), { kind: "users" });
+  assert.deepEqual(parse("view=bogus"), { kind: "teams" });
+  for (const view of [{ kind: "teams" }, { kind: "users" }, { kind: "noteam" }, { kind: "team", name: "r&d" }]) {
+    assert.deepEqual(parse(viewQuery(view).replace(/^\?/, "")), view);
+  }
 });
