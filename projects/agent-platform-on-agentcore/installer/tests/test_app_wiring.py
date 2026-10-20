@@ -99,6 +99,84 @@ def test_shell_capture_handles_concurrent_commands():
     run(check())
 
 
+def _alive(pid: int) -> bool:
+    return subprocess.run(["ps", "-p", str(pid)], capture_output=True).returncode == 0
+
+
+def test_cancelled_capture_stops_its_process_and_spares_siblings(tmp_path):
+    """Probes run concurrently; cancelling one must stop it — grandchildren
+    included — and nothing else. The output is larger than a pipe buffer: once
+    nothing reads it the process blocks on write, which is how a cancelled
+    `plan -destroy` sat holding the state lock."""
+    from installer.app import RunnerShell
+    from installer.core.runner import Command
+
+    pids = tmp_path / "pids"
+
+    async def check():
+        shell = RunnerShell()
+        doomed = asyncio.create_task(shell.capture(Command(argv=(
+            "sh", "-c",
+            f"echo $$ > {pids}; sleep 60 & echo $! >> {pids}; "
+            "head -c 300000 /dev/zero | tr '\\0' x; wait",
+        ))))
+        sibling = asyncio.create_task(shell.capture(
+            Command(argv=("sh", "-c", "sleep 1; echo sibling-done"))
+        ))
+        while not (pids.exists() and len(pids.read_text().split()) == 2):
+            await asyncio.sleep(0.05)
+        doomed.cancel()
+        try:
+            await doomed
+        except asyncio.CancelledError:
+            pass
+        else:
+            raise AssertionError("a cancelled capture must re-raise CancelledError")
+        return await sibling
+
+    code, out = run(check())
+    assert (code, out) == (0, "sibling-done"), "a sibling probe must not be stopped"
+    for pid in map(int, pids.read_text().split()):
+        assert not _alive(pid), f"process {pid} survived the cancelled capture"
+
+
+def test_an_older_refresh_finishing_last_does_not_overwrite_a_newer_one():
+    """Refreshes overlap, and the probe plans run without the state lock. One
+    started before a destroy must not paint the pre-destroy state back over the
+    post-destroy answer."""
+    import dataclasses
+
+    from installer.app import InstallerApp
+    from installer.core.probe import ProbeOutcome, State
+
+    app = InstallerApp(env="standalone", dry_run=True)
+    gate = asyncio.Event()
+    calls = 0
+
+    async def probe(_env, _sh):
+        nonlocal calls
+        calls += 1
+        if calls <= len(app.plan.steps):        # the first refresh: slow, stale
+            await gate.wait()
+            return ProbeOutcome(State.DONE, "stale")
+        return ProbeOutcome(State.PENDING, "fresh")
+
+    app.plan = dataclasses.replace(app.plan, steps=tuple(
+        dataclasses.replace(step, probe=probe) for step in app.plan.steps
+    ))
+
+    async def check():
+        older = asyncio.create_task(app.refresh_states())
+        await asyncio.sleep(0.05)
+        await app.refresh_states()
+        gate.set()
+        await older
+
+    run(check())
+    assert set(app.states.values()) == {State.PENDING}
+    assert set(app.details.values()) == {"fresh"}
+
+
 def test_run_step_refuses_overlapping_calls():
     """Overlapping run_step calls must refuse the second, not corrupt state.
 

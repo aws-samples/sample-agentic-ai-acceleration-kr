@@ -4,11 +4,12 @@ from __future__ import annotations
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.screen import Screen
-from textual.widgets import DataTable, Footer, Header, Static
+from textual.widgets import DataTable, Header, Static
 
 from installer.core.probe import State
 from installer.core.steps import Command, FileWrite
 from installer.screens.safetext import set_text
+from installer.screens.footer import InstallerFooter
 
 _LABEL = {
     State.DONE: ("완료", "state-done"),
@@ -25,7 +26,7 @@ class Dashboard(Screen):
         with Vertical():
             yield DataTable(id="steps", cursor_type="row")
             yield Static(id="detail")
-        yield Footer()
+        yield InstallerFooter()
 
     def on_mount(self) -> None:
         # Paint the step list at once and probe in a worker. Awaiting the probes

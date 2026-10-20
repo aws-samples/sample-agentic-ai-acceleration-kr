@@ -128,3 +128,30 @@ def test_command_display_quotes_arguments_with_spaces():
 
 def test_command_display_leaves_plain_arguments_bare():
     assert Command(argv=["terraform", "init"]).display() == "terraform init"
+
+
+def _alive(pid: int) -> bool:
+    return subprocess.run(["ps", "-p", str(pid)], capture_output=True).returncode == 0
+
+
+def test_cancelling_the_task_stops_the_process_group(runner):
+    """A cancelled worker, not runner.cancel(): the path a re-pressed Enter or a
+    closed screen takes. It used to leave the command — a destroy — running."""
+    child_pids: list[int] = []
+
+    def capture(line):
+        if line.startswith("CHILD="):
+            child_pids.append(int(line.split("=")[1]))
+
+    async def scenario():
+        cmd = Command(argv=["sh", "-c", "sleep 60 & echo CHILD=$!; wait"])
+        task = asyncio.create_task(runner.run(cmd, "task-cancel", capture))
+        while not child_pids:
+            await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+    assert not _alive(child_pids[0]), "grandchild survived the cancelled task"
+    assert runner._proc is None, "a cancelled run must not leave a stale process behind"

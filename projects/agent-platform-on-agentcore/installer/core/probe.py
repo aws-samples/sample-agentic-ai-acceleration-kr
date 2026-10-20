@@ -231,15 +231,27 @@ async def tf_initialised(env: Env, sh: Shell) -> ProbeOutcome:
     return ProbeOutcome(State.DONE, detail)
 
 
-def _first_apply_vars(env: Env) -> tuple[str, ...]:
-    """`-var` flags that reproduce the first apply: 0 tasks, placeholder images.
+def first_apply_vars(env: Env) -> tuple[str, ...]:
+    """`-var` flags of the first apply: 0 tasks, placeholder images.
 
     The placeholders are the variables.tf defaults, so the images step writing
     real URIs into tfvars does not make this probe report the first apply undone.
+
+    The first_apply step applies with these same flags (steps.py). It used to
+    pass only desired_count=0 and take the images from tfvars, so a tfvars still
+    holding the previous deployment's URIs (destroy does not clear them) applied
+    real images while this probe planned placeholders: the plan always showed the
+    task definitions changing, the step read 대기 after every successful apply,
+    and the images step behind it stayed blocked.
     """
+    # build_plan calls this too, at startup: a missing variables.tf must not
+    # take the app down, so it degrades to desired_count alone.
+    variables = (
+        hcl.read_variables(env.variables_path) if env.variables_path.is_file() else ()
+    )
     defaults = {
         v.name: (v.default_literal or "").strip('"')
-        for v in hcl.read_variables(env.variables_path)
+        for v in variables
         if v.name in ("server_image", "web_image")
     }
     out = ["-var", "desired_count=0"]
@@ -288,9 +300,13 @@ async def first_apply_done(env: Env, sh: Shell) -> ProbeOutcome:
     # images). Without them the plan always wants desired_count 0 -> 1 and, after
     # the images step, a new task definition — so a finished first apply read
     # 대기 forever on a real run.
+    #
+    # -lock=false: this plan is only read, never applied, and with the lock it
+    # held the state for tens of seconds — a destroy started meanwhile failed
+    # with "Error acquiring the state lock".
     plan_code, plan_out = await sh.capture(
-        _tf(env, "plan", "-detailed-exitcode", "-input=false", "-no-color",
-            *_first_apply_vars(env))
+        _tf(env, "plan", "-detailed-exitcode", "-input=false", "-lock=false",
+            "-no-color", *first_apply_vars(env))
     )
     # -detailed-exitcode: 0 = no changes, 2 = changes pending, 1 = plan error.
     if plan_code == 2:

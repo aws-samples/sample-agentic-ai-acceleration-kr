@@ -228,6 +228,26 @@ data "aws_iam_policy_document" "task" {
   }
 
   statement {
+    # The first CreateHarness (or CreateAgentRuntime) in an account makes
+    # AgentCore create its runtime-identity service-linked role with the
+    # caller's permissions. In an account that has never used AgentCore that
+    # caller is this task role, and without the permission the web UI fails
+    # with "Failed creating service linked role ... 403". Accounts that already
+    # used AgentCore (the author's, most dev accounts) have the role and never
+    # hit it, which is why a fresh-account rehearsal was the first to see it.
+    # Scoped to that one service-linked role; it grants nothing else in IAM.
+    sid       = "AgentCoreServiceLinkedRole"
+    effect    = "Allow"
+    actions   = ["iam:CreateServiceLinkedRole"]
+    resources = ["arn:aws:iam::*:role/aws-service-role/runtime-identity.bedrock-agentcore.amazonaws.com/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "iam:AWSServiceName"
+      values   = ["runtime-identity.bedrock-agentcore.amazonaws.com"]
+    }
+  }
+
+  statement {
     sid    = "AgentRegistry"
     effect = "Allow"
     # Agent Registry moved to its own `agent-registry` namespace on 2026-08-06;

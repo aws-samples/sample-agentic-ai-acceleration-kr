@@ -123,21 +123,25 @@ call PutLogEvents on the aws/spans Log Group` 이 납니다. 콘솔에서 켤 �
 REGION=ap-northeast-1
 ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
 
-# 1) 로그 리소스 정책
-aws logs put-resource-policy --region $REGION --policy-name TransactionSearchXRayAccess \
+# 1) 로그 리소스 정책. 변수는 ${ACCOUNT} 처럼 중괄호로 씁니다. zsh 는 $ACCOUNT:log-group 의
+#    ":l" 을 소문자 변환 수식어로 읽어 ARN 이 "...og-group:aws/spans" 로 깨지고, 그 정책으로는
+#    2) 가 "XRay does not have permission to call PutLogEvents" 로 거부됩니다 (bash 에서는 안 남).
+aws logs put-resource-policy --region "${REGION}" --policy-name TransactionSearchXRayAccess \
   --policy-document "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"TransactionSearchXRayAccess\",
     \"Effect\":\"Allow\",\"Principal\":{\"Service\":\"xray.amazonaws.com\"},\"Action\":\"logs:PutLogEvents\",
-    \"Resource\":[\"arn:aws:logs:$REGION:$ACCOUNT:log-group:aws/spans:*\",
-                 \"arn:aws:logs:$REGION:$ACCOUNT:log-group:/aws/application-signals/data:*\"],
-    \"Condition\":{\"ArnLike\":{\"aws:SourceArn\":\"arn:aws:xray:$REGION:$ACCOUNT:*\"},
-                  \"StringEquals\":{\"aws:SourceAccount\":\"$ACCOUNT\"}}}]}"
+    \"Resource\":[\"arn:aws:logs:${REGION}:${ACCOUNT}:log-group:aws/spans:*\",
+                 \"arn:aws:logs:${REGION}:${ACCOUNT}:log-group:/aws/application-signals/data:*\"],
+    \"Condition\":{\"ArnLike\":{\"aws:SourceArn\":\"arn:aws:xray:${REGION}:${ACCOUNT}:*\"},
+                  \"StringEquals\":{\"aws:SourceAccount\":\"${ACCOUNT}\"}}}]}"
+sleep 10   # 정책 전파 전에 2) 를 실행하면 같은 권한 오류가 납니다
 
 # 2) 스팬 목적지와 샘플링 비율
-aws xray update-trace-segment-destination --destination CloudWatchLogs --region $REGION
-aws xray update-indexing-rule --name Default --region $REGION \
+aws xray update-trace-segment-destination --destination CloudWatchLogs --region "${REGION}"
+aws xray update-indexing-rule --name Default --region "${REGION}" \
   --rule '{"Probabilistic":{"DesiredSamplingPercentage":10}}'
 
-aws xray get-trace-segment-destination --region $REGION   # Status: ACTIVE 확인
+aws xray get-trace-segment-destination --region "${REGION}"   # Destination: CloudWatchLogs, Status: ACTIVE 확인.
+                                                                # Destination 이 XRay 면 기본값(꺼진 상태). ACTIVE 까지 5분 안팎
 ```
 
 설정은 계정·리전 단위입니다. 스택을 올릴 리전에서 켜야 하고, 수집된 스팬 수만큼 과금됩니다.

@@ -4,10 +4,11 @@ from __future__ import annotations
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.screen import Screen
-from textual.widgets import Button, Footer, Header, Input, Label, Static, TabbedContent, TabPane
+from textual.widgets import Button, Header, Input, Label, Static, TabbedContent, TabPane
 
 from installer.core import values
 from installer.screens.safetext import set_text
+from installer.screens.footer import InstallerFooter
 
 
 class Settings(Screen):
@@ -30,7 +31,7 @@ class Settings(Screen):
                 yield VerticalScroll(Static(id="derived-body"))
         yield Static(id="save-status")
         yield Button("저장 (Ctrl+S)", id="save", variant="primary")
-        yield Footer()
+        yield InstallerFooter()
 
     def _pane(self, fields, tab: str):
         with VerticalScroll():
@@ -60,6 +61,14 @@ class Settings(Screen):
             "이 값들은 Terraform 이 소유합니다. 여기서 고쳐도 다음 apply 에서 "
             "되돌아가므로 읽기 전용입니다.\n\n" + body,
         )
+
+    def reload_after_destroy(self) -> None:
+        """Refresh reset fields without discarding unrelated unsaved edits."""
+        if not self.is_mounted:
+            return  # First compose will read the updated file.
+        for field in values.load_fields(self.app.env):
+            if field.variable.name in {"server_image", "web_image", "allow_destroy"}:
+                self._inputs[field.variable.name].value = field.value
 
     def on_input_changed(self, event: Input.Changed) -> None:
         name = event.input.id.removeprefix("in-")

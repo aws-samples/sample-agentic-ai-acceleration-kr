@@ -238,3 +238,21 @@ def test_real_allowed_models_default_keeps_its_items():
 
     var = {v.name: v for v in hcl.read_variables(get("standalone").variables_path)}
     assert var["allowed_models"].default_literal.count('"') >= 4
+
+
+def test_remove_var_drops_the_assignment_and_nothing_else():
+    """Removed, not emptied: `server_image = ""` is a value terraform applies."""
+    text = (
+        'project = "bap"\n'
+        'server_image = "acct.dkr.ecr/bap/server:v1"\n'
+        '# server_image = "a commented example stays"\n'
+        'server_image_tag = "unrelated"\n'
+        '  web_image   = "acct.dkr.ecr/bap/web:v1"'
+    )
+    out = hcl.remove_var(hcl.remove_var(text, "server_image"), "web_image")
+    assert out == (
+        'project = "bap"\n'
+        '# server_image = "a commented example stays"\n'
+        'server_image_tag = "unrelated"\n'
+    )
+    assert hcl.remove_var(out, "server_image") == out, "absent key: no change"

@@ -164,7 +164,9 @@ def build_plan(env: Env) -> Plan:
             id="first_apply",
             title="1차 apply (서비스는 0으로, ECR 리포지토리 생성)",
             requires=("init", "capacity"),
-            action=_tf(env, "apply", "-auto-approve", "-var", "desired_count=0"),
+            # The probe's own flags: whatever tfvars says, the first apply and the
+            # plan that judges it must agree on the images (probe.first_apply_vars).
+            action=_tf(env, "apply", "-auto-approve", *probe.first_apply_vars(env)),
             probe=probe.first_apply_done,
         ),
         Step(
