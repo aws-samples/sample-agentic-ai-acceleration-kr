@@ -1,4 +1,6 @@
 import logging
+import os
+import time
 from auth import access_token
 from typing import Optional, Tuple, Any
 from config import Config
@@ -108,13 +110,27 @@ class MCPServerManager:
         if not self.config.mcp_server_url:
             self.logger.error("MCP server URL is not configured, cannot load tools")
             return None, None
-        try:
-            tools, mcp_client = access_token.load_tools_from_mcp(
-                self.config.mcp_server_url, session_scope=session_scope
-            )
-        except Exception as e:
-            self.logger.error(f"Error loading tools from MCP server: {e}", exc_info=True)
-            return None, None
+        # A failed load leaves the session with local tools only. Page failures are
+        # retried (and survived) in load_tools_from_mcp; this covers the first page
+        # and the connection itself, which failed transiently under 300 concurrent
+        # new chats (bst load test, 2026-10-18).
+        attempts = max(1, int(os.getenv("MCP_TOOLS_ATTEMPTS", "2")))
+        for attempt in range(1, attempts + 1):
+            try:
+                tools, mcp_client = access_token.load_tools_from_mcp(
+                    self.config.mcp_server_url, session_scope=session_scope
+                )
+                break
+            except Exception as e:
+                if attempt == attempts:
+                    self.logger.error(
+                        f"Error loading tools from MCP server after {attempts} attempts; "
+                        f"this session runs with local tools only: {e}",
+                        exc_info=True,
+                    )
+                    return None, None
+                self.logger.warning(f"Loading MCP tools failed (attempt {attempt}/{attempts}), retrying: {e}")
+                time.sleep(attempt)
         if not tools or not mcp_client:
             return None, None
         before = len(tools)

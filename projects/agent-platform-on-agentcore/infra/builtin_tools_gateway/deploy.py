@@ -32,6 +32,7 @@ import argparse
 import io
 import json
 import os
+import subprocess
 import sys
 import time
 import zipfile
@@ -1161,12 +1162,47 @@ def cmd_test(args):
                 call(tool, {})
 
 
+STACK_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "envs", "standalone")
+
+
+def _stack_output(name):
+    """`terraform output -raw <name>` of the standalone stack, or None."""
+    try:
+        out = subprocess.run(
+            ["terraform", f"-chdir={STACK_DIR}", "output", "-raw", name],
+            capture_output=True, text=True, timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return out.stdout.strip() or None if out.returncode == 0 else None
+
+
+def resolve_stack(args, environ=os.environ, output=_stack_output):
+    """Fill --project / --region from the deployed stack when not given.
+
+    The resource names here (IAM roles above all) are global to the account, so
+    a guessed project is not harmless: the old `--project bap` default, run for a
+    stack deployed under another name or region, rewrote the live `bap-*` roles'
+    policies for the new region. Explicit flags win, then the stack's own
+    Terraform outputs; with no project at all the script stops rather than guess.
+    """
+    args.project = args.project or environ.get("PLATFORM") or output("project")
+    if not args.project:
+        raise SystemExit(
+            "Could not tell which stack this is: pass --project <terraform var.project> "
+            f"(no `project` output in {STACK_DIR})."
+        )
+    args.region = args.region or output("region") or environ.get("AWS_REGION") or "ap-northeast-1"
+    return args
+
+
 def main():
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("--project", default="bap")
-    parser.add_argument("--region", default=os.environ.get("AWS_REGION", "ap-northeast-1"))
+    # Both default to the deployed stack's Terraform outputs (resolve_stack).
+    parser.add_argument("--project", default=None)
+    parser.add_argument("--region", default=None)
     parser.add_argument("--profile", default=os.environ.get("AWS_PROFILE"))
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -1229,7 +1265,8 @@ def main():
     )
     down.set_defaults(func=cmd_down)
 
-    args = parser.parse_args()
+    args = resolve_stack(parser.parse_args())
+    print(f"stack: project={args.project} region={args.region}", file=sys.stderr)
     try:
         args.func(args)
     except ClientError as exc:

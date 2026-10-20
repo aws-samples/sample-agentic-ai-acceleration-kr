@@ -34,6 +34,12 @@ class Config:
     # always-available DRAFT so a single GUARDRAIL_ID env is enough to turn it on).
     guardrail_id: str = ""
     guardrail_version: str = "DRAFT"
+    # Screen only the newest user message on input (the model's output is
+    # screened either way). Without it every model call of a turn re-screens the
+    # whole conversation, tool results included: one flagged line from an
+    # earlier turn blocks every later one, and the text billed grows with the
+    # thread. Off restores whole-conversation screening.
+    guardrail_latest_message: bool = True
     # Bedrock prompt caching for the static prefix (system prompt + tool schemas).
     # On by default because every turn after the first then reads that prefix from
     # cache at ~1/10 the input rate instead of re-billing it. Left as a flag so a
@@ -79,6 +85,12 @@ class Config:
         )
         guardrail_id = os.getenv("GUARDRAIL_ID", "")
         guardrail_version = os.getenv("GUARDRAIL_VERSION", "DRAFT")
+        guardrail_latest_message = os.getenv("GUARDRAIL_LATEST_MESSAGE", "true").strip().lower() not in (
+            "false",
+            "0",
+            "no",
+            "off",
+        )
         # Default on; any of the usual falsy spellings turns it off.
         prompt_cache = os.getenv("PROMPT_CACHE", "true").strip().lower() not in (
             "false",
@@ -119,6 +131,7 @@ class Config:
             long_term_recall=long_term_recall,
             guardrail_id=guardrail_id,
             guardrail_version=guardrail_version,
+            guardrail_latest_message=guardrail_latest_message,
             prompt_cache=prompt_cache,
             max_tokens=max_tokens,
             reasoning_budget=reasoning_budget,

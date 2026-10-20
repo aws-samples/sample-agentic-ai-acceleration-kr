@@ -53,3 +53,11 @@ output "teams_table_name" {
 output "teams_table_arn" {
   value = aws_dynamodb_table.teams.arn
 }
+
+output "runs_table_name" {
+  value = aws_dynamodb_table.runs.name
+}
+
+output "runs_table_arn" {
+  value = aws_dynamodb_table.runs.arn
+}

@@ -13,7 +13,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 import boto3
 from botocore.exceptions import ClientError
 
-from agents.agentcore_client import call_off_loop, iter_blocking_stream, stream_boto_config
+from agents.agentcore_client import iter_blocking_stream, open_stream_with_retry, stream_boto_config
 from agents.agent_config import AgentConfig
 from agents.base import AgentClient
 from agents.formatters.event_formatter import EventFormatter
@@ -134,7 +134,7 @@ class HarnessClient(AgentClient):
                 qualifier,
                 len(messages),
             )
-            response = await call_off_loop(self.agentcore_client.invoke_harness, **invoke_params)
+            response = await open_stream_with_retry(self.agentcore_client.invoke_harness, **invoke_params)
 
             # Off the loop's thread: a harness is silent while its tools run
             # inside AWS, and iterating this blocking stream directly would hold

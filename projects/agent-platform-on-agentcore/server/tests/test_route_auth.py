@@ -122,6 +122,7 @@ ROUTES = [
     # agents, which are public registry records, and this one names people. `/me`
     # stays the owner-scoped door to the same counters.
     Route("GET", "/api/insights/users", True),
+    Route("GET", "/api/insights/users/sub-1", True),
     # Spend and policy denials per team; inline is_admin check like /users.
     Route("GET", "/api/insights/teams", True),
     # Model rate card. Admin throughout (inline _require_admin): registering or

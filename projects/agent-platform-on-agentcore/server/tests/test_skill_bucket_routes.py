@@ -6,7 +6,6 @@ bucket-skill picker can offer it. These routes are the bucket-only half of the
 existing `/skills` flow — publish without a record, list what is there, delete a
 prefix — and must never touch the registry.
 """
-import asyncio
 import os
 import sys
 
@@ -36,10 +35,6 @@ class _Staged:
         self.info = _Info(valid)
 
 
-def _run(coro):
-    return asyncio.run(coro)
-
-
 def _no_registry(monkeypatch):
     """Any registry call from a bucket route is a bug — make it explode."""
     def boom(*a, **k):
@@ -51,13 +46,13 @@ def _no_registry(monkeypatch):
 
 def test_publish_writes_to_bucket_and_returns_the_skill_without_a_record(monkeypatch):
     _no_registry(monkeypatch)
-    monkeypatch.setattr(reg, "_stage", lambda file: _async(_Staged(valid=True)))
+    monkeypatch.setattr(reg, "_stage", lambda file: _Staged(valid=True))
     published = {}
     monkeypatch.setattr(
         reg._skills, "publish",
         lambda staged: published.setdefault("src", SkillSource(uri=URI, files=["SKILL.md"], total_bytes=1)),
     )
-    out = _run(reg.publish_bucket_skill(file=object(), _=None))
+    out = reg.publish_bucket_skill(file=object(), _=None)
     assert out.name == "weather"
     assert out.uri == URI
     assert "src" in published
@@ -68,11 +63,11 @@ def test_publish_rejects_an_invalid_bundle(monkeypatch):
     # invalid bundle never reaches publish.
     from fastapi import HTTPException
     _no_registry(monkeypatch)
-    monkeypatch.setattr(reg, "_stage", lambda file: _async(_Staged(valid=False)))
+    monkeypatch.setattr(reg, "_stage", lambda file: _Staged(valid=False))
     monkeypatch.setattr(reg._skills, "publish",
                         lambda staged: (_ for _ in ()).throw(AssertionError("published invalid")))
     with pytest.raises(HTTPException) as exc:
-        _run(reg.publish_bucket_skill(file=object(), _=None))
+        reg.publish_bucket_skill(file=object(), _=None)
     assert exc.value.status_code == 400
 
 
@@ -106,6 +101,3 @@ def test_delete_bucket_skill_refuses_a_uri_outside_our_bucket(monkeypatch):
         reg.delete_bucket_skill(uri="s3://someone-elses-bucket/skills/x/", _=None)
     assert exc.value.status_code == 400
 
-
-async def _async(value):
-    return value

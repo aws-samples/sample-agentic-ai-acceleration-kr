@@ -171,7 +171,7 @@ flowchart TB
 | | **Amazon S3** | artifact·첨부 파일·지식 문서·스킬 번들 원본 |
 | 운영·비용 | **Amazon CloudWatch** | 지표·Logs Insights 드릴다운, ALB 5xx·헬스·DynamoDB 스로틀 알람 |
 | | **Amazon SNS** | 알람 알림 |
-| | **AWS Cost Explorer**, **AWS Price List API** | AgentCore 기능별 실제 청구 비용과 모델 요율 학습, `Platform` 비용 할당 태그로 스택 단위 스코핑 |
+| | **AWS Cost Explorer**, **AWS Price List API** | AgentCore 기능별 실제 청구 비용과 모델 토큰 가격 학습, `Platform` 비용 할당 태그로 스택 단위 스코핑 |
 | | **AWS IAM** | 런타임·Harness·게이트웨이·Knowledge Base·ECS 태스크별 최소 권한 역할. 팀 실행 역할은 서버가 permissions boundary 아래에서만 생성 |
 
 외부 서비스로는 Microsoft Entra ID(OIDC 로그인, 선택)를 쓸 수 있습니다. 웹 검색은 외부 API
@@ -381,8 +381,8 @@ Runtime 과 Harness 는 각자의 실행 역할로 SigV4 서명해 호출하므�
 </p>
 
 - **사용량과 모델 비용** — 턴마다 토큰 사용량을 DynamoDB 원장에 멱등하게 기록하고,
-  쓰기 시점의 요율로 가격을 매깁니다. 요율표는 **AWS Cost Explorer** 의 실제 청구액과
-  주기적으로 대조해 자동으로 보정되며(학습된 요율), 비어 있는 요율은 관리자가
+  쓰기 시점의 토큰 가격으로 비용을 매깁니다. 가격표는 **AWS Cost Explorer** 의 실제 청구액과
+  주기적으로 대조해 자동으로 보정되며(청구서로 보정된 가격), 비어 있는 가격은 관리자가
   청구서·**AWS Price List API**·직접 입력으로 채웁니다. 청구 합계는 `Platform` 비용
   할당 태그로 이 스택만 읽습니다.
 - **AgentCore 기능별 비용** — 모델 토큰과 Runtime CPU·메모리, Gateway, Memory, Data
@@ -405,7 +405,7 @@ Runtime 과 Harness 는 각자의 실행 역할로 SigV4 서명해 호출하므�
   <sub>비용 위젯 — AgentCore 구성별 비용과 에이전트별 비용 트리맵</sub>
 </p>
 
-`/settings`(admin)에서는 일반 사용자에게 보일 메뉴, 모델 요율표, MCP Inspector(임의의 MCP
+`/settings`(admin)에서는 일반 사용자에게 보일 메뉴, 모델 가격표, MCP Inspector(임의의 MCP
 서버에 연결해 툴을 직접 호출해 보는 도구)를 관리합니다.
 
 <p align="center">

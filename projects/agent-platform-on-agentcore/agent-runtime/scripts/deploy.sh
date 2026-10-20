@@ -37,31 +37,34 @@ print_error() {
 autofill_from_terraform() {
     [[ "${AUTO_TF_OUTPUTS:-true}" == "true" ]] || return 0
 
-    # MCP_GATEWAY_URL already set? skip the terraform call entirely.
-    if [[ -n "$MCP_GATEWAY_URL" ]]; then
-        return 0
-    fi
-
     local tf_dir="${INFRA_ENV_DIR:-$(dirname "$0")/../../infra/envs/standalone}"
 
     if ! command -v terraform &>/dev/null; then
-        print_warning "terraform not found; leaving gateway values as-is (set MCP_GATEWAY_URL manually to use the gateway)"
+        print_warning "terraform not found; leaving stack values as-is (set MCP_GATEWAY_URL etc. manually)"
         return 0
     fi
     if [[ ! -d "$tf_dir" ]]; then
-        print_warning "infra dir not found ($tf_dir); skipping gateway output autofill"
+        print_warning "infra dir not found ($tf_dir); skipping Terraform output autofill"
         return 0
     fi
 
-    print_status "Autofilling empty gateway URL from Terraform outputs ($tf_dir)"
+    print_status "Autofilling empty stack values from Terraform outputs ($tf_dir)"
 
-    # var name here -> terraform output name. -raw so a single value prints bare;
-    # 2>/dev/null so an absent output/state is a silent skip, not a crash.
-    local val
-    if [[ -z "$MCP_GATEWAY_URL" ]]; then
-        val="$(terraform -chdir="$tf_dir" output -raw mcp_gateway_url 2>/dev/null)" \
-            && [[ -n "$val" ]] && export MCP_GATEWAY_URL="$val"
-    fi
+    # var name -> terraform output name. Only blanks are filled, so .env and
+    # inline values always win. -raw prints a single value bare; 2>/dev/null makes
+    # an absent output/state a silent skip, not a crash. PLATFORM is the stack's
+    # `project`: the runtime name stem and its Platform tag both follow it, so a
+    # stack deployed as `project = "acme"` gets acme_default tagged Platform=acme
+    # instead of bap_default tagged Platform=bap, which Insights billing ignored.
+    local pair var out val
+    for pair in MCP_GATEWAY_URL:mcp_gateway_url PLATFORM:project REGION_NAME:region \
+                EXECUTION_ROLE:agent_runtime_role_arn GUARDRAIL_ID:guardrail_id \
+                GUARDRAIL_VERSION:guardrail_version PLATFORM_API_URL:alb_url; do
+        var="${pair%%:*}"; out="${pair#*:}"
+        [[ -n "${!var:-}" ]] && continue
+        val="$(terraform -chdir="$tf_dir" output -raw "$out" 2>/dev/null)" \
+            && [[ -n "$val" ]] && export "$var=$val"
+    done
 
     # Always succeed: a failed `terraform output` above must not trip `set -e` and
     # abort the deploy — a runtime with local tools only is the intended fallback.
@@ -74,36 +77,31 @@ load_config() {
 
     if [[ -f "$env_file" ]]; then
         print_status "Loading configuration from $env_file"
-        # Values passed inline (e.g. AGENT_MODULE=my_agent ./deploy.sh) must win over
-        # .env, so preserve any pre-set vars and restore them after sourcing.
-        local _pre_agent_name="${AGENT_NAME:-}"
-        local _pre_agent_module="${AGENT_MODULE:-}"
-        # MODEL_ID too, so each runtime can be deployed on its own model without
-        # editing .env between deploys: `AGENT_MODULE=my_agent MODEL_ID=... ./deploy.sh`.
-        local _pre_model_id="${MODEL_ID:-}"
-        local _pre_max_tokens="${MAX_TOKENS:-}"
-        # MEMORY_ID and LONG_TERM_RECALL too: each runtime points at its own
-        # memory resource (per-agent session-summary memories), so an inline
-        # MEMORY_ID must not be clobbered
-        # by whatever single value .env happens to carry.
-        local _pre_memory_id="${MEMORY_ID:-}"
-        local _pre_long_term_recall="${LONG_TERM_RECALL:-}"
-        # Extended-thinking budget differs per runtime, so an inline value must
-        # survive .env like the rest.
-        local _pre_reasoning_budget="${REASONING_BUDGET:-}"
+        # Values passed inline or exported (e.g. AGENT_MODULE=my_agent ./deploy.sh,
+        # or DEPLOYMENT.md's `export PLATFORM_API_URL=…`) must win over .env. Every
+        # name .env assigns that already has a value is put back after sourcing.
+        # This used to be a hand-kept list of seven names, so .env.example's blank
+        # `PLATFORM_API_URL=` silently erased the exported URL and the runtime was
+        # never registered (2026-10-18).
+        local _name _preset=()
+        for _name in $(grep -oE '^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=' "$env_file" \
+                | sed -E 's/^[[:space:]]*(export[[:space:]]+)?//; s/=$//' | sort -u); do
+            [[ -n "${!_name:-}" ]] && _preset+=("$_name=${!_name}")
+        done
         set -a
         source "$env_file"
         set +a
-        [[ -n "$_pre_agent_name" ]] && export AGENT_NAME="$_pre_agent_name"
-        [[ -n "$_pre_agent_module" ]] && export AGENT_MODULE="$_pre_agent_module"
-        [[ -n "$_pre_model_id" ]] && export MODEL_ID="$_pre_model_id"
-        [[ -n "$_pre_max_tokens" ]] && export MAX_TOKENS="$_pre_max_tokens"
-        [[ -n "$_pre_memory_id" ]] && export MEMORY_ID="$_pre_memory_id"
-        [[ -n "$_pre_long_term_recall" ]] && export LONG_TERM_RECALL="$_pre_long_term_recall"
-        [[ -n "$_pre_reasoning_budget" ]] && export REASONING_BUDGET="$_pre_reasoning_budget"
+        local _pair
+        for _pair in "${_preset[@]}"; do
+            export "${_pair%%=*}=${_pair#*=}"
+        done
     else
         print_warning ".env file not found at $env_file, using environment variables"
     fi
+
+    # Fill blanks from the deployed stack's outputs first, so the defaults below
+    # (region, runtime name stem, Platform tag) follow the stack rather than `bap`.
+    autofill_from_terraform
 
     # Set defaults if not provided
     export REGION_NAME="${REGION_NAME:-ap-northeast-1}"
@@ -113,16 +111,17 @@ load_config() {
     # Derive a per-sample runtime name so each AGENT_MODULE deploys separately —
     # one AgentCore runtime carries one entrypoint, so sharing a name would make
     # the newest deploy silently overwrite whichever sample was there before.
-    # `bap` = bedrock agent platform. AgentRuntimeName is [a-zA-Z][a-zA-Z0-9_]{0,47},
-    # so the runtime uses the underscore form `bap_` while the infra prefix is the
-    # hyphenated `bap-*`; same stem, differing only by the separator the API allows.
-    export AGENT_NAME="${AGENT_NAME:-bap_${AGENT_MODULE}}"
     # Cost-allocation tag value applied to the runtime after launch. Matches the
-    # server's core.config.PLATFORM (Terraform passes PLATFORM=var.project); the
-    # runtime name stem `bap_` shares it. Cost Explorer scopes AgentCore spend to
-    # this platform by this tag, so it must equal what the Insights billing query
-    # filters on.
+    # server's core.config.PLATFORM (Terraform passes PLATFORM=var.project, and
+    # the autofill above reads that same `project`). Cost Explorer scopes AgentCore
+    # spend to this platform by this tag, so it must equal what the Insights
+    # billing query filters on; a blanket registry sync also uses it to tell this
+    # stack's runtimes from other projects'.
     export PLATFORM="${PLATFORM:-bap}"
+    # The runtime name stem is the same project prefix. AgentRuntimeName is
+    # [a-zA-Z][a-zA-Z0-9_]{0,47}, so it is the underscore form `<project>_` while
+    # the infra uses the hyphenated `<project>-*`.
+    export AGENT_NAME="${AGENT_NAME:-${PLATFORM//-/_}_${AGENT_MODULE}}"
     export MCP_GATEWAY_URL="${MCP_GATEWAY_URL:-}"
     export MEMORY_ID="${MEMORY_ID:-}"
     # Session-summary long-term recall; off unless this runtime's memory has a
@@ -151,10 +150,6 @@ load_config() {
 
     # Use environment variable if set, otherwise leave empty for auto-creation
     export EXECUTION_ROLE="${EXECUTION_ROLE:-}"
-
-    # Fill an empty gateway URL from the deployed stack's outputs so a runtime
-    # deploy picks up the gateway without hand-copying it.
-    autofill_from_terraform
 
     print_status "Configuration loaded"
     print_status "Region: $REGION_NAME"

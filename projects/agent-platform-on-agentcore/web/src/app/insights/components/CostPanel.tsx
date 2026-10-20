@@ -1,7 +1,8 @@
 "use client";
 
 import type { AgentUsageRow, CostBlock } from "@/lib/insights";
-import { billedTrustNote, costBreakdown, formatMicros } from "@/app/insights/insightsFormat.mjs";
+import { billedTrustNote, costBreakdown, formatMicros, topNWithOther } from "@/app/insights/insightsFormat.mjs";
+import { SERIES_CAP } from "@/app/components/chartTheme";
 import { DonutShare, EmptyPlot, Plot, PlotCell, PlotGrid, TreemapShare, type TreemapEntry } from "./charts";
 
 type Row = { key: string; label: string; micros: number; share: number; source: string; colorIndex: number };
@@ -24,8 +25,8 @@ const dollars = (value: number) => formatMicros(Math.round(value * 1_000_000));
  * of a vCPU-hour), and the idle timeout is the one lever a governance reader has.
  *
  * A donut for the components, because the question is share of the whole and
- * there are at most eight. A treemap for agents, because there can be many more
- * than eight and the question is still who the bulk of it is.
+ * there are at most eight. A treemap for agents, because the question is still
+ * who the bulk of it is — top seven in their own hues, the rest folded.
  */
 export function CostPanel({ cost, agents }: { cost: CostBlock; agents: AgentUsageRow[] }) {
   const rows = costBreakdown(cost) as Row[];
@@ -34,15 +35,30 @@ export function CostPanel({ cost, agents }: { cost: CostBlock; agents: AgentUsag
   const trust = billedTrustNote(cost.diff);
   const fromBill = rows.filter((row) => row.source === "billed").map((row) => row.label);
 
-  const perAgent: TreemapEntry[] = agents
-    .filter((row) => (row.total_cost_micros ?? 0) > 0)
-    .map((row) => ({
-      name: row.name,
-      value: (row.total_cost_micros ?? 0) / 1_000_000,
-      display: formatMicros(row.total_cost_micros),
-      id: row.record_id,
-    }))
-    .sort((a, b) => b.value - a.value);
+  // The biggest spenders, one hue each, and the long tail as one grey 기타 tile.
+  // Every agent with a cent got its own tile before, all in the cost violet: with
+  // 200 agents the plot was a mesh of slivers no one could tell apart, and the
+  // question — who is the bulk of it — was buried in it.
+  const perAgent: TreemapEntry[] = (
+    topNWithOther(
+      agents
+        .map((row) => ({
+          name: row.name,
+          // The allocated figure: a runtime several records share counts once,
+          // split by their turns. The whole-runtime total_cost_micros counted it
+          // on every one of them — 8x the window on bst (2026-10-19).
+          value: (row.allocated_cost_micros ?? row.total_cost_micros ?? 0) / 1_000_000,
+          id: row.record_id,
+        }))
+        .filter((entry) => entry.value > 0),
+      SERIES_CAP,
+    ) as Array<{ name: string; value: number; id?: string; folded?: number }>
+  ).map((entry, index) => ({
+    ...entry,
+    name: entry.folded ? `기타 ${entry.folded}개` : entry.name,
+    display: formatMicros(Math.round(entry.value * 1_000_000)),
+    ...(entry.folded ? { muted: true } : { colorIndex: index }),
+  }));
   // Runtimes no registry record claims (deleted agents, harness companions) are in
   // the component total but on no agent row; left out, the tiles would sum to half
   // the donut beside them. Grey, because it is a remainder, not an agent.
@@ -84,7 +100,7 @@ export function CostPanel({ cost, agents }: { cost: CostBlock; agents: AgentUsag
         </Plot>
       </PlotCell>
       <PlotCell>
-        <Plot title="에이전트별 비용" hint="모델과 Runtime 비용의 합입니다. 칸의 넓이가 금액이고, 회색은 어느 에이전트에도 연결되지 않은 Runtime 입니다.">
+        <Plot title="에이전트별 비용" hint="모델과 Runtime 비용의 합입니다. 칸의 넓이가 금액입니다. 비용 상위 7개를 색으로 나누고, 회색은 나머지를 묶은 기타와 어느 에이전트에도 연결되지 않은 Runtime 입니다.">
           <TreemapShare entries={perAgent} />
         </Plot>
       </PlotCell>

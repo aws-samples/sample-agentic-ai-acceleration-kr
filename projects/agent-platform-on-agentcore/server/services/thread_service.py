@@ -65,6 +65,10 @@ class ThreadService:
             raise ThreadForbidden(f"Thread {thread_id} belongs to another user")
         return thread
 
+    def owners_of(self, thread_ids: List[str]) -> Dict[str, str]:
+        """thread id -> owner sub, for the threads that exist."""
+        return self.repository.owners_of(thread_ids)
+
     def get_thread(self, thread_id: str) -> Optional[Thread]:
         """Get thread by ID, with no ownership check.
 

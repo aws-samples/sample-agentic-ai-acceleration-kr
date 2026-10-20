@@ -41,6 +41,11 @@ AGENT_RUNTIME_DISCOVERY_REGIONS = [
 # prefix; Terraform passes it as PLATFORM=var.project.
 PLATFORM = os.getenv("PLATFORM", "bap")
 
+# Worker threads for blocking calls: FastAPI's sync handlers and every
+# `asyncio.to_thread`. Matches the DynamoDB client pool (repositories/base.py);
+# beyond it threads would only queue for a connection. See main.lifespan.
+BLOCKING_THREADS = int(os.getenv("BLOCKING_THREADS", "64"))
+
 # Cognito authentication (password login + access-token verification). The
 # pool id alone enables token verification; the client id enables the
 # /api/auth/login password flow and so the "아이디 · 비밀번호" option on the
@@ -229,6 +234,16 @@ OVERRIDES_METADATA_KEY = "harness_overrides"
 # team metadata, the role/policy the server provisioned, Entra group mappings
 # and the audit ledger. Empty = the page reports 501 and there are no teams.
 TEAMS_TABLE = os.getenv("TEAMS_TABLE", "").strip()
+# Chat runs across server tasks (services/run_leases.py): one lease row per
+# thread with a turn in flight. Empty = one process, runs tracked in memory only,
+# which is right for local development and wrong for more than one task.
+RUNS_TABLE = os.getenv("RUNS_TABLE", "").strip()
+# A holder renews its leases every heartbeat; a lease not renewed for
+# RUN_LEASE_SECONDS (a task killed without shutting down) is free to claim.
+RUN_LEASE_SECONDS = float(os.getenv("RUN_LEASE_SECONDS", "60"))
+RUN_HEARTBEAT_SECONDS = float(os.getenv("RUN_HEARTBEAT_SECONDS", "15"))
+# The port other tasks reach this one on: uvicorn's (server/Dockerfile).
+SERVER_PORT = int(os.getenv("SERVER_PORT", "8000"))
 # Managed policy every server-made team role carries as its permissions
 # boundary. Empty = the server cannot create roles, so it cannot create teams.
 TEAM_ROLE_BOUNDARY_ARN = os.getenv("TEAM_ROLE_BOUNDARY_ARN", "").strip()

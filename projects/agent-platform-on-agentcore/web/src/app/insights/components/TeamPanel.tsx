@@ -178,8 +178,8 @@ function TeamUsage({ data }: { data: TeamInsights }) {
           </Plot>
         </PlotCell>
         <PlotCell>
-          <Plot title="턴당 모델 비용" hint="요율이 있는 턴만으로 나눈 값입니다. 옆의 숫자는 팀 턴 중 실패 비율입니다.">
-            <RankedBars entries={perTurnCost} color={COST_COLOR} empty="요율이 붙은 턴이 있는 팀이 없습니다." />
+          <Plot title="턴당 모델 비용" hint="가격이 매겨진 턴만으로 나눈 값입니다. 옆의 숫자는 팀 턴 중 실패 비율입니다.">
+            <RankedBars entries={perTurnCost} color={COST_COLOR} empty="가격이 매겨진 턴이 있는 팀이 없습니다." />
           </Plot>
         </PlotCell>
       </PlotGrid>
@@ -231,9 +231,9 @@ function TeamUsage({ data }: { data: TeamInsights }) {
       </PlotCell>
 
       <FoldBand title="팀별 상세" summary={`${data.teams.length}개 팀`} defaultOpen={false}>
-        <div className="overflow-auto">
+        <div className="max-h-[26rem] overflow-auto">
           <table className="w-full text-xs">
-            <thead>
+            <thead className="sticky top-0 z-[1] bg-card">
               <tr className="border-b border-border text-left text-muted-foreground">
                 <th className="py-1 font-medium">팀</th>
                 <th className="font-medium">구성원</th>
@@ -273,7 +273,7 @@ function TeamUsage({ data }: { data: TeamInsights }) {
             </tbody>
           </table>
           <p className="mt-2 text-xxs text-muted-foreground">
-            오늘은 집계 중인 값이며, 요율이 아직 없는 턴은 다음날 반영됩니다. 구성원 수는 지금 기준입니다.
+            오늘은 집계 중인 값이며, 가격이 아직 없는 턴은 다음날 반영됩니다. 구성원 수는 지금 기준입니다.
           </p>
         </div>
       </FoldBand>

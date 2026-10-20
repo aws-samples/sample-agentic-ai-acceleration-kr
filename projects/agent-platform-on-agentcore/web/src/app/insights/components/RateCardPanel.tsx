@@ -29,7 +29,7 @@ import { EmptyPlot, Plot, PlotCell } from "./charts";
  * The model rate card, as the admin fills it.
  *
  * The ledger prices a turn only with a rate it can stand behind; a model the
- * committed table lacks is "요율 미등록" until the bill has shown the same value
+ * committed table lacks is "가격 미등록" until the bill has shown the same value
  * on two consecutive days. That rule is right and it is slow. This widget is the
  * other half: what a source can state today — the bill after one clean day, the
  * Price List where it publishes — is offered as a candidate to accept, and what
@@ -70,7 +70,7 @@ function repriceSentence(report: RepriceReport): string {
   const moved = report.repriced - report.newly_priced - report.unpriced;
   if (moved > 0) parts.push(`${moved.toLocaleString("ko-KR")}턴 다시 계산`);
   if (report.unpriced > 0) parts.push(`${report.unpriced.toLocaleString("ko-KR")}턴 비용 해제`);
-  if (report.still_unpriced > 0) parts.push(`요율 미등록 ${report.still_unpriced.toLocaleString("ko-KR")}턴 남음`);
+  if (report.still_unpriced > 0) parts.push(`가격 미등록 ${report.still_unpriced.toLocaleString("ko-KR")}턴 남음`);
   return parts.length > 0 ? parts.join(" · ") : "바뀐 턴 없음";
 }
 
@@ -84,6 +84,9 @@ export function RateCardPanel({ days, onChanged }: { days: number; onChanged?: (
   const [publishedCount, setPublishedCount] = useState<number | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [newRow, setNewRow] = useState<{ family: string; routing: string } | null>(null);
+  // `global.` profile ids bill global-standard; `us.`/`eu.`/`apac.` and bare ids
+  // bill the region's standard tariff, so a pre-registered row needs one of the two.
+  const [newRouting, setNewRouting] = useState<"global" | "regional">("global");
 
   const load = useCallback(async () => {
     try {
@@ -164,7 +167,7 @@ export function RateCardPanel({ days, onChanged }: { days: number; onChanged?: (
             source: c.source,
           })),
         ),
-      `${items.length}개 요율 등록`,
+      `${items.length}개 가격 등록`,
     );
 
   const fetchPublished = () =>
@@ -185,7 +188,7 @@ export function RateCardPanel({ days, onChanged }: { days: number; onChanged?: (
       effective_from: draft.effectiveFrom,
     }));
     if (entries.length === 0) {
-      setMessage("입력한 요율이 없습니다.");
+      setMessage("입력한 가격이 없습니다.");
       return;
     }
     // The draft is dropped before the save so the reload after it decides afresh:
@@ -196,7 +199,7 @@ export function RateCardPanel({ days, onChanged }: { days: number; onChanged?: (
       delete next[rowKey(row)];
       return next;
     });
-    void run(() => putRates(entries), `${entries.length}개 요율 저장`).then((ok) => {
+    void run(() => putRates(entries), `${entries.length}개 가격 저장`).then((ok) => {
       if (ok) {
         setNewRow(null);
         return;
@@ -217,21 +220,21 @@ export function RateCardPanel({ days, onChanged }: { days: number; onChanged?: (
   if (state === "forbidden") {
     return (
       <PlotCell>
-        <EmptyPlot label="모델 요율은 관리자만 관리할 수 있습니다." />
+        <EmptyPlot label="모델 토큰 가격은 관리자만 관리할 수 있습니다." />
       </PlotCell>
     );
   }
   if (state === "error") {
     return (
       <PlotCell>
-        <EmptyPlot label={`요율표를 읽지 못했습니다: ${message ?? "알 수 없는 오류"}`} />
+        <EmptyPlot label={`가격표를 읽지 못했습니다: ${message ?? "알 수 없는 오류"}`} />
       </PlotCell>
     );
   }
   if (state === "loading" || !data) {
     return (
       <PlotCell>
-        <EmptyPlot label="요율표를 읽는 중…" />
+        <EmptyPlot label="가격표를 읽는 중…" />
       </PlotCell>
     );
   }
@@ -250,7 +253,7 @@ export function RateCardPanel({ days, onChanged }: { days: number; onChanged?: (
           <button
             type="button"
             className="text-right hover:underline"
-            title="새 요율을 입력합니다 (가격 변경)"
+            title="새 가격을 입력합니다"
             onClick={() => setDraft(key, { tier, value: cell.usd_per_1m })}
           >
             <div>{formatUsdPer1m(cell.usd_per_1m)}</div>
@@ -291,8 +294,8 @@ export function RateCardPanel({ days, onChanged }: { days: number; onChanged?: (
     <>
       <PlotCell>
         <Plot
-          title={`모델 요율 · 요율표 ${data.version}`}
-          hint="이 플랫폼이 실행한 모델의 1M 토큰당 요율입니다. 빈 칸은 AWS 청구서나 Price List 에서 받아오거나 직접 입력합니다. 저장하면 유효 시작일부터의 턴 비용이 바로 다시 계산되고, 이후 청구서가 이틀 연속 다른 값을 보이면 그 값으로 교정됩니다."
+          title={`모델 토큰 가격 · 가격표 ${data.version}`}
+          hint="1M 토큰당 가격입니다. 빈 칸은 받아오거나 직접 입력하고, 저장하면 유효 시작일부터 비용이 다시 계산됩니다."
           actions={
             <Button variant="outline" size="sm" disabled={busy} onClick={() => void fetchPublished()}>
               <Download className="mr-1 size-3.5" />
@@ -306,7 +309,7 @@ export function RateCardPanel({ days, onChanged }: { days: number; onChanged?: (
               {publishedCount !== null && (
                 <p className="text-muted-foreground">
                   Price List 게시 행 {publishedCount}개
-                  {published && published.length === 0 ? " · 요율표에 없거나 다른 값은 없습니다" : ""}
+                  {published && published.length === 0 ? " · 가격표에 없거나 다른 값은 없습니다" : ""}
                 </p>
               )}
               {message && <p className="text-destructive">{message}</p>}
@@ -348,7 +351,7 @@ export function RateCardPanel({ days, onChanged }: { days: number; onChanged?: (
                           )}
                           {row.unpriced_turns > 0 && (
                             <div className="text-xxs text-warning">
-                              요율 미등록 {row.unpriced_turns.toLocaleString("ko-KR")}턴
+                              가격 미등록 {row.unpriced_turns.toLocaleString("ko-KR")}턴
                               {row.unpriced_since ? ` · ${row.unpriced_since} 부터` : ""}
                             </div>
                           )}
@@ -421,7 +424,7 @@ export function RateCardPanel({ days, onChanged }: { days: number; onChanged?: (
               </table>
               {!newRow && (
                 <div className="mt-2 flex items-center gap-2 text-xxs text-muted-foreground">
-                  <span>아직 실행하지 않은 모델의 요율을 미리 등록:</span>
+                  <span>아직 실행하지 않은 모델의 가격을 미리 등록:</span>
                   <Input
                     placeholder="claude-opus-5-5"
                     className="h-7 w-44 font-mono text-xxs"
@@ -430,13 +433,22 @@ export function RateCardPanel({ days, onChanged }: { days: number; onChanged?: (
                       if (event.key !== "Enter") return;
                       const family = (event.target as HTMLInputElement).value.trim().toLowerCase();
                       if (!family) return;
-                      const pending = { family, routing: "global" };
+                      const pending = { family, routing: newRouting };
                       setNewRow(pending);
                       setDraft(rowKey(pending), { effectiveFrom: data.window.end_date });
                       (event.target as HTMLInputElement).value = "";
                     }}
                   />
-                  <span>Enter · global 라우팅으로 열립니다</span>
+                  <select
+                    className="h-7 rounded-md border bg-background pl-2 pr-6 text-xxs"
+                    value={newRouting}
+                    disabled={busy}
+                    onChange={(event) => setNewRouting(event.target.value as "global" | "regional")}
+                  >
+                    <option value="global">global</option>
+                    <option value="regional">regional (us.·eu.·apac.)</option>
+                  </select>
+                  <span>Enter 로 행을 엽니다</span>
                 </div>
               )}
             </div>
@@ -447,8 +459,8 @@ export function RateCardPanel({ days, onChanged }: { days: number; onChanged?: (
       {candidates.length > 0 && (
         <PlotCell>
           <Plot
-            title="받아올 수 있는 요율"
-            hint="AWS 청구서에 하루라도 정확히 나눠진 요율과 Price List 게시값 중 요율표에 없거나 다른 것입니다. 등록하면 그 유효 시작일부터 반영됩니다. 자동 학습은 이틀 연속 관측을 기다리므로, 하루 관측만 있는 값은 사람이 확인하고 등록합니다."
+            title="받아올 수 있는 가격"
+            hint="AWS 청구서에 하루라도 정확히 나눠진 가격과 Price List 게시값 중 가격표에 없거나 다른 것입니다. 등록하면 그 유효 시작일부터 반영됩니다. 자동 학습은 이틀 연속 관측을 기다리므로, 하루 관측만 있는 값은 사람이 확인하고 등록합니다."
             actions={
               <Button size="sm" variant="outline" disabled={busy} onClick={() => void accept(candidates)}>
                 모두 등록
@@ -462,7 +474,7 @@ export function RateCardPanel({ days, onChanged }: { days: number; onChanged?: (
                   <th className="px-2 py-1 text-left font-medium">라우팅</th>
                   <th className="px-2 py-1 text-left font-medium">tier</th>
                   <th className="px-2 py-1 text-right font-medium">받아온 값 $/1M</th>
-                  <th className="px-2 py-1 text-right font-medium">현재 요율표</th>
+                  <th className="px-2 py-1 text-right font-medium">현재 가격표</th>
                   <th className="px-2 py-1 text-left font-medium">근거</th>
                   <th className="px-2 py-1 text-left font-medium">유효 시작일</th>
                   <th className="px-2 py-1" />
@@ -496,8 +508,8 @@ export function RateCardPanel({ days, onChanged }: { days: number; onChanged?: (
       {data.entries.length > 0 && (
         <PlotCell>
           <Plot
-            title="등록된 요율"
-            hint="요율표 위에 날짜별로 얹힌 항목입니다. 지우면 그 항목이 매긴 턴의 비용이 다시 비고, 다른 요율이 있으면 그 값으로 계산됩니다."
+            title="등록된 가격"
+            hint="가격표 위에 날짜별로 얹힌 항목입니다. 지우면 그 항목이 매긴 턴의 비용이 다시 비고, 다른 가격이 있으면 그 값으로 계산됩니다."
           >
             <table className="w-full text-xs">
               <thead>
@@ -531,7 +543,7 @@ export function RateCardPanel({ days, onChanged }: { days: number; onChanged?: (
                         className="h-7 text-destructive"
                         disabled={busy}
                         title="이 항목을 지우고 해당 턴을 다시 계산합니다"
-                        onClick={() => void run(() => deleteRate(entry.key), "요율 삭제")}
+                        onClick={() => void run(() => deleteRate(entry.key), "가격 삭제")}
                       >
                         <Trash2 className="size-3.5" />
                       </Button>

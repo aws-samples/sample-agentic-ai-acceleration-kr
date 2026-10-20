@@ -1,8 +1,9 @@
-"""The sidebar listing scans keys only and reads full items just for the page.
+"""The scan fallback of the thread listing (`ThreadRepository._scan_search`).
 
-Scanning `values` (every transcript) to return 20 rows read the whole 7.5MB
-table on each sidebar load. These pin that the scan stays projected, and that
-what comes back is still the same page of full threads the old scan returned.
+The listing itself is a Query on a list index now (test_thread_list_index.py).
+The scan remains for created_at sorting and for a table that predates the
+indexes; these pin that it stays projected and returns the same page of full
+threads the original scan did.
 """
 import json
 import os
@@ -79,14 +80,14 @@ ITEMS = [_item(n, owner="me" if n % 3 else "other") for n in range(1, 31)]
 
 def test_the_scan_never_reads_transcripts():
     repo = _repo(ITEMS)
-    repo.search(None, limit=5)
+    repo._scan_search(None, limit=5)
     assert repo.table.projections and all("values" not in p for p in repo.table.projections)
 
 
 def test_the_page_is_the_one_the_full_scan_returned():
     for owner, limit, offset in [(None, 5, 0), (None, 7, 10), ("me", 4, 2), ("other", 20, 0)]:
         repo = _repo(ITEMS)
-        got = [t.model_dump() for t in repo.search(owner, limit=limit, offset=offset)]
+        got = [t.model_dump() for t in repo._scan_search(owner, limit=limit, offset=offset)]
         assert got == _old_page(ITEMS, owner, limit, offset)
         # Only the page is fetched in full.
         assert sum(len(b) for b in repo.dynamodb.batches) == len(got)
@@ -94,7 +95,7 @@ def test_the_page_is_the_one_the_full_scan_returned():
 
 def test_unprocessed_keys_are_retried_and_order_kept():
     repo = _repo(ITEMS, unprocessed_once={"t03", "t10"})
-    got = [t.thread_id for t in repo.search(None, limit=30)]
+    got = [t.thread_id for t in repo._scan_search(None, limit=30)]
     assert got == [t["thread_id"] for t in _old_page(ITEMS, None, 30, 0)]
     assert len(repo.dynamodb.batches) == 2
 
@@ -103,5 +104,5 @@ def test_a_thread_deleted_after_the_scan_is_left_out():
     repo = _repo(ITEMS)
     first = _old_page(ITEMS, None, 3, 0)[0]["thread_id"]
     del repo.dynamodb.by_id[first]
-    got = [t.thread_id for t in repo.search(None, limit=3)]
+    got = [t.thread_id for t in repo._scan_search(None, limit=3)]
     assert first not in got and len(got) == 2

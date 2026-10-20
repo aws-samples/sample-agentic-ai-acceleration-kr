@@ -24,8 +24,11 @@ import logging
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+
+from boto3.dynamodb.conditions import Attr
 
 from core import clock
 from repositories.usage_repository import UsageRepository, month_shard
@@ -118,6 +121,18 @@ def guardrail_sum(aggregates) -> Dict[str, Any]:
     return total
 
 
+def _days(start_date: str, end_date: str) -> List[str]:
+    """Every ISO date from start to end, inclusive."""
+    from datetime import date, timedelta
+
+    day, last = date.fromisoformat(start_date), date.fromisoformat(end_date)
+    out = []
+    while day <= last:
+        out.append(day.isoformat())
+        day += timedelta(days=1)
+    return out
+
+
 def month_shards(start_date: str, end_date: str) -> List[str]:
     """Every `YYYY-MM` partition suffix a date window touches, in order.
 
@@ -156,6 +171,11 @@ class UsageService:
         # as KnowledgeService's `_harness`.
         self._registry = registry
         self._harness = harness
+        # Knowledge bases for the composition rollup: a callable returning
+        # records with `kb_key`, `name` and `gateway_arn`. Set after
+        # construction (core.dependencies), because the knowledge repository is
+        # built after this service.
+        self.knowledge_bases: Optional[Callable[[], List[Any]]] = None
         self._cache_seconds = cache_seconds
         self._model_cache: Optional[Dict[str, str]] = None
         self._model_cache_at = 0.0
@@ -548,9 +568,16 @@ class UsageService:
         like `turn_events`; the sort key carries the raw timestamp so ordering
         is by when it happened, not by when the write landed."""
         events: List[Dict[str, Any]] = []
+        # Concurrent sort-key ranges where the repository has them (as
+        # `turn_events`): the partition was paged through serially, 1.7 s of
+        # the summary at 1,000 users.
+        split = getattr(self.repository, "query_prefix_split", None)
         for shard in month_shards(start_date, end_date):
             try:
-                items = self.repository.query_prefix(f"GUARDRAIL_EVENTS#{shard}", "E#")
+                if split is not None:
+                    items = split(f"GUARDRAIL_EVENTS#{shard}", "E#")
+                else:
+                    items = self.repository.query_prefix(f"GUARDRAIL_EVENTS#{shard}", "E#")
             except Exception:
                 self._reads.complete = False
                 logger.warning("Guardrail events read failed: GUARDRAIL_EVENTS#%s", shard, exc_info=True)
@@ -750,13 +777,85 @@ class UsageService:
 
     # --- reads ---------------------------------------------------------------
 
+    # A request's partition memo is trusted this long. Threadpool threads are
+    # reused, and a later request on the same thread that never called
+    # begin_read must not see the earlier one's reads.
+    _MEMO_SECONDS = 60
+    # Concurrent partition reads per request (see prefetch). The DynamoDB client
+    # pool is 50 (repositories/base.py), shared with every other request.
+    _PREFETCH_WORKERS = 16
+
     def begin_read(self) -> None:
         """Mark this thread's reads complete, before a handler starts reading.
 
         Called by the route rather than by each read, because a handler makes many
         reads and what it needs to know is whether *all* of them landed.
+
+        Also starts the request's partition memo: one Insights request asked for
+        the same month partitions from five or six aggregations, and fetched them
+        each time (the summary made 439 Queries at 304 records, 2026-10-18).
         """
         self._reads.complete = True
+        self._reads.memo = {}
+        self._reads.memo_at = time.monotonic()
+
+    def _memo(self) -> Optional[Dict[Any, List[Dict[str, Any]]]]:
+        memo = getattr(self._reads, "memo", None)
+        if memo is None or time.monotonic() - getattr(self._reads, "memo_at", 0) > self._MEMO_SECONDS:
+            return None
+        return memo
+
+    def prefetch(
+        self,
+        prefixes: Iterable[str],
+        start_date: str,
+        end_date: str,
+        fields: Optional[tuple] = None,
+    ) -> None:
+        """Read many prefixes' month partitions concurrently into the memo, so the
+        per-record loops that follow (`distinct_users`, `tool_totals`, …) find
+        them there instead of making one round trip each, in series.
+
+        A no-op outside a request (no begin_read). A failed partition is left out
+        of the memo, so the loop's own read retries it and records the gap on the
+        request thread — worker threads have their own `complete` flag.
+        """
+        self.prefetch_reads(
+            [(prefix, fields) for prefix in dict.fromkeys(prefixes)], start_date, end_date
+        )
+
+    def prefetch_reads(
+        self,
+        reads: Iterable[tuple],
+        start_date: str,
+        end_date: str,
+    ) -> None:
+        """`prefetch` for mixed projections: each entry is `(prefix, fields)`,
+        the pair `_items` is keyed by. Must be called on the request thread —
+        the memo is thread-local."""
+        memo = self._memo()
+        if memo is None or not self.configured:
+            return
+        wanted = [
+            (prefix, shard, fields)
+            for prefix, fields in dict.fromkeys(reads)
+            for shard in month_shards(start_date, end_date)
+            if (prefix, shard, start_date, end_date, fields) not in memo
+        ]
+        if len(wanted) < 2:
+            return
+
+        def read(key):
+            prefix, shard, fields = key
+            try:
+                return key, self._query(f"{prefix}{shard}", start_date, end_date, fields)
+            except Exception:
+                return key, None
+
+        with ThreadPoolExecutor(max_workers=min(self._PREFETCH_WORKERS, len(wanted))) as pool:
+            for (prefix, shard, fields), items in pool.map(read, wanted):
+                if items is not None:
+                    memo[(prefix, shard, start_date, end_date, fields)] = items
 
     def reads_complete(self) -> bool:
         """False when any partition this thread asked for could not be read.
@@ -767,12 +866,51 @@ class UsageService:
         """
         return getattr(self._reads, "complete", True)
 
-    def _items(self, prefix: str, start_date: str, end_date: str) -> List[Dict[str, Any]]:
+    def _query(
+        self, pk: str, start_date: str, end_date: str, fields: Optional[tuple]
+    ) -> List[Dict[str, Any]]:
+        """`repository.query`, projected to `fields` and, for a wide partition,
+        read as concurrent day ranges, when the repository can do either. A
+        repository without them returns whole rows in one range — the same
+        answer, just more to decode."""
+        kwargs: Dict[str, Any] = {}
+        if fields and self._query_accepts("fields"):
+            kwargs["fields"] = fields
+        if self._is_wide(pk) and self._query_accepts("ranges"):
+            kwargs["ranges"] = self._WIDE_RANGES
+        return self.repository.query(pk, start_date, end_date, **kwargs)
+
+    # Day ranges a wide partition is read as, concurrently. A roll-up over every
+    # agent or user (`AGENTS#2026-10`) is a few MB a month at 300 agents; a
+    # per-record partition (`AGENT#rec-1#TOOLS#2026-10`) is a few rows, and
+    # splitting it only multiplies round trips.
+    _WIDE_RANGES = 4
+
+    @staticmethod
+    def _is_wide(pk: str) -> bool:
+        """`AGENTS#2026-10` is wide; `AGENT#rec-1#TOOLS#2026-10` is one record's."""
+        return pk.count("#") == 1
+
+    def _query_accepts(self, name: str) -> bool:
+        cached = getattr(self, "_query_params_cache", None)
+        if cached is None or cached[0] is not self.repository:
+            import inspect
+
+            try:
+                params = frozenset(inspect.signature(self.repository.query).parameters)
+            except (TypeError, ValueError):
+                params = frozenset()
+            cached = self._query_params_cache = (self.repository, params)
+        return name in cached[1]
+
+    def _items(
+        self, prefix: str, start_date: str, end_date: str, fields: Optional[tuple] = None
+    ) -> List[Dict[str, Any]]:
         """Every item in `prefix`'s month partitions across the window.
 
-        Sequential on purpose. A window touches at most two partitions, and
-        parallel boto3 calls serialise behind botocore's connection pool anyway
-        — the concurrency would be imaginary and the code would be worse.
+        Sequential over shards: a window touches at most two, and each read is
+        itself concurrent inside the repository (day ranges). Many prefixes at
+        once go through `prefetch`; one record's rows through `_record_rows`.
 
         A partition that fails is logged and skipped — half a leaderboard beats a
         500 — but the skip is **recorded**, because the caller renders a total and
@@ -781,14 +919,21 @@ class UsageService:
         if not self.configured:
             return []
         items: List[Dict[str, Any]] = []
+        memo = self._memo()
         for shard in month_shards(start_date, end_date):
+            key = (prefix, shard, start_date, end_date, fields)
+            if memo is not None and key in memo:
+                items.extend(memo[key])
+                continue
             try:
-                items.extend(
-                    self.repository.query(f"{prefix}{shard}", start_date, end_date)
-                )
+                got = self._query(f"{prefix}{shard}", start_date, end_date, fields)
             except Exception:
                 self._reads.complete = False
                 logger.warning("Usage read failed: %s%s", prefix, shard, exc_info=True)
+                continue
+            if memo is not None:
+                memo[key] = got
+            items.extend(got)
         return items
 
     @staticmethod
@@ -841,10 +986,80 @@ class UsageService:
     def record_totals(
         self, record_id: str, start_date: str, end_date: str
     ) -> Dict[str, int]:
-        """One agent's aggregate. Same partition as the leaderboard, filtered
-        here rather than in a second write path — at this scale that is a few
-        hundred items and cheaper than another index."""
-        return self.agent_totals(start_date, end_date).get(record_id, self._blank())
+        """One agent's aggregate. Same partition as the leaderboard — no second
+        write path or index — but read by exact key (`_record_rows`) so only this
+        record's rows (and its deployed aliases') cross the wire: 9k rows decoded
+        to keep 30 was the Usage tab's floor at 300 agents."""
+        totals = self._blank()
+        for item in self._record_rows(record_id, start_date, end_date)["agents"]:
+            self._fold(totals, item)
+        return totals
+
+    def _record_rows(
+        self, record_id: str, start_date: str, end_date: str
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """One record's rows out of the shared AGENTS# and AGENT_MODELS# month
+        partitions, over its own id and every ledger alias folding into it.
+
+        `agents`: the day rows have exact keys (`D#<day>#A#<id>`), so they are
+        one BatchGetItem per 100 (`get_many`, as `user_totals_for`). `models`:
+        a day's model rows share the prefix `D#<day>#A#<id>#M#`, so they are one
+        small keyed Query per (day, id), run together. A `FilterExpression` on
+        the sort key would have been simpler; DynamoDB rejects filters on key
+        attributes. Memoised per request; a repository without `get_many` or
+        `query_prefix` (older stubs) falls back to the whole partitions, matched
+        exactly here.
+        """
+        memo = self._memo()
+        key = ("RECORD_ROWS", record_id, start_date, end_date)
+        if memo is not None and key in memo:
+            return memo[key]
+        ledger_ids = self._ledger_ids(record_id)
+        days = _days(start_date, end_date)
+        rows: Dict[str, List[Dict[str, Any]]] = {"agents": [], "models": []}
+
+        def mine(item: Dict[str, Any]) -> bool:
+            tail = self._suffix(str(item.get("sk", "")), "#A#")
+            if not tail:
+                return False
+            return self.canonical(tail.split("#M#", 1)[0]) == record_id
+
+        get_many = getattr(self.repository, "get_many", None)
+        query_prefix = getattr(self.repository, "query_prefix", None)
+        if not self.configured:
+            return rows
+
+        def read_agents() -> List[Dict[str, Any]]:
+            if get_many is None:
+                return [i for i in self._items("AGENTS#", start_date, end_date) if mine(i)]
+            keys = [
+                (f"AGENTS#{month_shard(day)}", f"D#{day}#A#{ledger_id}")
+                for day in days for ledger_id in ledger_ids
+            ]
+            return [i for i in get_many(keys) if mine(i)]
+
+        def read_models() -> List[Dict[str, Any]]:
+            if query_prefix is None:
+                return [i for i in self._items("AGENT_MODELS#", start_date, end_date) if mine(i)]
+            prefixes = [
+                (f"AGENT_MODELS#{month_shard(day)}", f"D#{day}#A#{ledger_id}#M#")
+                for day in days for ledger_id in ledger_ids
+            ]
+            with ThreadPoolExecutor(max_workers=min(self._PREFETCH_WORKERS, len(prefixes))) as pool:
+                pages = list(pool.map(lambda pair: query_prefix(*pair), prefixes))
+            return [i for page in pages for i in page if mine(i)]
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = {"agents": pool.submit(read_agents), "models": pool.submit(read_models)}
+            for name, future in futures.items():
+                try:
+                    rows[name] = future.result()
+                except Exception:
+                    self._reads.complete = False
+                    logger.warning("Usage read failed: %s rows of %s", name, record_id, exc_info=True)
+        if memo is not None:
+            memo[key] = rows
+        return rows
 
     def user_totals(
         self, start_date: str, end_date: str
@@ -857,6 +1072,94 @@ class UsageService:
                 continue
             self._fold(totals.setdefault(sub, self._blank()), item)
         return totals
+
+    def user_totals_for(self, sub: str, start_date: str, end_date: str) -> Dict[str, int]:
+        """One person's aggregate over the window — `user_totals()[sub]` without
+        reading everyone else's rows.
+
+        Their rows have exact keys (`USERS#<month>` / `D#<day>#U#<sub>`), one per
+        day, so this is one BatchGetItem per 100 days. The partition read it
+        replaces grew with the head count: 3-4.5 s for /insights/me at 1,000
+        people and a busy month (2026-10-18), on every user's own page.
+        """
+        items = self._user_rows_for(sub, start_date, end_date)
+        if items is None:
+            return self.user_totals(start_date, end_date).get(sub, {})
+        if not items:
+            return {}
+        totals = self._blank()
+        for item in items:
+            self._fold(totals, item)
+        return totals
+
+    def _user_rows_for(self, sub: str, start_date: str, end_date: str) -> Optional[List[Dict[str, Any]]]:
+        """One person's USERS# day items by exact key, or None when the repository
+        cannot read by key (the caller falls back to the partition read)."""
+        get_many = getattr(self.repository, "get_many", None)
+        if get_many is None:
+            return None
+        keys = [(f"USERS#{month_shard(day)}", f"D#{day}#U#{sub}") for day in _days(start_date, end_date)]
+        try:
+            return list(get_many(keys))
+        except Exception:
+            self._reads.complete = False
+            logger.warning("Usage read failed: USERS# rows of %s", sub, exc_info=True)
+            return []
+
+    def user_daily_for(self, sub: str, start_date: str, end_date: str) -> Dict[str, Dict[str, int]]:
+        """`user_daily()[sub]` from the same exact-key read as `user_totals_for`."""
+        items = self._user_rows_for(sub, start_date, end_date)
+        if items is None:
+            return self.user_daily(start_date, end_date).get(sub, {})
+        out: Dict[str, Dict[str, int]] = {}
+        for item in items:
+            sort_key = str(item.get("sk", ""))
+            turns = int(item.get("turns") or 0)
+            if not sort_key.startswith("D#") or turns <= 0:
+                continue
+            bucket = out.setdefault(
+                sort_key[2:12], {"turns": 0, "failed_turns": 0, "model_cost_micros": 0, "unpriced_turns": 0}
+            )
+            bucket["turns"] += turns
+            for key in ("failed_turns", "model_cost_micros", "unpriced_turns"):
+                bucket[key] += int(item.get(key) or 0)
+        return out
+
+    def user_agents_for(
+        self, sub: str, record_ids: Iterable[str], start_date: str, end_date: str
+    ) -> Dict[str, int]:
+        """`agent_user_matrix(...)[sub]` without reading anyone else: one exact key
+        per (record ledger id, day), so it costs records x days / 100 BatchGets
+        rather than every person's rows of every agent."""
+        record_ids = list(record_ids)
+        get_many = getattr(self.repository, "get_many", None)
+        if get_many is None:
+            return self.agent_user_matrix(record_ids, start_date, end_date).get(sub, {})
+        keys: List[Tuple[str, str]] = []
+        owner: Dict[str, str] = {}
+        for record_id in record_ids:
+            for ledger_id in self._ledger_ids(record_id):
+                owner[f"AGENT#{ledger_id}#USERS#"] = record_id
+                keys.extend(
+                    (f"AGENT#{ledger_id}#USERS#{month_shard(day)}", f"D#{day}#U#{sub}")
+                    for day in _days(start_date, end_date)
+                )
+        if not keys:
+            return {}
+        try:
+            items = get_many(keys)
+        except Exception:
+            self._reads.complete = False
+            logger.warning("Usage read failed: AGENT#*#USERS# rows of %s", sub, exc_info=True)
+            return {}
+        out: Dict[str, int] = {}
+        for item in items:
+            pk = str(item.get("pk", ""))
+            record_id = owner.get(pk[: pk.rfind("#USERS#") + len("#USERS#")])
+            turns = int(item.get("turns") or 0)
+            if record_id and turns > 0:
+                out[record_id] = out.get(record_id, 0) + turns
+        return out
 
     def team_totals(self, start_date: str, end_date: str) -> Dict[str, Dict[str, int]]:
         """Per-team aggregates, keyed by team name."""
@@ -896,6 +1199,24 @@ class UsageService:
             self._fold(daily.setdefault(team, {}).setdefault(prefix[2:], self._blank()), item)
         return daily
 
+    # What the per-(agent, user) rows are read for: who (the sort key) and, for
+    # the matrix, how many turns. Nothing else of those rows is used.
+    _DISTINCT_FIELDS = ("sk",)
+    _MATRIX_FIELDS = ("sk", "turns")
+
+    def prefetch_distinct_users(
+        self, record_ids: Iterable[str], start_date: str, end_date: str, fields: tuple = _DISTINCT_FIELDS
+    ) -> None:
+        """Warm the memo with every partition `distinct_users` (or, with
+        `_MATRIX_FIELDS`, `agent_user_matrix`) will read for `record_ids` (their
+        own ids and deployed-ARN aliases)."""
+        self.prefetch(
+            [f"AGENT#{lid}#USERS#" for rid in record_ids for lid in self._ledger_ids(rid)],
+            start_date,
+            end_date,
+            fields=fields,
+        )
+
     def distinct_users(self, record_id: str, start_date: str, end_date: str) -> int:
         """How many different people used this agent in the window.
 
@@ -906,7 +1227,7 @@ class UsageService:
         subs = set()
         for ledger_id in self._ledger_ids(record_id):
             for item in self._items(
-                f"AGENT#{ledger_id}#USERS#", start_date, end_date
+                f"AGENT#{ledger_id}#USERS#", start_date, end_date, fields=self._DISTINCT_FIELDS
             ):
                 sub = self._suffix(str(item.get("sk", "")), "#U#")
                 if sub:
@@ -924,9 +1245,13 @@ class UsageService:
         aliases), the same partitions `distinct_users` counts from.
         """
         matrix: Dict[str, Dict[str, int]] = {}
+        record_ids = list(record_ids)
+        self.prefetch_distinct_users(record_ids, start_date, end_date, fields=self._MATRIX_FIELDS)
         for record_id in record_ids:
             for ledger_id in self._ledger_ids(record_id):
-                for item in self._items(f"AGENT#{ledger_id}#USERS#", start_date, end_date):
+                for item in self._items(
+                    f"AGENT#{ledger_id}#USERS#", start_date, end_date, fields=self._MATRIX_FIELDS
+                ):
                     sub = self._suffix(str(item.get("sk", "")), "#U#")
                     turns = int(item.get("turns") or 0)
                     if not sub or turns <= 0:
@@ -935,21 +1260,38 @@ class UsageService:
                     per_agent[record_id] = per_agent.get(record_id, 0) + turns
         return matrix
 
-    def daily_users(self, start_date: str, end_date: str) -> Dict[str, set]:
-        """day -> the subjects who took at least one turn that day.
+    def user_daily(self, start_date: str, end_date: str) -> Dict[str, Dict[str, Dict[str, int]]]:
+        """sub -> day -> the day's counters, for the (day, user) items with turns.
 
-        One USERS# item per (day, user) is the schema, so a day's active users is
-        the set of items with turns — no summing, and it cannot double count.
+        One USERS# item per (day, user) is the schema, so this is the partition
+        as stored, not a roll-up: a day's active users is the set of subs with an
+        entry, and a person's daily trend is their own entries. The same read
+        answers both, so the per-person drill-down costs no extra query.
+        Days without turns are absent, not zero.
         """
-        by_day: Dict[str, set] = {}
+        out: Dict[str, Dict[str, Dict[str, int]]] = {}
         for item in self._items("USERS#", start_date, end_date):
             sort_key = str(item.get("sk", ""))
             sub = self._suffix(sort_key, "#U#")
             day = sort_key[2:12] if sort_key.startswith("D#") else ""
-            if not sub or not day or int(item.get("turns") or 0) <= 0:
+            turns = int(item.get("turns") or 0)
+            if not sub or not day or turns <= 0:
                 continue
-            by_day.setdefault(day, set()).add(sub)
-        return by_day
+            bucket = out.setdefault(sub, {}).setdefault(
+                day, {"turns": 0, "failed_turns": 0, "model_cost_micros": 0, "unpriced_turns": 0}
+            )
+            bucket["turns"] += turns
+            for key in ("failed_turns", "model_cost_micros", "unpriced_turns"):
+                bucket[key] += int(item.get(key) or 0)
+        return out
+
+    def prefetch_tool_totals(self, record_ids: Iterable[str], start_date: str, end_date: str) -> None:
+        """Warm the memo with every partition `tool_totals` will read for `record_ids`."""
+        self.prefetch(
+            [f"AGENT#{lid}#TOOLS#" for rid in record_ids for lid in self._ledger_ids(rid)],
+            start_date,
+            end_date,
+        )
 
     def tool_totals(
         self, record_id: str, start_date: str, end_date: str
@@ -987,7 +1329,12 @@ class UsageService:
         stays distinguishable from a read one.
         """
         by_day: Dict[str, Dict[str, Any]] = {}
-        for item in self._items("AGENTS#", start_date, end_date):
+        # One record's trend reads its own rows (see `_record_rows`).
+        items = (
+            self._record_rows(record_id, start_date, end_date)["agents"]
+            if record_id else self._items("AGENTS#", start_date, end_date)
+        )
+        for item in items:
             sort_key = str(item.get("sk", ""))
             extracted_record_id = self._suffix(sort_key, "#A#")
             if not extracted_record_id:
@@ -1063,8 +1410,19 @@ class UsageService:
         self, start_date: str, end_date: str
     ) -> Dict[str, Dict[str, Dict[str, int]]]:
         """record_id -> model_id -> counters, for the models each agent actually ran."""
+        return self._fold_models(self._items("AGENT_MODELS#", start_date, end_date))
+
+    def record_models(
+        self, record_id: str, start_date: str, end_date: str
+    ) -> Dict[str, Dict[str, int]]:
+        """model_id -> counters for one agent: `agent_models` narrowed to the
+        record's own rows, read by key (see `_record_rows`)."""
+        rows = self._record_rows(record_id, start_date, end_date)["models"]
+        return self._fold_models(rows).get(record_id, {})
+
+    def _fold_models(self, items: Iterable[Dict[str, Any]]) -> Dict[str, Dict[str, Dict[str, int]]]:
         out: Dict[str, Dict[str, Dict[str, int]]] = {}
-        for item in self._items("AGENT_MODELS#", start_date, end_date):
+        for item in items:
             tail = self._suffix(str(item.get("sk", "")), "#A#")
             if not tail or "#M#" not in tail:
                 continue
@@ -1081,17 +1439,41 @@ class UsageService:
         agent_record_id: Optional[str] = None,
         owner_sub: Optional[str] = None,
         thread_id: Optional[str] = None,
+        thread_ids: Optional[List[str]] = None,
+        fields: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """The turn events in a window, oldest first, optionally filtered.
 
-        The month partition is read whole and filtered here: a turn's business
-        date is derived from `ended_at`, and the sort key carries the raw
-        timestamp rather than the date so events order correctly across zones.
+        A turn's business date is derived from `ended_at`, and the sort key
+        carries the turn id rather than the date, so the month partition is read
+        whole and the day is checked here. The record / owner / thread filters
+        and `fields` (attributes to return; `ended_at` is always added) are
+        applied by DynamoDB as well, and the partition is read as concurrent
+        ranges (`query_prefix_split`): reading 70k events serially to keep 100
+        of them was the 53 s per-record page. The filters are repeated below so
+        the answer does not depend on which repository served it.
         """
+        ledger_ids = self._ledger_ids(agent_record_id) if agent_record_id else None
+        condition = None
+        for clause in (
+            Attr("agent_record_id").is_in(ledger_ids) if ledger_ids else None,
+            Attr("owner_sub").eq(owner_sub) if owner_sub else None,
+            Attr("thread_id").eq(thread_id) if thread_id else None,
+            Attr("thread_id").is_in(thread_ids) if thread_ids else None,
+        ):
+            if clause is not None:
+                condition = clause if condition is None else condition & clause
+        wanted = None
+        if fields:
+            wanted = list(dict.fromkeys([*fields, "ended_at", "agent_record_id", "owner_sub", "thread_id"]))
+        split = getattr(self.repository, "query_prefix_split", None)
         events: List[Dict[str, Any]] = []
         for shard in month_shards(start_date, end_date):
             try:
-                items = self.repository.query_prefix(f"TURNS#{shard}", "T#")
+                if split is not None:
+                    items = split(f"TURNS#{shard}", "T#", filter_expression=condition, fields=wanted)
+                else:
+                    items = self.repository.query_prefix(f"TURNS#{shard}", "T#")
             except Exception:
                 self._reads.complete = False
                 logger.warning("Turn events read failed: TURNS#%s", shard, exc_info=True)
@@ -1110,6 +1492,8 @@ class UsageService:
                 if owner_sub and item.get("owner_sub") != owner_sub:
                     continue
                 if thread_id and item.get("thread_id") != thread_id:
+                    continue
+                if thread_ids and item.get("thread_id") not in thread_ids:
                     continue
                 events.append(item)
         events.sort(key=lambda event: str(event.get("ended_at", "")))
@@ -1558,6 +1942,22 @@ class UsageService:
             except Exception:
                 logger.warning("Could not list %s records", descriptor_type, exc_info=True)
                 continue
+            # Every descriptor in one batch where the registry allows it
+            # (RegistryService.record_details); one Get per record was 102 serial
+            # calls (15.7 s) at 100 MCP/skill records. Stubs without it fall back.
+            bulk = getattr(self.registry, "record_details", None)
+            if bulk is not None:
+                try:
+                    found = bulk(records)
+                except Exception:
+                    logger.warning("Could not read %s records", descriptor_type, exc_info=True)
+                    found = {}
+                for summary in records:
+                    if summary.record_id in found:
+                        details[section].append(
+                            (summary, getattr(found[summary.record_id], "descriptor_content", None))
+                        )
+                continue
             for summary in records:
                 try:
                     detail = self.registry.get_record(summary.record_id)
@@ -1587,6 +1987,23 @@ class UsageService:
             for name, endpoint in endpoints.items():
                 fronting.setdefault(endpoint, set()).add(name)
 
+        knowledge = []
+        if self.knowledge_bases is not None:
+            try:
+                knowledge = [kb for kb in self.knowledge_bases() if getattr(kb, "gateway_arn", None)]
+            except Exception:
+                logger.warning("Could not list knowledge bases", exc_info=True)
+        kb_gateways = {kb.gateway_arn for kb in knowledge}
+        for kb in knowledge:
+            hit = reach.get(kb.gateway_arn) or {"turns": 0, "agents": 0}
+            sections["knowledge_bases"].append({
+                "record_id": kb.kb_key,
+                "name": kb.name,
+                "turns": hit["turns"],
+                "agents": hit["agents"],
+                "metric": "traffic",
+            })
+
         for section in ("mcp", "skills"):
             for summary, content in details[section]:
                 matched = {"turns": 0, "agents": 0}
@@ -1602,15 +2019,16 @@ class UsageService:
                     )
                     matched["turns"] += sum(turns for _, turns in callers)
                     matched["agents"] += len(callers)
-                # A knowledge base is an MCP record whose descriptor names a
-                # gateway; a plain MCP server names a URL. Splitting them here
-                # keeps the UI from calling a knowledge base a tool server.
-                target = (
-                    "knowledge_bases"
-                    if section == "mcp" and gateway_arn_of(content)
-                    else section
-                )
-                sections[target].append({
+                # A gateway-backed MCP record is a tool gateway, not a knowledge
+                # base: knowledge bases are never published as records
+                # (agent_sync_service skips their gateways), so reading every
+                # gateway record as one listed the platform tool gateway under
+                # Knowledge and no actual knowledge base at all (bst, 2026-10-19).
+                # A record that does front a knowledge base's gateway is left to
+                # the knowledge section below, which names it.
+                if section == "mcp" and gateway_arn_of(content) in kb_gateways:
+                    continue
+                sections[section].append({
                     "record_id": summary.record_id,
                     "name": summary.name,
                     "turns": matched["turns"],
@@ -1619,6 +2037,7 @@ class UsageService:
                 })
 
         tools: Dict[str, int] = {}
+        self.prefetch_tool_totals(list(totals), start_date, end_date)
         for record_id in totals:
             for name, count in self.tool_totals(
                 record_id, start_date, end_date
@@ -1725,6 +2144,7 @@ class UsageService:
 
         tools: Dict[str, int] = {}
         callers: List[tuple] = []
+        self.prefetch_tool_totals([r.record_id for r in agent_records], start_date, end_date)
         for record in agent_records:
             called_here = False
             for name, count in self.tool_totals(
@@ -1795,14 +2215,15 @@ class UsageService:
         except Exception:
             logger.warning("Could not list MCP records", exc_info=True)
             return targets
-        for summary in records:
-            try:
-                detail = self.registry.get_record(summary.record_id)
-            except Exception:
-                continue
-            gateway_arn = gateway_arn_of(getattr(detail, "descriptor_content", None))
-            if not gateway_arn:
-                continue
+        # Every descriptor in one batch (RegistryService.record_details): one
+        # Get per MCP record was 62 serial calls, 15 s with 4 s of throttling
+        # sleeps, on every MCP record's Usage open (bst, 2026-10-19).
+        gateway_arns: set = set()
+        for content in self._descriptor_contents(records).values():
+            gateway_arn = gateway_arn_of(content)
+            if gateway_arn:
+                gateway_arns.add(gateway_arn)
+        for gateway_arn in sorted(gateway_arns):
             try:
                 endpoints = self.harness.gateway_target_endpoints(gateway_arn)
             except Exception:
@@ -1812,6 +2233,31 @@ class UsageService:
                 continue
             targets.update(name for name, ep in endpoints.items() if ep == url)
         return targets
+
+    def _descriptor_contents(self, summaries: List[Any]) -> Dict[str, Any]:
+        """record id -> descriptor content for listed records, read in bulk where
+        the registry offers it and one Get each where it does not (stubs, and a
+        registry whose bulk read fails for the lot). An unreadable record is left
+        out rather than guessed."""
+        bulk = getattr(self.registry, "record_details", None)
+        if bulk is not None:
+            try:
+                found = bulk(summaries)
+            except Exception:
+                logger.warning("Bulk descriptor read failed", exc_info=True)
+            else:
+                return {
+                    record_id: getattr(detail, "descriptor_content", None)
+                    for record_id, detail in found.items()
+                }
+        out: Dict[str, Any] = {}
+        for summary in summaries:
+            try:
+                detail = self.registry.get_record(summary.record_id)
+            except Exception:
+                continue
+            out[summary.record_id] = getattr(detail, "descriptor_content", None)
+        return out
 
     def _daily_reach(
         self, agent_ids: set, targets: set, start_date: str, end_date: str

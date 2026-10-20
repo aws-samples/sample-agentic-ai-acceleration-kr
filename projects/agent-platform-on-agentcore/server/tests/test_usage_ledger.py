@@ -140,12 +140,12 @@ def test_unknown_model_records_turn_without_cost():
 def test_unregistered_model_is_kept_on_the_event_but_not_priced():
     repo = LedgerRepo()
     svc = UsageService(repository=repo)
-    turn(svc, model_id="global.anthropic.claude-opus-5-5")
+    turn(svc, model_id="global.anthropic.claude-opus-6-1")
     event = repo.get(*EVENT_KEY)
-    assert event["model_id"] == "global.anthropic.claude-opus-5-5"
+    assert event["model_id"] == "global.anthropic.claude-opus-6-1"
     assert "model_cost_micros" not in event
     models = repo.get(
-        "AGENT_MODELS#2026-09", "D#2026-09-23#A#rec-1#M#global.anthropic.claude-opus-5-5"
+        "AGENT_MODELS#2026-09", "D#2026-09-23#A#rec-1#M#global.anthropic.claude-opus-6-1"
     )
     assert models["unpriced_turns"] == 1
 
@@ -391,16 +391,16 @@ def test_reprice_events_prices_an_unpriced_turn_once_its_rate_is_learned_and_mov
     repo = LedgerRepo()
     svc = UsageService(repo)
     try:
-        turn(svc, model_id="global.anthropic.claude-opus-5-5", input_tokens=1_000_000, output_tokens=100_000)
+        turn(svc, model_id="global.anthropic.claude-opus-6-1", input_tokens=1_000_000, output_tokens=100_000)
         event = repo.get("TURNS#2026-09", "T#t-1:h-1")
         day = repo.get("AGENTS#2026-09", "D#2026-09-23#A#rec-1")
         assert "model_cost_micros" not in event and day["unpriced_turns"] == 1 and day.get("priced_turns", 0) == 0
         # The bill teaches the rate two days later, effective from before the turn.
-        repo.set_fields("RATES#learned", "R#claude-opus-5-5|global|input|2026-09-22",
-                        {"family": "claude-opus-5-5", "routing": "global", "tier": "input",
+        repo.set_fields("RATES#learned", "R#claude-opus-6-1|global|input|2026-09-22",
+                        {"family": "claude-opus-6-1", "routing": "global", "tier": "input",
                          "effective_from": "2026-09-22", "usd_per_1m": "7.5"})
-        repo.set_fields("RATES#learned", "R#claude-opus-5-5|global|output|2026-09-22",
-                        {"family": "claude-opus-5-5", "routing": "global", "tier": "output",
+        repo.set_fields("RATES#learned", "R#claude-opus-6-1|global|output|2026-09-22",
+                        {"family": "claude-opus-6-1", "routing": "global", "tier": "output",
                          "effective_from": "2026-09-22", "usd_per_1m": "37.5"})
         report = svc.reprice_events("2026-09-01", "2026-09-30")
         assert report == {"repriced": 1, "newly_priced": 1, "still_unpriced": 0, "unpriced": 0}
@@ -411,7 +411,7 @@ def test_reprice_events_prices_an_unpriced_turn_once_its_rate_is_learned_and_mov
         assert day["model_cost_micros"] == 11_250_000 and day["priced_turns"] == 1 and day["unpriced_turns"] == 0
         user = repo.get("USERS#2026-09", "D#2026-09-23#U#sub-1")
         assert user["model_cost_micros"] == 11_250_000
-        by_model = repo.get("AGENT_MODELS#2026-09", "D#2026-09-23#A#rec-1#M#global.anthropic.claude-opus-5-5")
+        by_model = repo.get("AGENT_MODELS#2026-09", "D#2026-09-23#A#rec-1#M#global.anthropic.claude-opus-6-1")
         assert by_model["model_cost_micros"] == 11_250_000 and by_model["priced_turns"] == 1
         # Nothing changes on a second pass.
         assert svc.reprice_events("2026-09-01", "2026-09-30") == {"repriced": 0, "newly_priced": 0, "still_unpriced": 0, "unpriced": 0}
@@ -427,13 +427,13 @@ def test_reprice_events_moves_the_team_counter_too():
     repo = LedgerRepo()
     svc = UsageService(repo)
     try:
-        turn(svc, team="finance", model_id="global.anthropic.claude-opus-5-5",
+        turn(svc, team="finance", model_id="global.anthropic.claude-opus-6-1",
              input_tokens=1_000_000, output_tokens=100_000)
         before = repo.get("TEAMS#2026-09", "D#2026-09-23#G#finance")
         assert before["unpriced_turns"] == 1 and before.get("model_cost_micros", 0) == 0
         for tier, usd in (("input", "7.5"), ("output", "37.5")):
-            repo.set_fields("RATES#learned", f"R#claude-opus-5-5|global|{tier}|2026-09-22",
-                            {"family": "claude-opus-5-5", "routing": "global", "tier": tier,
+            repo.set_fields("RATES#learned", f"R#claude-opus-6-1|global|{tier}|2026-09-22",
+                            {"family": "claude-opus-6-1", "routing": "global", "tier": tier,
                              "effective_from": "2026-09-22", "usd_per_1m": usd})
         svc.reprice_events("2026-09-01", "2026-09-30")
         team = repo.get("TEAMS#2026-09", "D#2026-09-23#G#finance")
@@ -470,11 +470,11 @@ def test_a_turn_using_a_tier_the_learned_rate_lacks_stays_unpriced():
     repo = LedgerRepo()
     svc = UsageService(repo)
     try:
-        repo.set_fields("RATES#learned", "R#claude-opus-5-5|global|output|2026-09-01",
-                        {"family": "claude-opus-5-5", "routing": "global", "tier": "output",
+        repo.set_fields("RATES#learned", "R#claude-opus-6-1|global|output|2026-09-01",
+                        {"family": "claude-opus-6-1", "routing": "global", "tier": "output",
                          "effective_from": "2026-09-01", "usd_per_1m": "37.5"})
         svc.load_learned_rates()
-        turn(svc, model_id="global.anthropic.claude-opus-5-5", input_tokens=10, output_tokens=5)
+        turn(svc, model_id="global.anthropic.claude-opus-6-1", input_tokens=10, output_tokens=5)
         event = repo.get("TURNS#2026-09", "T#t-1:h-1")
         day = repo.get("AGENTS#2026-09", "D#2026-09-23#A#rec-1")
         assert "model_cost_micros" not in event and event["measured"] is True
@@ -492,7 +492,7 @@ def test_a_turn_that_becomes_unpriceable_on_its_second_flush_drops_the_stale_zer
     under 미가격 on 2026-10-10 after the cache rate was registered."""
     from data.model_rates import set_learned_rates
     set_learned_rates([
-        {"family": "claude-sonnet-5-5", "routing": "global", "tier": tier,
+        {"family": "claude-sonnet-6-1", "routing": "global", "tier": tier,
          "usd_per_1m": usd, "effective_from": "2026-10-06"}
         for tier, usd in (("input", "2"), ("output", "10"))
     ])
@@ -500,7 +500,7 @@ def test_a_turn_that_becomes_unpriceable_on_its_second_flush_drops_the_stale_zer
         repo = LedgerRepo()
         svc = UsageService(repository=repo)
         svc.ensure_learned_rates = lambda: None
-        model = "global.anthropic.claude-sonnet-5-5"
+        model = "global.anthropic.claude-sonnet-6-1"
         when = dict(date="2026-10-10", started_at="2026-10-10T03:24:00Z", ended_at="2026-10-10T03:24:05Z")
         turn(svc, input_tokens=0, output_tokens=0, model_id=model, **when)
         event = repo.get("TURNS#2026-10", "T#t-1:h-1")
@@ -517,7 +517,7 @@ def test_a_turn_that_becomes_unpriceable_on_its_second_flush_drops_the_stale_zer
 
         # The cache rate arrives; repricing now moves the counters as well as the event.
         set_learned_rates([
-            {"family": "claude-sonnet-5-5", "routing": "global", "tier": tier,
+            {"family": "claude-sonnet-6-1", "routing": "global", "tier": tier,
              "usd_per_1m": usd, "effective_from": "2026-10-06"}
             for tier, usd in (("input", "2"), ("output", "10"), ("cache_read", "0.1"), ("cache_write", "2.5"))
         ])

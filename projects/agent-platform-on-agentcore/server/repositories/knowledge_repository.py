@@ -173,5 +173,18 @@ class KnowledgeRepository(DynamoDBRepository):
             params["ExclusiveStartKey"] = token
         return arns
 
+    def all_records(self) -> List[KnowledgeBaseRecord]:
+        """Every knowledge base, whoever owns it, for admin-only rollups."""
+        records: List[KnowledgeBaseRecord] = []
+        params: Dict[str, Any] = {}
+        while True:
+            response = self.table.scan(**params)
+            records.extend(_to_model(item) for item in response.get("Items", []))
+            token = response.get("LastEvaluatedKey")
+            if not token:
+                break
+            params["ExclusiveStartKey"] = token
+        return records
+
     def delete(self, kb_key: str) -> None:
         self.table.delete_item(Key={"kb_key": kb_key})

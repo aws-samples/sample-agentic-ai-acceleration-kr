@@ -8,6 +8,10 @@ Organization page. Month-sharded so a range read is one Query per month and the
 sort key orders by time; the id suffix keeps two writes in the same millisecond
 apart.
 
+`pk = "DIRECTORY", sk = "version"`: a counter every write to the people
+directory bumps, so each server task can tell its cached copy of the pool is
+stale (services/org_directory_service.py).
+
 Membership is NOT stored here (see services/org_directory_service.py).
 """
 import json
@@ -49,6 +53,19 @@ class TeamRepository(DynamoDBRepository):
 
     def delete_team(self, name: str) -> None:
         self.table.delete_item(Key={"pk": TEAM_PK, "sk": name})
+
+    def directory_version(self) -> int:
+        item = self.table.get_item(
+            Key={"pk": "DIRECTORY", "sk": "version"}, ConsistentRead=True
+        ).get("Item") or {}
+        return int(item.get("v") or 0)
+
+    def bump_directory_version(self) -> None:
+        self.table.update_item(
+            Key={"pk": "DIRECTORY", "sk": "version"},
+            UpdateExpression="ADD v :one",
+            ExpressionAttributeValues={":one": 1},
+        )
 
     def append_audit(self, entry: Dict[str, Any]) -> None:
         at = str(entry["at"])

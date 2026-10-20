@@ -192,6 +192,9 @@ data "aws_iam_policy_document" "runtime" {
     resources = [
       "arn:aws:bedrock:*::foundation-model/*",
       "arn:aws:bedrock:${var.region}:${local.acct}:*",
+      # A Standard-tier guardrail is evaluated through its guardrail profile in
+      # any destination region of the geography (modules/bedrock_guardrail).
+      "arn:aws:bedrock:*:${local.acct}:guardrail-profile/*",
     ]
   }
 }

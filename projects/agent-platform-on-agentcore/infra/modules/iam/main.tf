@@ -66,6 +66,7 @@ data "aws_iam_policy_document" "task" {
       "${var.usage_table_arn}/index/*",
       var.users_table_arn,
       var.teams_table_arn,
+      var.runs_table_arn,
     ]
   }
 

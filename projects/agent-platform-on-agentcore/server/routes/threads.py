@@ -26,6 +26,7 @@ test_thread_ownership.py is the regression guard. test_route_auth.py pins the
 auth dependency of each route but says nothing about ownership; a new route here
 needs a case in both.
 """
+import asyncio
 import json
 import unicodedata
 from urllib.parse import quote
@@ -54,6 +55,7 @@ from services.browser_screenshot_service import (
 from services.streaming_service import AgentNotApproved, SSE_HEADERS
 import services.streaming_service as streaming_module
 from services.run_broker import RunAlreadyActive
+from services.run_leases import FORWARDED_HEADER, forward_cancel, open_peer_stream
 from services.agent_access import AgentTargetMismatch
 from services.thread_service import (
     ThreadAgentMismatch,
@@ -243,17 +245,40 @@ async def stream_thread_direct(
     return await _stream(thread_id, request, user)
 
 
+def _run_holder(thread_id: str, request: Request) -> Optional[str]:
+    """The other server task running this thread's turn, if the run is not here.
+
+    None for a request another task already forwarded: that task read the same
+    lease and sent it here, so the answer is whatever this task has.
+    """
+    if request.headers.get(FORWARDED_HEADER):
+        return None
+    try:
+        return streaming_service.run_broker.remote_holder(thread_id)
+    except Exception:
+        logger.warning("Run lease for thread %s unreadable", thread_id, exc_info=True)
+        return None
+
+
 @router.get("/{thread_id}/runs/stream")
-def attach_thread_run(thread_id: str, user: AuthUser = Depends(current_user)):
+async def attach_thread_run(thread_id: str, request: Request, user: AuthUser = Depends(current_user)):
     """Follow a run already in flight on this thread.
 
     Replays every frame the run has produced, then tails it live. This is how a
     reopened `busy` thread catches up after the browser left: the run itself
     never depended on the browser staying.
+
+    A run on another server task is relayed from it (services/run_leases.py).
+    Async for that relay; the two blocking reads go to the threadpool.
     """
-    _owned(thread_id, user)
+    await asyncio.to_thread(_owned, thread_id, user)
     run = streaming_service.run_broker.get(thread_id)
     if run is None:
+        holder = await asyncio.to_thread(_run_holder, thread_id, request)
+        if holder:
+            relayed = await open_peer_stream(holder, request.url.path, request.headers.get("authorization"))
+            if relayed is not None:
+                return StreamingResponse(relayed, media_type="text/event-stream", headers=SSE_HEADERS)
         # Not an error for the UI: the run finished (or never existed) and the
         # stored record is now the truth. The client re-reads the thread.
         raise HTTPException(status_code=404, detail="No run in flight on this thread")
@@ -278,8 +303,29 @@ def attach_thread_run(thread_id: str, user: AuthUser = Depends(current_user)):
     return StreamingResponse(body(), media_type="text/event-stream", headers=SSE_HEADERS)
 
 
+def _cancel_run(thread_id: str, user: AuthUser, request: Request) -> bool:
+    """Stop the thread's run wherever it is: here, on its holder, or by flag."""
+    if streaming_service.run_broker.cancel(thread_id, owner_sub=user.sub):
+        return True
+    holder = _run_holder(thread_id, request)
+    if not holder:
+        return False
+    stopped = forward_cancel(
+        holder, f"{router.prefix}/{thread_id}/runs/cancel", request.headers.get("authorization")
+    )
+    if stopped is not None:
+        return stopped
+    # The holder is unreachable: leave the Stop on its lease, which it reads
+    # on its next renewal (RUN_HEARTBEAT_SECONDS).
+    try:
+        return streaming_service.run_broker.leases.request_cancel(thread_id, user.sub)
+    except Exception:
+        logger.warning("Could not flag the run on thread %s for a Stop", thread_id, exc_info=True)
+        return False
+
+
 @router.post("/{thread_id}/runs/cancel")
-def cancel_thread_run(thread_id: str, user: AuthUser = Depends(current_user)):
+def cancel_thread_run(thread_id: str, request: Request, user: AuthUser = Depends(current_user)):
     """Stop the run on this thread, if any.
 
     Dropping the connection used to be the stop; now that a run outlives its
@@ -295,12 +341,13 @@ def cancel_thread_run(thread_id: str, user: AuthUser = Depends(current_user)):
         # bound to its reserver, so it can only ever cancel this caller's run.
         if exc.status_code != 404:
             raise
-    return {"cancelled": streaming_service.run_broker.cancel(thread_id, owner_sub=user.sub)}
+    return {"cancelled": _cancel_run(thread_id, user, request)}
 
 
 @router.delete("/{thread_id}")
 def delete_thread(
     thread_id: str,
+    request: Request,
     user: AuthUser = Depends(current_user),
 ):
     """Delete a thread"""
@@ -308,7 +355,7 @@ def delete_thread(
     # A run no longer dies with its connection, so it would keep spending model
     # and harness time on a thread nobody can see — and its next persist could
     # put the deleted row back.
-    streaming_service.run_broker.cancel(thread_id, owner_sub=user.sub)
+    _cancel_run(thread_id, user, request)
     try:
         thread_service.delete_thread(thread_id)
         return {"status": "deleted"}
@@ -317,18 +364,29 @@ def delete_thread(
 
 
 @router.post("/{thread_id}/attachments", response_model=Attachment)
-async def upload_attachment(
+def upload_attachment(
     thread_id: str,
     file: UploadFile = File(...),
     user: AuthUser = Depends(current_user),
 ):
     """Store one attachment and return the reference the message will carry.
 
-    `async def` here unlike its neighbours: this handler genuinely awaits the
-    upload body. The S3 write inside is blocking but brief.
+    Plain `def` like its neighbours. It used to be `async def` to await the
+    body, which put the ownership read and the S3 write on the event loop; the
+    upload is already spooled, so it is read synchronously on the threadpool.
+
+    A thread that does not exist yet is accepted. A new chat uploads before its
+    first turn, under the id the browser picked, and the thread only comes into
+    being when that turn runs get_or_create_thread — which is also where
+    ownership is enforced. Refusing it made attaching on a new chat a 404.
     """
-    _owned(thread_id, user)
-    body = await file.read()
+    try:
+        thread_service.require_owned(thread_id, user.sub, is_admin=user.is_admin)
+    except ThreadNotFound:
+        pass
+    except ThreadForbidden as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    body = file.file.read()
     try:
         return attachment_service.store(thread_id, file.filename or "file", body)
     except AttachmentsNotConfigured as exc:

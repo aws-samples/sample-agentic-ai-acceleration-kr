@@ -77,6 +77,21 @@ def wait_ready(ctl, gateway_id, target_id):
     raise SystemExit(f"target {target_id} not READY within {READY_TIMEOUT_SECONDS}s")
 
 
+def wait_gone(ctl, gateway_id, name):
+    """Block until no target of this name is left (a delete is asynchronous).
+
+    `terraform apply -replace` runs delete then upsert back to back; without this
+    the upsert found the old target still DELETING and UpdateGatewayTarget
+    rejected it ("can't be performed on target when it is in Deleting state",
+    2026-10-18)."""
+    deadline = time.time() + READY_TIMEOUT_SECONDS
+    while time.time() < deadline:
+        if find_target(ctl, gateway_id, name) is None:
+            return
+        time.sleep(POLL_INTERVAL_SECONDS)
+    raise SystemExit(f"target {name} still present {READY_TIMEOUT_SECONDS}s after delete")
+
+
 def _credential_providers(args):
     """Outbound auth: always the gateway role.
 
@@ -126,9 +141,13 @@ def _target_configuration(args):
     carrying the schema in tools.json.
     """
     if args.mcp_endpoint:
-        # DYNAMIC forwards every tools/list to the server, so a redeployed server's
-        # new tools show up without a resync (SynchronizeGatewayTargets rejects
-        # dynamic targets anyway).
+        # DEFAULT serves tools/list from the schema the gateway synchronised when
+        # the target was created; DYNAMIC forwards every tools/list to the server.
+        # For a server on AgentCore Runtime DYNAMIC made every agent session's tool
+        # load wait for a fresh microVM of the MCP server: 50 concurrent tools/list
+        # took 8.8 s (p50) against 0.47 s synced, and under 300 concurrent chats the
+        # cold starts failed pages outright (bst load test, 2026-10-18). The price
+        # of DEFAULT is a `sync` after redeploying the server with new tools.
         return {
             "mcp": {
                 "mcpServer": {
@@ -183,6 +202,9 @@ def cmd_upsert(args):
 
 
     existing = find_target(ctl, args.gateway_id, args.name)
+    if existing and existing.get("status") == "DELETING":
+        wait_gone(ctl, args.gateway_id, args.name)
+        existing = None
     if existing:
         target_id = existing["targetId"]
         ctl.update_gateway_target(
@@ -211,7 +233,20 @@ def cmd_delete(args):
     ctl.delete_gateway_target(
         gatewayIdentifier=args.gateway_id, targetId=existing["targetId"]
     )
+    wait_gone(ctl, args.gateway_id, args.name)
     print(f"deleted target {existing['targetId']}", file=sys.stderr)
+
+
+def cmd_sync(args):
+    """Re-read an MCP server target's tools (DEFAULT listing) after the server
+    was redeployed with new or changed tools."""
+    ctl = client(args.region)
+    existing = find_target(ctl, args.gateway_id, args.name)
+    if not existing:
+        raise SystemExit(f"target {args.name} not found on {args.gateway_id}")
+    ctl.synchronize_gateway_targets(gatewayIdentifier=args.gateway_id, targetIdList=[existing["targetId"]])
+    wait_ready(ctl, args.gateway_id, existing["targetId"])
+    print(f"synchronised target {existing['targetId']}", file=sys.stderr)
 
 
 def cmd_tag(args):
@@ -225,7 +260,7 @@ def main():
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
 
-    for name, handler in (("upsert", cmd_upsert), ("delete", cmd_delete), ("tag", cmd_tag)):
+    for name, handler in (("upsert", cmd_upsert), ("delete", cmd_delete), ("sync", cmd_sync), ("tag", cmd_tag)):
         p = sub.add_parser(name)
         if name == "tag":
             p.add_argument("--gateway-arn", required=True)
@@ -270,7 +305,7 @@ def main():
             )
             p.add_argument(
                 "--listing-mode",
-                default="DYNAMIC",
+                default="DEFAULT",
                 choices=("DYNAMIC", "DEFAULT"),
                 help="tools/list handling for an MCP server target.",
             )

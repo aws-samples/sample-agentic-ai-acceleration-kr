@@ -37,7 +37,10 @@ class StubSession:
         self.called = []
 
     def list_tools(self):
-        return StubToolList(self._tools)
+        # The shape `mcp_core.app_session._Sync.list_tools` returns: every page
+        # already joined into one list. The stub used to return a ListToolsResult
+        # (`.tools`), which hid a 502 on every app tool call (2026-10-18).
+        return list(self._tools)
 
     def call_tool(self, name, arguments):
         self.called.append((name, arguments))

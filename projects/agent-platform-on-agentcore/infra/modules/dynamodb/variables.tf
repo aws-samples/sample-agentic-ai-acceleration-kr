@@ -38,3 +38,8 @@ variable "teams_table_name" {
   type        = string
   description = "Team metadata, Entra group mappings and the org audit ledger (server/repositories/team_repository.py)."
 }
+
+variable "runs_table_name" {
+  type        = string
+  description = "Chat runs in flight, one lease row per thread (server/services/run_leases.py)."
+}

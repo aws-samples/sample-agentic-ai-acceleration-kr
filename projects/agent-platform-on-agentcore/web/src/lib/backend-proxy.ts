@@ -37,6 +37,22 @@ const STRIP_RESPONSE_HEADERS = new Set([
   "connection",
 ]);
 
+/**
+ * One retry, for idempotent requests only, when the connection fails before any
+ * response arrives. A pooled keep-alive socket the server has just closed makes
+ * fetch reject with "other side closed"; under load that was a 500 for requests
+ * the server never saw (2026-10-18). A POST is never replayed: a chat turn sent
+ * twice is two turns.
+ */
+async function fetchUpstream(target: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(target, init);
+  } catch (error) {
+    if (init.method !== "GET" && init.method !== "HEAD") throw error;
+    return await fetch(target, init);
+  }
+}
+
 export async function proxyToBackend(
   request: NextRequest,
   pathSegments: string[]
@@ -56,16 +72,37 @@ export async function proxyToBackend(
     init.body = await request.arrayBuffer();
   }
 
-  const upstream = await fetch(target, init);
+  const upstream = await fetchUpstream(target, init);
 
   const responseHeaders = new Headers();
   upstream.headers.forEach((value, key) => {
     if (!STRIP_RESPONSE_HEADERS.has(key.toLowerCase())) responseHeaders.set(key, value);
   });
 
-  return new Response(upstream.body, {
+  let body = upstream.body;
+  if (body && shouldGzip(request.headers.get("accept-encoding"), upstream.headers.get("content-type"))) {
+    body = body.pipeThrough(new CompressionStream("gzip"));
+    responseHeaders.set("content-encoding", "gzip");
+    responseHeaders.append("vary", "accept-encoding");
+  }
+
+  return new Response(body, {
     status: upstream.status,
     statusText: upstream.statusText,
     headers: responseHeaders,
   });
+}
+
+/**
+ * JSON answers are compressed here, on the browser leg. Next gzips its own
+ * static output but not a Route Handler's streamed body, and the upstream is
+ * asked for identity (see STRIP_REQUEST_HEADERS), so the registry listing went
+ * to the browser as 233 KB of JSON — 1.3 s over the Internet against 0.17 s
+ * for a small response (bst, 2026-10-19). Only JSON: an event stream must not
+ * be buffered by a compressor, and files are what they are.
+ */
+export function shouldGzip(acceptEncoding: string | null, contentType: string | null): boolean {
+  if (!acceptEncoding || !contentType) return false;
+  if (!/\bgzip\b/.test(acceptEncoding)) return false;
+  return /^application\/json\b/i.test(contentType);
 }

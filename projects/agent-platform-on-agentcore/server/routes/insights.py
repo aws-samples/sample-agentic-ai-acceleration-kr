@@ -58,14 +58,17 @@ page degraded to a dash or a collapsed card. It now reports
 `rate_scope` for the same reason — a qualifier that does not reach the tile the
 reader looks at is not a qualifier.
 """
+import hashlib
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from core import clock
+from core.cache import StaleWhileRevalidate
 from core.auth import AuthUser, current_user
 from core.dependencies import (
     billing_service,
@@ -225,14 +228,61 @@ def _org_directory():
     return _org_directory_override or org_directory_service
 
 
-def _member_count(team: str) -> Optional[int]:
-    """Live group size, or None when the directory cannot say — a per-member
-    figure divided by a guessed 0 would be infinite, by a guessed 1 a lie."""
+def _member_counts() -> Optional[Dict[str, int]]:
+    """Head count per team from the directory snapshot, or None when the
+    directory cannot say — a per-member figure divided by a guessed 0 would be
+    infinite, by a guessed 1 a lie.
+
+    One snapshot read for every team, like the Organization page's list. Asking
+    `group_members` per team was a live ListUsersInGroup each, in series: 14 s
+    of the 21 s teams widget at ten teams and 1,000 people (2026-10-18)."""
     try:
-        return len(_org_directory().group_members(team))
+        return _org_directory().team_sizes()
     except Exception:
-        logger.info("Team member count unavailable: %s", team, exc_info=True)
+        logger.info("Team member counts unavailable", exc_info=True)
         return None
+
+
+# Insights dashboards are computed once per window and shared. Each is seconds of
+# CPU at 1,000 people — the summary pinned the 0.5-vCPU server at 100% for ~20 s
+# while every other request waited (2026-10-18) — and none depends on who asks
+# beyond the admin gate, which every request still passes first. Served fresh for
+# 60 s, then stale for up to 15 min while one background read replaces it, so a
+# polling page costs at most one computation a minute however many admins watch.
+# A write that changes the figures (a rate registered or removed) clears it.
+# Bounded: record_insights is keyed by a record id any signed-in user may send,
+# and every key carries the date, so without a cap the map only ever grew.
+_DASHBOARDS = StaleWhileRevalidate(fresh_seconds=60, max_age_seconds=900, max_entries=256)
+# The reader a shared computation runs as: the admin view, which the route then
+# narrows for the caller (record_insights hides owners from non-admins).
+_DASHBOARD_READER = AuthUser(sub="", username="insights-dashboard", role="admin")
+
+
+def _dashboard(key: Any, compute: Callable[[], Dict[str, Any]]) -> Dict[str, Any]:
+    value, age = _DASHBOARDS.get(key, compute)
+    return {**value, "computed_seconds_ago": int(age)}
+
+
+def _session_owners(session_ids: List[str], usage: Any, window: Dict[str, Any]) -> Dict[str, str]:
+    """session (= thread) id -> owner sub, for runtime cost per person.
+
+    Read from the threads by id, so the cost is the number of sessions. It used
+    to read every turn event of the window to find these owners — 70k events
+    for three sessions at 1,000 people (2026-10-18). A session whose thread was
+    deleted since is looked up in its turn events, which keep the owner."""
+    owners: Dict[str, str] = {}
+    try:
+        owners = dict(_threads().owners_of(session_ids))
+    except Exception:
+        logger.info("Thread owners unavailable; using turn events", exc_info=True)
+    missing = [sid for sid in session_ids if sid not in owners]
+    for start in range(0, len(missing), 100):  # an IN filter takes 100 values
+        chunk = set(missing[start:start + 100])
+        for event in usage.turn_events(window["start_date"], window["end_date"],
+                                       thread_ids=sorted(chunk), fields=["thread_id", "owner_sub"]):
+            if event.get("thread_id") in chunk and event.get("owner_sub"):
+                owners.setdefault(str(event["thread_id"]), str(event["owner_sub"]))
+    return owners
 
 
 def _rate_card():
@@ -264,8 +314,16 @@ def _window(days: int) -> Dict[str, Any]:
     and none of them had. The half-window delta was comparing a fraction of today
     against whole days and reporting the shortfall as a decline in usage.
     """
-    days = days if days in SUPPORTED_DAYS else max(SUPPORTED_DAYS)
-    return clock.window(days)
+    return clock.window(_supported_days(days))
+
+
+# Agents listed per person in /insights/users; the rest are a count and a sum.
+USER_AGENTS_SHOWN = 10
+
+
+def _supported_days(days: int) -> int:
+    """The window length a request actually gets: one of SUPPORTED_DAYS."""
+    return days if days in SUPPORTED_DAYS else max(SUPPORTED_DAYS)
 
 
 def _window_fields(window: Dict[str, Any]) -> Dict[str, Any]:
@@ -436,6 +494,10 @@ def _turn_count(thread: Any) -> int:
     exists only once it has been created, and an empty one genuinely had none.
     """
     values = getattr(thread, "values", None) or {}
+    # A listed thread carries its count (ThreadRepository.summary_of) instead of
+    # the transcript the count would otherwise be taken from.
+    if isinstance(values.get("turns"), int):
+        return values["turns"]
     messages = values.get("messages") or []
     return sum(1 for message in messages if message.get("type") == "ai")
 
@@ -513,15 +575,21 @@ def _harness_runtimes(usage: Any) -> Dict[str, str]:
         return {}
 
 
-def _collected(window: Dict[str, Any]) -> Dict[str, Any]:
-    """Everything the collector wrote for the window, or empty maps when it is
-    not configured. Reads DDB only."""
+_COLLECTED_KEYS = ("resources", "gateways", "memories", "sessions")
+
+
+def _collected(window: Dict[str, Any], keys: tuple = _COLLECTED_KEYS) -> Dict[str, Any]:
+    """What the collector wrote for the window — all four quantities, or only
+    `keys` — with empty maps for the rest and when it is not configured. Reads
+    DDB only. A page that shows one quantity asks for one: `sessions` is a row
+    per session per day, 2.5 s to read at 1,000 users, and the record page
+    shows none of it."""
     collector = _collector()
-    empty = {"resources": {}, "gateways": {}, "memories": {}, "sessions": {}}
+    empty = {key: {} for key in _COLLECTED_KEYS}
     if collector is None:
         return empty
     out = dict(empty)
-    for key in empty:
+    for key in keys:
         try:
             out[key] = getattr(collector, key)(window["start_date"], window["end_date"])
         except Exception:
@@ -534,6 +602,37 @@ def _sum_days(days: Dict[str, Dict[str, Any]], field: str) -> Optional[int]:
     values = [_int(item.get(field)) for item in days.values() if field in item]
     values = [v for v in values if v is not None]
     return sum(values) if values else None
+
+
+def _allocate_shared_runtime(rows: List[Dict[str, Any]], resources: Dict[str, Dict[str, Any]]) -> None:
+    """Split each runtime's cost across the records that share it, by turns.
+
+    `runtime_cost_micros` deliberately shows a shared runtime whole on every row
+    that uses it — that is what the record costs to keep running. Summed, it is
+    not where the money went: on bst (2026-10-19) 90 records on one runtime and
+    111 on one harness put the per-agent cost at $3,931 against a $501 window.
+    The allocated figures add up to the runtime total, so a part-to-whole chart
+    can use them. A runtime whose claimers had no turns is split evenly.
+    """
+    claimers: Dict[str, List[Dict[str, Any]]] = {}
+    for row in rows:
+        for arn in row["_runtimes"]:
+            claimers.setdefault(arn, []).append(row)
+    for row in rows:
+        share: Optional[int] = None
+        for arn in row["_runtimes"]:
+            cost = _sum_days(resources.get(arn, {}), "runtime_cost_micros")
+            if cost is None:
+                continue
+            group = claimers[arn]
+            turns = sum(other["turns"] or 0 for other in group)
+            part = cost * (row["turns"] or 0) // turns if turns else cost // len(group)
+            share = (share or 0) + part
+        model = row["model_cost_micros"]
+        row["allocated_runtime_micros"] = share
+        row["allocated_cost_micros"] = (
+            model + share if model is not None and share is not None else None
+        )
 
 
 def _days_between(start_date: str, end_date: str) -> List[str]:
@@ -826,6 +925,17 @@ def summary(
     days: int = Query(7),
     user: AuthUser = Depends(current_user),
 ) -> Dict[str, Any]:
+    _require_admin(user)
+    return _dashboard(
+        ("summary", _supported_days(days), clock.today()),
+        lambda: _compute_summary(days=days, user=_DASHBOARD_READER),
+    )
+
+
+def _compute_summary(
+    days: int = Query(7),
+    user: AuthUser = Depends(current_user),
+) -> Dict[str, Any]:
     """KPI row plus the agent leaderboard — the point of the page.
 
     Everything here was written before the request arrived: turn events and their
@@ -855,13 +965,22 @@ def summary(
     except Exception:
         logger.warning("Could not read agent records", exc_info=True)
     usage.set_record_aliases(records)
-    totals = usage.agent_totals(window["start_date"], window["end_date"])
-    by_model = usage.agent_models(window["start_date"], window["end_date"])
-    names = _record_names(records)
-    harness_runtimes = _harness_runtimes(usage) if any(
-        getattr(r, "harness_arn", None) for r in records
-    ) else {}
-    collected = _collected(window)
+    # The wide ledger partitions this page folds, read at once into the request
+    # memo while the collector's day items are read beside them; one after
+    # another they were 18 s in-process at 300 records (bst, 2026-10-19).
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        collected_side = pool.submit(_collected, window)
+        usage.prefetch(
+            ["AGENTS#", "AGENT_MODELS#", "GUARDRAIL#", "GUARDRAIL_USERS#"],
+            window["start_date"], window["end_date"],
+        )
+        totals = usage.agent_totals(window["start_date"], window["end_date"])
+        by_model = usage.agent_models(window["start_date"], window["end_date"])
+        names = _record_names(records)
+        harness_runtimes = _harness_runtimes(usage) if any(
+            getattr(r, "harness_arn", None) for r in records
+        ) else {}
+        collected = collected_side.result()
     recon = _recon(window, usage)
 
     # Billed runtime per agent name, summed over the window's *complete* RECON
@@ -881,8 +1000,12 @@ def summary(
 
     rows: List[Dict[str, Any]] = []
     claimed_runtimes: set = set()
+    # One read per (record, month) for distinct_users below, fetched together
+    # rather than one round trip per leaderboard row.
+    usage.prefetch_distinct_users(list(totals), window["start_date"], window["end_date"])
+    records_by_id = {r.record_id: r for r in records}
     for record_id, counters in totals.items():
-        record = next((r for r in records if r.record_id == record_id), None)
+        record = records_by_id.get(record_id)
         arns = _runtime_arns_of(record, harness_runtimes) if record else []
         runtime_days = {}
         for arn in arns:
@@ -932,6 +1055,7 @@ def summary(
             "_runtimes": frozenset(arns),
         })
     rows.sort(key=lambda row: -row["turns"])
+    _allocate_shared_runtime(rows, collected["resources"])
     for row in rows:
         claimed_runtimes |= row.pop("_runtimes")
     # Runtime cost no leaderboard row claims. The Runtime tile totals every
@@ -1093,6 +1217,17 @@ def telemetry(
     days: int = Query(7),
     user: AuthUser = Depends(current_user),
 ) -> Dict[str, Any]:
+    _require_admin(user)
+    return _dashboard(
+        ("telemetry", _supported_days(days), clock.today()),
+        lambda: _compute_telemetry(days=days, user=_DASHBOARD_READER),
+    )
+
+
+def _compute_telemetry(
+    days: int = Query(7),
+    user: AuthUser = Depends(current_user),
+) -> Dict[str, Any]:
     """The CloudWatch tier, only when a reader asks for it.
 
     Its own route, and not on the poll, because it is the one metered read on
@@ -1226,6 +1361,17 @@ def composition(
     days: int = Query(7),
     user: AuthUser = Depends(current_user),
 ) -> Dict[str, Any]:
+    _require_admin(user)
+    return _dashboard(
+        ("composition", _supported_days(days), clock.today()),
+        lambda: _compute_composition(days=days, user=_DASHBOARD_READER),
+    )
+
+
+def _compute_composition(
+    days: int = Query(7),
+    user: AuthUser = Depends(current_user),
+) -> Dict[str, Any]:
     """Which MCP servers, skills and knowledge bases earned their place.
 
     Its own route, not part of `summary`, because it needs the harness listing's
@@ -1265,17 +1411,87 @@ def my_insights(
     usage = _usage()
     usage.begin_read()
     window = _window(days)
-    totals = usage.user_totals(window["start_date"], window["end_date"])
+    totals = usage.user_totals_for(target, window["start_date"], window["end_date"])
     return {
         "sub": target,
         **_window_fields(window),
         "sources": {"usage": usage.reads_complete()},
-        "totals": totals.get(target, {}),
+        "totals": totals,
     }
 
 
 @router.get("/users")
 def user_leaderboard(
+    days: int = Query(7),
+    user: AuthUser = Depends(current_user),
+) -> Dict[str, Any]:
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required.")
+    return _dashboard(
+        ("user_leaderboard", _supported_days(days), clock.today()),
+        lambda: _compute_user_leaderboard(days=days, user=_DASHBOARD_READER),
+    )
+
+
+@router.get("/users/{sub}")
+def user_insights(
+    sub: str,
+    days: int = Query(30),
+    user: AuthUser = Depends(current_user),
+) -> Dict[str, Any]:
+    """One person's row of the leaderboard, read by exact key. **Admin only.**
+
+    The Organization user sheet opens one person; the leaderboard reads every
+    person's rows to answer that. This reads only theirs — their USERS# day items
+    and one (agent, day) item per agent — so it does not grow with the head count.
+    Runtime cost per person needs the session owners of the whole window and is
+    left to the leaderboard.
+    """
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required.")
+    _require_configured()
+    usage = _usage()
+    usage.begin_read()
+    window = _window(_supported_days(days))
+    start, end = window["start_date"], window["end_date"]
+    totals = usage.user_totals_for(sub, start, end)
+    daily = usage.user_daily_for(sub, start, end)
+    records: List[Any] = []
+    try:
+        records = list(usage.registry.agent_records())
+    except Exception:
+        logger.warning("Could not read agent records", exc_info=True)
+    usage.set_record_aliases(records)
+    names = _record_names(records)
+    agents = sorted(
+        ({"record_id": rid, "name": names.get(rid, rid), "turns": turns}
+         for rid, turns in usage.user_agents_for(sub, [r.record_id for r in records], start, end).items()),
+        key=lambda entry: (-entry["turns"], entry["name"]),
+    )
+    row = None
+    if totals.get("turns"):
+        row = {
+            "sub": sub,
+            "agents": agents[:USER_AGENTS_SHOWN],
+            "agents_total": len(agents),
+            "other_agent_turns": sum(entry["turns"] for entry in agents[USER_AGENTS_SHOWN:]),
+            "active_days": len(daily),
+            "daily": [{"date": day, **counters} for day, counters in sorted(daily.items())],
+            **{key: int(totals.get(key) or 0) for key in (
+                "turns", "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
+                "failed_turns", "threads_started", "interrupted_turns", "tool_calls",
+                "unmeasured_turns", "priced_turns", "unpriced_turns",
+            )},
+            "model_cost_micros": int(totals.get("model_cost_micros") or 0) if totals.get("priced_turns") else None,
+        }
+    return {
+        **_window_fields(window),
+        "sources": {"usage": usage.reads_complete()},
+        "user": row,
+    }
+
+
+def _compute_user_leaderboard(
     days: int = Query(7),
     user: AuthUser = Depends(current_user),
 ) -> Dict[str, Any]:
@@ -1319,10 +1535,7 @@ def user_leaderboard(
     sessions = collected["sessions"]
     runtime_by_user: Dict[str, int] = {}
     if sessions:
-        owner_of_thread: Dict[str, str] = {}
-        for event in usage.turn_events(window["start_date"], window["end_date"]):
-            if event.get("thread_id") and event.get("owner_sub"):
-                owner_of_thread.setdefault(str(event["thread_id"]), str(event["owner_sub"]))
+        owner_of_thread = _session_owners([key.split("#R#", 1)[0] for key in sessions], usage, window)
         for key, days_map in sessions.items():
             session_id = key.split("#R#", 1)[0]
             owner = owner_of_thread.get(session_id)
@@ -1344,11 +1557,11 @@ def user_leaderboard(
     usage.set_record_aliases(records)
     names = _record_names(records)
     matrix = usage.agent_user_matrix([record.record_id for record in records], window["start_date"], window["end_date"])
-    by_day = usage.daily_users(window["start_date"], window["end_date"])
-    active_days: Dict[str, int] = {}
-    for subs in by_day.values():
-        for sub in subs:
-            active_days[sub] = active_days.get(sub, 0) + 1
+    per_day = usage.user_daily(window["start_date"], window["end_date"])
+    by_day: Dict[str, set] = {}
+    for sub, days_map in per_day.items():
+        for day in days_map:
+            by_day.setdefault(day, set()).add(sub)
 
     rows: List[Dict[str, Any]] = []
     for sub, counters in totals.items():
@@ -1361,8 +1574,19 @@ def user_leaderboard(
         )
         rows.append({
             "sub": sub,
-            "agents": agents,
-            "active_days": active_days.get(sub, 0),
+            # The most-used few, plus what the rest add up to. Every agent of
+            # every person made the response 3.8 MB at 1,000 people (bst,
+            # 2026-10-18) for a table that shows one name and a count.
+            "agents": agents[:USER_AGENTS_SHOWN],
+            "agents_total": len(agents),
+            "other_agent_turns": sum(entry["turns"] for entry in agents[USER_AGENTS_SHOWN:]),
+            "active_days": len(per_day.get(sub, {})),
+            # The person's own days, sparse and oldest first, for the drill-down
+            # a row click opens. Read with `by_day` above, so it is free.
+            "daily": [
+                {"date": day, **counters}
+                for day, counters in sorted(per_day.get(sub, {}).items())
+            ],
             "turns": counters.get("turns", 0),
             "input_tokens": counters.get("input_tokens", 0),
             "output_tokens": counters.get("output_tokens", 0),
@@ -1451,6 +1675,15 @@ def user_leaderboard(
 
 @router.get("/teams")
 def team_insights(days: int = Query(7), user: AuthUser = Depends(current_user)) -> Dict[str, Any]:
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required.")
+    return _dashboard(
+        ("team_insights", _supported_days(days), clock.today()),
+        lambda: _compute_team_insights(days=days, user=_DASHBOARD_READER),
+    )
+
+
+def _compute_team_insights(days: int = Query(7), user: AuthUser = Depends(current_user)) -> Dict[str, Any]:
     """Spend and policy denials per team. **Admin only.**
 
     A turn is attributed to a team by the caller's groups at the time it ran
@@ -1478,6 +1711,7 @@ def team_insights(days: int = Query(7), user: AuthUser = Depends(current_user)) 
     daily_keys = ("turns", "model_cost_micros", "failed_turns", "tool_calls")
 
     rows: List[Dict[str, Any]] = []
+    member_counts = _member_counts()
     for team in _teams().list():
         totals = by_team.get(team.name, usage._blank())
         # The alert is per day, so the window figure cannot be read against it;
@@ -1499,7 +1733,7 @@ def team_insights(days: int = Query(7), user: AuthUser = Depends(current_user)) 
             "max_day_cost_micros": max(days.values(), default=0),
             # None, not 0, when there is no alert: "0 days over" would claim a comparison that never ran.
             "days_over_alert": None if alert_micros is None else sum(1 for c in days.values() if c >= alert_micros),
-            "members": _member_count(team.name),
+            "members": None if member_counts is None else member_counts.get(team.name, 0),
             # Dense over the window: a team with no item on a day ran no turns
             # that day, so zero is a reading here, not a gap.
             "daily": [
@@ -1982,11 +2216,66 @@ def record_insights(
     days: int = Query(7),
     user: AuthUser = Depends(current_user),
 ) -> Dict[str, Any]:
-    """One agent: its counters, its cost, its models, its trend, its tools, its turns."""
+    out = _dashboard(
+        ("record_insights", record_id, _supported_days(days), clock.today()),
+        lambda: _compute_record_insights(record_id=record_id, days=days, user=_DASHBOARD_READER),
+    )
+    if not user.is_admin:
+        # Computed once for everyone, as an admin sees it. A record's counters
+        # are public; whose turn each was, and which thread it ran in, is not.
+        out = {**out, "turns": [_public_turn(turn, user.sub) for turn in out.get("turns", [])]}
+    return out
+
+
+# The turn-event attributes the record page renders (`turn_events` adds the
+# keys it filters on). Anything the rows below read must be listed here.
+_RECORD_TURN_FIELDS = (
+    "turn_id", "thread_id", "ended_at", "status", "model_id", "input_tokens",
+    "output_tokens", "cache_read_tokens", "cache_write_tokens", "model_cost_micros",
+    "measured", "source", "owner_sub",
+)
+
+
+# What a non-admin may see of one turn on a record. An allow-list, so a field
+# added to the admin view later is not shown to everyone by default.
+_PUBLIC_TURN_FIELDS = (
+    "ended_at", "status", "model_id", "input_tokens", "output_tokens",
+    "cache_read_tokens", "cache_write_tokens", "model_cost_micros", "measured", "source",
+)
+
+
+def _public_turn(turn: Dict[str, Any], viewer_sub: str) -> Dict[str, Any]:
+    """A turn as a non-admin sees it: their own in full, anyone else's without
+    the thread. `turn_id` is `<thread_id>:<message_id>`, so for someone else's
+    turn it is replaced by an opaque stand-in — still unique and stable, which
+    the chart's x-axis and the rows' keys need."""
+    own = bool(viewer_sub) and turn.get("owner_sub") == viewer_sub
+    public = {field: turn.get(field) for field in _PUBLIC_TURN_FIELDS}
+    raw_id = str(turn.get("turn_id") or "")
+    public["turn_id"] = raw_id if own else "t-" + hashlib.sha256(raw_id.encode()).hexdigest()[:16]
+    public["thread_id"] = turn.get("thread_id") if own else None
+    public["owner_sub"] = None
+    return public
+
+
+def _compute_record_insights(
+    record_id: str,
+    days: int = Query(7),
+    user: AuthUser = Depends(current_user),
+) -> Dict[str, Any]:
+    """One agent: its counters, its cost, its models, its trend, its tools, its turns.
+
+    Two independent sets of reads, run side by side: the ledger (this record's
+    own rows, prefetched into the request memo) and the control planes (the
+    model map, the harness listing, the collector's day items). In series they
+    were 3.4 s for an agent record on bst at 300 records (2026-10-19), and the
+    page is one request, so its latency is the sum of everything it asks for.
+    """
     _require_configured()
     usage = _usage()
     usage.begin_read()
     window = _window(days)
+    start, end = window["start_date"], window["end_date"]
     # Records first: a turn written under a `deployed:<arn>` fallback id belongs
     # to the record that owns the ARN, and every read below folds it in.
     records: List[Any] = []
@@ -1995,13 +2284,52 @@ def record_insights(
     except Exception:
         logger.info("Registry unavailable for record %s", record_id, exc_info=True)
     usage.set_record_aliases(records)
-    counters = usage.record_totals(
-        record_id, window["start_date"], window["end_date"]
-    )
-    # The model the agent runs *now*, for the header. Cost never reads it: every
-    # turn was priced against the model it ran on, and `models` lists those.
-    model_id = usage.model_map().get(record_id)
-    by_model = usage.agent_models(window["start_date"], window["end_date"]).get(record_id, {})
+    record = next((r for r in records if r.record_id == record_id), None)
+
+    def control_planes() -> tuple:
+        model_id = usage.model_map().get(record_id)
+        if record is None:
+            return model_id, {}, {}
+        collected = _collected(window, keys=("resources",))
+        harness_runtimes = _harness_runtimes(usage) if getattr(record, "harness_arn", None) else {}
+        return model_id, collected, harness_runtimes
+
+    def reach_view() -> tuple:
+        # A skill or MCP record (not among the agent records) is *reached*, and
+        # its rollup reads every agent's totals and tool calls plus the harness
+        # listing — the bulk of its page, so it runs beside the record's own
+        # reads. Its own memo and read flag, folded into the request's below.
+        usage.begin_read()
+        reach, tools = _record_usage_view(usage, record_id, window)
+        return reach, tools, usage.reads_complete()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        side = pool.submit(control_planes)
+        reach_side = pool.submit(reach_view) if record is None else None
+        # On the request thread: the memo is thread-local (see `prefetch`).
+        usage.prefetch_reads(
+            [
+                *[(f"AGENT#{lid}#USERS#", usage._DISTINCT_FIELDS) for lid in usage._ledger_ids(record_id)],
+                *[(f"AGENT#{lid}#TOOLS#", None) for lid in usage._ledger_ids(record_id)],
+            ],
+            start,
+            end,
+        )
+        # The record's own AGENTS#/AGENT_MODELS# rows, by key (`_record_rows`);
+        # the three reads below share them.
+        counters = usage.record_totals(record_id, start, end)
+        by_model = usage.record_models(record_id, start, end)
+        distinct_users = usage.distinct_users(record_id, start, end)
+        daily = usage.daily_totals(start, end, record_id=record_id)
+        # Only the attributes the rows below render: the busiest agent's 8k
+        # events of a month are read whole to keep the last 100, and the
+        # decode of a dozen extra attributes each was most of that read.
+        turns = usage.turn_events(
+            start, end, agent_record_id=record_id, fields=list(_RECORD_TURN_FIELDS)
+        )[-100:]
+        # The model the agent runs *now*, for the header. Cost never reads it: every
+        # turn was priced against the model it ran on, and `models` lists those.
+        model_id, collected, harness_runtimes = side.result()
     models = [
         {
             "model_id": mid,
@@ -2018,10 +2346,7 @@ def record_insights(
 
     runtime_cost = None
     invocations = None
-    record = next((r for r in records if r.record_id == record_id), None)
     if record is not None:
-        collected = _collected(window)
-        harness_runtimes = _harness_runtimes(usage) if getattr(record, "harness_arn", None) else {}
         runtime_days = {}
         for arn in _runtime_arns_of(record, harness_runtimes):
             for day, item in collected["resources"].get(arn, {}).items():
@@ -2033,11 +2358,13 @@ def record_insights(
     # whose own turn/token counters are always zero — it is reached, not run. Its
     # Usage tab shows the agents that reach it and their traffic instead, and
     # `tools` is the calls that went through it; for an agent, `tools` is its own.
-    reach, tool_totals = _record_usage_view(usage, record_id, window)
+    if reach_side is not None:
+        reach, tool_totals, reach_complete = reach_side.result()
+        if not reach_complete:
+            usage._reads.complete = False
+    else:
+        reach, tool_totals = _record_usage_view(usage, record_id, window)
 
-    turns = usage.turn_events(
-        window["start_date"], window["end_date"], agent_record_id=record_id
-    )[-100:]
     turns.reverse()
     return {
         "record_id": record_id,
@@ -2050,12 +2377,8 @@ def record_insights(
         "model_cost_micros": counters["model_cost_micros"] if counters["priced_turns"] > 0 else None,
         "runtime_cost_micros": runtime_cost,
         "invocations": invocations,
-        "distinct_users": usage.distinct_users(
-            record_id, window["start_date"], window["end_date"]
-        ),
-        "daily": usage.daily_totals(
-            window["start_date"], window["end_date"], record_id=record_id
-        ),
+        "distinct_users": distinct_users,
+        "daily": daily,
         "tools": [
             {"name": name, "tool_calls": count, "metric": "calls"}
             for name, count in sorted(
@@ -2180,6 +2503,9 @@ def register_rates(
         )
     except RateCardError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        # The reprice moved costs; the next dashboard read must show them.
+        _DASHBOARDS.invalidate()
 
 
 @router.delete("/rates")
@@ -2194,3 +2520,5 @@ def delete_rate(
         return _rate_card().remove(key, today=clock.today())
     except RateCardError as exc:
         raise HTTPException(status_code=404 if "없습니다" in str(exc) else 400, detail=str(exc)) from exc
+    finally:
+        _DASHBOARDS.invalidate()

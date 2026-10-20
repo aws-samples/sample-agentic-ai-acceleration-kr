@@ -49,6 +49,12 @@ variable "attach_registry" {
   default     = false
 }
 
+variable "attach_policy_engine" {
+  type        = bool
+  description = "Whether policy_engine_arn is set. Separate from the ARN because a new engine's ARN is unknown until apply, and count cannot depend on an unknown (the first apply with enable_gateway_policy failed with \"Invalid count argument\")."
+  default     = false
+}
+
 variable "policy_engine_arn" {
   type        = string
   description = "AgentCore policy engine to evaluate every tools/call on this gateway. Empty = no policy engine (every call allowed, as before)."
@@ -70,4 +76,15 @@ variable "demo_tools" {
   type        = bool
   description = "Keep the workshop mock tools (approve_expense, lookup_salary) on the Lambda target. They return canned results, so they are dropped by default."
   default     = false
+}
+
+variable "runtime_mcp_listing_mode" {
+  description = "tools/list handling for runtime_mcp_servers targets. DEFAULT serves the schema synchronised at creation (re-read with `scripts/gateway_target.py sync` after redeploying the server with new tools); DYNAMIC asks the server on every tools/list, which puts its microVM cold start into every agent session's tool load."
+  type        = string
+  default     = "DEFAULT"
+
+  validation {
+    condition     = contains(["DEFAULT", "DYNAMIC"], var.runtime_mcp_listing_mode)
+    error_message = "runtime_mcp_listing_mode must be DEFAULT or DYNAMIC."
+  }
 }

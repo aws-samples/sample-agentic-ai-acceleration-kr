@@ -369,9 +369,10 @@ class McpAppsRelay:
         from mcp_core.ui_meta import is_app_callable
 
         with open_session(url) as session:
-            by_name = {
-                getattr(tool, "name", None): tool for tool in session.list_tools().tools
-            }
+            # `list_tools` is every page already (a list), not one ListToolsResult:
+            # reading `.tools` off it failed every app-originated call with 502
+            # since tools/list followed `nextCursor` (bst T1 smoke, 2026-10-18).
+            by_name = {getattr(tool, "name", None): tool for tool in session.list_tools()}
 
             # 게이트웨이 경유 에이전트는 `<target>___<tool>`로 부른다. 원본 서버는 그
             # 이름을 모르므로 접두사를 벗긴 이름으로도 찾아본다 — 이 세션 안에서 해야

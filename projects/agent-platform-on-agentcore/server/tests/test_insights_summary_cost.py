@@ -104,7 +104,7 @@ def repo_with_everything():
         f"AGENT_MODELS#{MONTH}": [
             {"sk": f"D#{TODAY}#A#rec-1#M#global.anthropic.claude-sonnet-5", "turns": D(3), "input_tokens": D(1_000_000),
              "output_tokens": D(10_000), "model_cost_micros": D(2_100_000), "priced_turns": D(3), "measured_turns": D(3)},
-            {"sk": f"D#{TODAY}#A#rec-2#M#global.anthropic.claude-opus-5-5", "turns": D(1), "input_tokens": D(500),
+            {"sk": f"D#{TODAY}#A#rec-2#M#global.anthropic.claude-opus-6-1", "turns": D(1), "input_tokens": D(500),
              "unpriced_turns": D(1), "measured_turns": D(1)},
         ],
         f"AGENT#rec-1#USERS#{MONTH}": [{"sk": f"D#{TODAY}#U#sub-1", "turns": D(3)}],
@@ -143,10 +143,10 @@ def repo_with_everything():
             {"sk": f"D#{TODAY}#K#model_rate#claude-sonnet-5|global|output", "billed_usd_per_1m_micro": D(12_000_000),
              "card_usd_per_1m_micro": D(10_000_000), "match": False, "registered": True, "region": "us-east-1",
              "checked_at": f"{TODAY}T06:00:00Z"},
-            {"sk": f"D#{TODAY}#K#model_rate#claude-opus-5-5|global|output", "billed_usd_per_1m_micro": D(30_000_000),
+            {"sk": f"D#{TODAY}#K#model_rate#claude-opus-6-1|global|output", "billed_usd_per_1m_micro": D(30_000_000),
              "registered": False, "region": "us-east-1", "checked_at": f"{TODAY}T06:00:00Z"},
             {"sk": f"D#{TODAY}#K#summary#latest", "checked_at": f"{TODAY}T06:00:00Z", "start_date": YESTERDAY,
-             "end_date": TODAY, "mismatch_count": D(1), "unregistered_families": ["claude-opus-5-5"]},
+             "end_date": TODAY, "mismatch_count": D(1), "unregistered_families": ["claude-opus-6-1"]},
         ],
     })
 
@@ -160,6 +160,8 @@ def wire(repo):
     insights._collector_override = CollectorService(
         repository=repo, cloudwatch=None, pricing=None, registry=registry, harness=Harness(), region="us-east-1"
     )
+    # New wiring is a new deployment as far as the shared dashboards are concerned.
+    insights._DASHBOARDS.invalidate()
     return usage
 
 
@@ -178,7 +180,7 @@ def test_summary_cost_block_comes_from_the_ledger_and_the_collector():
     assert cost["model"]["micros"] == 2_100_000
     assert cost["model"]["priced_turns"] == 3
     assert cost["model"]["unpriced_turns"] == 1
-    assert cost["model"]["unregistered_models"] == ["global.anthropic.claude-opus-5-5"]
+    assert cost["model"]["unregistered_models"] == ["global.anthropic.claude-opus-6-1"]
     assert cost["model"]["rate_card_version"]
     assert cost["runtime"]["micros"] == 590_628 + 197_950
     assert cost["runtime"]["vcpu_hours_micro"] == 400_000
@@ -228,7 +230,7 @@ def test_summary_reports_reconciliation_and_rate_card_findings():
         "family": "claude-sonnet-5", "routing": "global", "tier": "output",
         "card_micro": 10_000_000, "billed_micro": 12_000_000,
     }]
-    assert cost["rate_card"]["unregistered_families"] == ["claude-opus-5-5"]
+    assert cost["rate_card"]["unregistered_families"] == ["claude-opus-6-1"]
     assert cost["rate_card"]["checked_at"] == f"{TODAY}T06:00:00Z"
 
 
@@ -238,8 +240,8 @@ def test_summary_models_section_lists_each_model_with_its_cost():
     assert models["global.anthropic.claude-sonnet-5"]["model_cost_micros"] == 2_100_000
     assert models["global.anthropic.claude-sonnet-5"]["family"] == "claude-sonnet-5"
     assert models["global.anthropic.claude-sonnet-5"]["routing"] == "global"
-    assert models["global.anthropic.claude-opus-5-5"]["model_cost_micros"] is None
-    assert models["global.anthropic.claude-opus-5-5"]["registered"] is False
+    assert models["global.anthropic.claude-opus-6-1"]["model_cost_micros"] is None
+    assert models["global.anthropic.claude-opus-6-1"]["registered"] is False
 
 
 def test_summary_without_collector_items_says_so_instead_of_zero():
@@ -416,6 +418,7 @@ def test_yesterday_enters_the_bill_comparison_only_once_cost_explorer_has_had_a_
     repo.items[(f"RECON#{MONTH}", f"D#{YESTERDAY}#K#agent_runtime#bap_default")].update({
         "billed_micros": D(590_700), "diff_micros": D(72), "checked_at": f"{tomorrow}T04:06:00Z",
     })
+    insights._DASHBOARDS.invalidate()  # past the shared dashboard's freshness window
     cost = insights.summary(days=7, user=admin())["cost"]
     assert cost["diff"]["days_compared"] == 2 and cost["diff"]["through"] == YESTERDAY
     assert cost["diff"]["runtime_micros"] == 272 + 72
@@ -453,14 +456,14 @@ def test_summary_lists_learned_rates_only_for_models_this_platform_ran():
     # The overlay is whatever the table holds: the route loads it, never trusts
     # the process's memory, so the entries go through the repository.
     for sk, entry in {
-        "R#claude-opus-5-5|global|output|2026-09-20": {"family": "claude-opus-5-5", "routing": "global", "tier": "output", "effective_from": "2026-09-20", "usd_per_1m": "20"},
+        "R#claude-opus-6-1|global|output|2026-09-20": {"family": "claude-opus-6-1", "routing": "global", "tier": "output", "effective_from": "2026-09-20", "usd_per_1m": "20"},
         "R#claude-fable-5-1|regional|output|2026-09-01": {"family": "claude-fable-5-1", "routing": "regional", "tier": "output", "effective_from": "2026-09-01", "usd_per_1m": "55"},
     }.items():
         repo.items[("RATES#learned", sk)] = {"pk": "RATES#learned", "sk": sk, **entry}
     try:
         wire(repo)
         learned = insights.summary(days=7, user=admin())["cost"]["rate_card"]["learned"]
-        assert [(e["family"], e["tier"], e["usd_per_1m"]) for e in learned] == [("claude-opus-5-5", "output", "20")]
+        assert [(e["family"], e["tier"], e["usd_per_1m"]) for e in learned] == [("claude-opus-6-1", "output", "20")]
     finally:
         set_learned_rates([])
 
@@ -493,3 +496,29 @@ def test_first_summary_after_start_folds_deployed_arn_ledger_keys_into_their_rec
     rows = {row["name"]: row for row in insights.summary(days=7, user=admin())["agents"]}
     assert "web_harness" in rows and rows["web_harness"]["turns"] == 1
     assert not any(name.startswith("deployed:") for name in rows)
+
+
+def test_a_runtime_shared_by_several_records_is_allocated_by_turns():
+    """Every row keeps the shared runtime whole in runtime_cost_micros, but the
+    allocated figures split it so they sum to the runtime total. On bst 90
+    records on one runtime made the per-agent cost 8x the window's."""
+    repo = repo_with_everything()
+    repo.items[(f"AGENTS#{MONTH}", f"D#{TODAY}#A#rec-3")] = {
+        "pk": f"AGENTS#{MONTH}", "sk": f"D#{TODAY}#A#rec-3", "turns": D(1), "measured_turns": D(1),
+        "model_cost_micros": D(100_000), "priced_turns": D(1),
+    }
+    usage = wire(repo)
+    usage.registry._records.append(Record("rec-3", "copy_of_default", runtime_arn=RUNTIME))
+    rows = {row["name"]: row for row in insights.summary(days=7, user=admin())["agents"]}
+    runtime_total = 590_628 + 197_950
+    assert rows["bap_default"]["runtime_cost_micros"] == runtime_total
+    assert rows["copy_of_default"]["runtime_cost_micros"] == runtime_total
+    # 3 turns to 1.
+    assert rows["bap_default"]["allocated_runtime_micros"] == runtime_total * 3 // 4
+    assert rows["copy_of_default"]["allocated_runtime_micros"] == runtime_total // 4
+    assert rows["copy_of_default"]["allocated_cost_micros"] == 100_000 + runtime_total // 4
+    allocated = sum(row["allocated_runtime_micros"] or 0 for row in rows.values())
+    assert runtime_total - 2 <= allocated <= runtime_total
+    # No runtime cost collected: absent, like the whole figure.
+    assert rows["content_creator"]["allocated_runtime_micros"] is None
+    assert rows["content_creator"]["allocated_cost_micros"] is None

@@ -297,7 +297,9 @@ def test_a_legacy_thread_with_turns_cannot_be_continued(app, repo):
     response = _stream(app, LEGACY_WITH_TURNS, AGENT_A)
 
     assert response.status_code == 409, response.text
-    assert repo.agent_of(LEGACY_WITH_TURNS) == ""
+    # Still unpinned. Stored without the attribute: an empty string cannot be a
+    # list-index key (repositories/thread_repository._index_fields).
+    assert repo.agent_of(LEGACY_WITH_TURNS) is None
 
 
 def test_backfilling_makes_a_legacy_thread_continuable(app, repo, service):
@@ -328,7 +330,7 @@ def test_a_thread_started_without_an_agent_stays_adoptable(service, repo):
     service.get_or_create_thread(
         thread_id="t-anon", owner_sub=OWNER.sub, initial_values=None
     )
-    assert repo.agent_of("t-anon") == ""
+    assert repo.agent_of("t-anon") is None  # unpinned: attribute omitted
 
     service.get_or_create_thread(
         thread_id="t-anon",

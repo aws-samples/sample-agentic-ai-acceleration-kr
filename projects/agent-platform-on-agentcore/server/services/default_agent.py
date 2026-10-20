@@ -45,12 +45,41 @@ def is_default_record(record: Any, default_runtime_arn: Optional[str] = None) ->
     return getattr(record, "agent_runtime_arn", None) == arn and _chattable(record)
 
 
-def mark_default(records: Iterable[Any], default_runtime_arn: Optional[str] = None) -> List[Any]:
-    """Set `is_default` on every record in place and return them as a list."""
-    out = list(records)
+def _runtime_name(arn: str) -> str:
+    """`.../runtime/bap_default-AbC12` -> `bap_default`: the name deploy.sh
+    registers the default runtime's record under."""
+    tail = arn.rsplit("/", 1)[-1]
+    return tail.rsplit("-", 1)[0] if "-" in tail else tail
+
+
+def pick_default(records: Iterable[Any], default_runtime_arn: Optional[str] = None) -> Optional[Any]:
+    """The one default record among those pointing at the default runtime.
+
+    Any number of records may point at that runtime: the registry lets anyone
+    with a runtime ARN register another agent on it, each with its own team and
+    overrides. Flagging all of them left the web to take whichever came first
+    in the listing; at the 1,000-user test (bst, 2026-10-18) 91 records did, and
+    every new chat opened on a seeded `load_agent_075` instead of `bst_default`.
+    One is chosen, the same way everywhere: the record named after the runtime
+    (what deploy.sh registers), else the first registered, then by id.
+    """
     arn = _runtime_arn(default_runtime_arn)
+    candidates = [r for r in records if is_default_record(r, arn)]
+    if not candidates:
+        return None
+    name = _runtime_name(arn)
+    return min(candidates, key=lambda r: (getattr(r, "name", None) != name,
+                                          getattr(r, "created_at", None) or "~",
+                                          getattr(r, "record_id", "")))
+
+
+def mark_default(records: Iterable[Any], default_runtime_arn: Optional[str] = None) -> List[Any]:
+    """Set `is_default` on every record in place (on one of them, see
+    pick_default) and return them as a list."""
+    out = list(records)
+    chosen = pick_default(out, default_runtime_arn)
     for record in out:
-        record.is_default = is_default_record(record, arn)
+        record.is_default = record is chosen
     return out
 
 
@@ -70,15 +99,13 @@ def default_record(registry_service: Any, default_runtime_arn: Optional[str] = N
     if not arn:
         return None
     try:
-        for record in registry_service.agent_records():
-            if is_default_record(record, arn):
-                return record
+        record = pick_default(registry_service.agent_records(), arn)
+        if record is not None:
+            return record
     except Exception as exc:  # noqa: BLE001 — off, unreachable, or outage: fall back
         logger.warning("Registry could not list agent records; using deployed fallback: %s", exc)
     try:
-        for record in _deployed_records():
-            if is_default_record(record, arn):
-                return record
+        return pick_default(_deployed_records(), arn)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Deployed listing failed while finding the default agent: %s", exc)
     return None

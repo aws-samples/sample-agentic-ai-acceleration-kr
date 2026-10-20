@@ -82,6 +82,7 @@ module "dynamodb" {
   prefs_table_name     = "${var.project}-prefs"
   users_table_name     = "${var.project}-users"
   teams_table_name     = "${var.project}-teams"
+  runs_table_name      = "${var.project}-runs"
   allow_destroy        = var.allow_destroy
 }
 
@@ -141,6 +142,8 @@ module "cost_allocation_tags" {
 module "bedrock_guardrail" {
   source  = "../../modules/bedrock_guardrail"
   project = var.project
+  region  = var.region
+  tier    = var.guardrail_tier
 }
 
 module "policy_engine" {
@@ -150,17 +153,19 @@ module "policy_engine" {
 }
 
 module "mcp_gateway" {
-  source                = "../../modules/mcp_gateway"
-  project               = var.project
-  region                = var.region
-  web_search_backend    = var.web_search_backend
-  runtime_mcp_servers   = var.runtime_mcp_servers
-  attach_registry       = var.enable_agent_registry && var.registry_tool_on_gateway
-  registry_mcp_endpoint = local.registry_mcp_endpoint
-  registry_arn          = local.registry_arn
-  policy_engine_arn     = var.enable_gateway_policy ? module.policy_engine[0].engine_arn : ""
-  policy_mode           = var.policy_mode
-  demo_tools            = var.demo_tools
+  source                   = "../../modules/mcp_gateway"
+  project                  = var.project
+  region                   = var.region
+  web_search_backend       = var.web_search_backend
+  runtime_mcp_servers      = var.runtime_mcp_servers
+  runtime_mcp_listing_mode = var.runtime_mcp_listing_mode
+  attach_registry          = var.enable_agent_registry && var.registry_tool_on_gateway
+  registry_mcp_endpoint    = local.registry_mcp_endpoint
+  registry_arn             = local.registry_arn
+  attach_policy_engine     = var.enable_gateway_policy
+  policy_engine_arn        = var.enable_gateway_policy ? module.policy_engine[0].engine_arn : ""
+  policy_mode              = var.policy_mode
+  demo_tools               = var.demo_tools
 }
 
 module "s3_skills" {
@@ -201,8 +206,10 @@ module "harness_role" {
 }
 
 module "gateway_policies" {
-  source           = "../../modules/gateway_policies"
-  count            = var.enable_gateway_policy ? 1 : 0
+  source = "../../modules/gateway_policies"
+  count  = var.enable_gateway_policy ? 1 : 0
+  # A policy naming a tool fails validation until the target carries it.
+  depends_on       = [module.mcp_gateway.tools_ready]
   project          = var.project
   policy_engine_id = module.policy_engine[0].engine_id
   gateway_arn      = module.mcp_gateway.gateway_arn
@@ -266,6 +273,7 @@ module "iam" {
   prefs_table_arn        = module.dynamodb.prefs_table_arn
   users_table_arn        = module.dynamodb.users_table_arn
   teams_table_arn        = module.dynamodb.teams_table_arn
+  runs_table_arn         = module.dynamodb.runs_table_arn
   team_role_boundary_arn = module.harness_role.boundary_arn
   policy_engine_arn      = var.enable_gateway_policy ? module.policy_engine[0].engine_arn : ""
   gateway_arn            = module.mcp_gateway.gateway_arn
@@ -288,6 +296,12 @@ module "ecs" {
   server_image       = var.server_image
   web_image          = var.web_image
   desired_count      = var.desired_count
+  server_cpu         = var.server_cpu
+  server_memory      = var.server_memory
+  web_cpu            = var.web_cpu
+  web_memory         = var.web_memory
+  web_tasks          = var.web_tasks
+  server_tasks       = var.server_tasks
   enable_https       = local.https_enabled
   certificate_arn    = var.certificate_arn
   enable_http2       = var.alb_enable_http2
@@ -319,7 +333,10 @@ module "ecs" {
     # Organization page: teams the server creates at runtime live here; the
     # server fences their roles with the boundary and writes their Cedar
     # policies to the engine (empty when the stack has none).
-    TEAMS_TABLE            = module.dynamodb.teams_table_name
+    TEAMS_TABLE = module.dynamodb.teams_table_name
+    # Chat runs across server tasks: which task holds the turn on a thread, so a
+    # second request is refused and a reattach or Stop reaches it.
+    RUNS_TABLE             = module.dynamodb.runs_table_name
     TEAM_ROLE_BOUNDARY_ARN = module.harness_role.boundary_arn
     POLICY_ENGINE_ID       = var.enable_gateway_policy ? module.policy_engine[0].engine_id : ""
     MCP_GATEWAY_ARN        = module.mcp_gateway.gateway_arn

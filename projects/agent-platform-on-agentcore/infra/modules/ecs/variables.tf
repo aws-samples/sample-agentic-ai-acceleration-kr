@@ -55,6 +55,18 @@ variable "desired_count" {
   default     = 1
 }
 
+variable "web_tasks" {
+  description = "Web tasks when not parked. The web tier is a stateless proxy and scales out."
+  type        = number
+  default     = 1
+}
+
+variable "server_tasks" {
+  description = "Server tasks when not parked. Chat runs are leased in the runs table, so a second task may take any request (server/services/run_leases.py)."
+  type        = number
+  default     = 1
+}
+
 # Whether to terminate TLS. Must be known at plan time (it drives listener
 # count), which is why it is separate from certificate_arn — an ACM ARN created
 # in the same apply is unknown until then.

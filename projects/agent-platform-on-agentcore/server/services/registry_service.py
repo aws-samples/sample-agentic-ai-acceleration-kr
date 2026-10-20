@@ -13,6 +13,7 @@ has a different record schema (`recordType` + a flat descriptor union keyed
 `data`/`dataSchemaVersion`/`additionalData`), which the translation helpers
 below own so the rest of the platform keeps its internal `descriptor_type`.
 """
+import functools
 import json
 import logging
 import re
@@ -23,6 +24,7 @@ from typing import Callable, Optional, List, Dict, Any, Tuple, TypeVar
 from urllib.parse import parse_qs, unquote, urlsplit, urlunsplit
 
 import boto3
+from core.cache import ReadThroughCache
 from botocore.config import Config as BotoConfig
 from botocore.exceptions import BotoCoreError, ClientError
 
@@ -202,10 +204,17 @@ _ACTION_TO_REASON = {
 
 # ListRegistryRecords omits descriptors; approved records are recovered in bulk
 # (BatchGetDiscoverableRegistryRecord, this many ids per call) and only the rest
-# fan out one GetRegistryRecord each.
-_BATCH_GET_MAX = 100
+# fan out one GetRegistryRecord each. The API takes 100 per call, but its
+# latency grows with the chunk and the chunks run in parallel (`fan_out`): 100
+# ids read as 4×25 took 0.8 s against 1.5 s as 1×100 (bst, 2026-10-19), and a
+# cold listing of 313 records is built from this.
+_BATCH_GET_MAX = 25
 # How long a record's team is trusted when a pinned thread re-checks visibility.
 TEAM_CACHE_SECONDS = 60
+# How long an assembled listing is served before the registry is read again.
+# Writes through this server drop it at once (see _invalidates_listings), so
+# the window only bounds edits made elsewhere (the console, AWS auto-detection).
+LISTING_CACHE_SECONDS = 15
 _FANOUT_WORKERS = 8
 
 # botocore's default pool (10) is smaller than the fan-out of a few concurrent
@@ -223,6 +232,43 @@ def fan_out(fn: Callable[[_T], _R], items: List[_T]) -> List[_R]:
         return [fn(item) for item in items]
     with ThreadPoolExecutor(max_workers=min(_FANOUT_WORKERS, len(items))) as pool:
         return list(pool.map(fn, items))
+
+
+# The assembled listings of every RegistryService in the process. Shared rather
+# than per instance: the route, the harness catalog, Insights and the usage
+# collector each build their own service, and each used to repeat the same
+# listing on every request.
+LISTINGS = ReadThroughCache(LISTING_CACHE_SECONDS)
+
+# The revision each chat turn binds to (`chattable_record`). Every new thread's
+# first turn read it twice — the approval gate and the target — as one
+# GetRegistryRecord each, and 50 people starting chats at once got throttled:
+# the default agent read as "not available to this user" for 3 of them
+# (ThrottlingException, bst load test 2026-10-18). Shared and single-flight like
+# the listings, dropped by the same writes.
+CHATTABLE_CACHE_SECONDS = 30
+CHATTABLE = ReadThroughCache(CHATTABLE_CACHE_SECONDS)
+
+
+def _invalidates_listings(method: Callable[..., _R]) -> Callable[..., _R]:
+    """Drop the shared listings after a write, however the write ends, so the next
+    listing is read from the registry rather than copied from before the write."""
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        try:
+            return method(self, *args, **kwargs)
+        finally:
+            LISTINGS.invalidate()
+            CHATTABLE.invalidate()
+
+    return wrapper
+
+
+def _is_complete_listing(records: List["RegistryRecordSummary"]) -> bool:
+    """A listing with a record of unknown team is answered, but not kept: the next
+    request should get the registry's answer, not a fail-closed copy of this one."""
+    return all(record.visibility_known for record in records)
 
 
 def is_deprecated(record: "RegistryRecordSummary") -> bool:
@@ -572,7 +618,19 @@ def _merge_descriptor_content(
         if req.name is not None:
             # The descriptor is indexed too; a stale name would keep matching
             # the old one.
-            base["name"] = name
+            if current.descriptor_type == DESCRIPTOR_MCP and "/" not in name:
+                # server.json requires "namespace/name". The create path adds the
+                # namespace; without it here every MCP rename was a schema
+                # ValidationException. Keep the record's own namespace.
+                previous = base.get("name")
+                namespace = (
+                    previous.split("/", 1)[0]
+                    if isinstance(previous, str) and "/" in previous
+                    else _MCP_NAMESPACE
+                )
+                base["name"] = f"{namespace}/{name}"
+            else:
+                base["name"] = name
 
     existing_content = current.descriptor_content
     markdown = req.skill_markdown
@@ -1022,8 +1080,27 @@ class RegistryService:
         value for types this platform has no descriptor_type of its own for
         (GATEWAY); each List filter takes exactly one value, so a multi-type
         listing is several calls.
+
+        Served from the process-wide listing cache (LISTINGS). Each caller gets its
+        own copies: callers mark records in place (`mark_default`), and a shared
+        object would carry one request's marks into the next.
         """
         self._require_configured()
+        key = (self.registry_id, self.region, descriptor_type, status, name, record_type)
+        records = LISTINGS.get(
+            key,
+            lambda: self._assemble_listing(descriptor_type, status, name, record_type),
+            cacheable=_is_complete_listing,
+        )
+        return [record.model_copy(deep=True) for record in records]
+
+    def _assemble_listing(
+        self,
+        descriptor_type: Optional[str],
+        status: Optional[str],
+        name: Optional[str],
+        record_type: Optional[str],
+    ) -> List[RegistryRecordSummary]:
         params: Dict[str, Any] = {"registryId": self.registry_id, "maxResults": 100}
         # The new List API takes structured filters instead of per-field params.
         filters: List[Dict[str, Any]] = []
@@ -1120,14 +1197,61 @@ class RegistryService:
         """
         found: Dict[str, Dict[str, Any]] = {}
         ids = [rid for rid in record_ids if rid]
-        for start in range(0, len(ids), _BATCH_GET_MAX):
-            chunk = ids[start : start + _BATCH_GET_MAX]
-            resp = self.registry_data.batch_get_discoverable_registry_record(
+        chunks = [ids[start : start + _BATCH_GET_MAX] for start in range(0, len(ids), _BATCH_GET_MAX)]
+
+        def read(chunk: List[str]) -> Dict[str, Any]:
+            return self.registry_data.batch_get_discoverable_registry_record(
                 entries=[{"registryId": self.registry_id, "recordIds": chunk}]
             )
+
+        # Chunks are independent, and 304 records are 4 calls: sequential, that was
+        # four round trips before the first record could be shown.
+        for resp in fan_out(read, chunks):
             for record in resp.get("registryRecords", []):
                 found[record.get("recordId", "")] = record
         return found
+
+    def record_details(self, summaries: List[RegistryRecordSummary]) -> Dict[str, RegistryRecordDetail]:
+        """The latest revision of each listed record, with its descriptors.
+
+        A record whose listed status is APPROVED has its approved revision as its
+        latest, and BatchGet returns up to 100 of those with descriptors in one
+        call. Only the rest (DRAFT, never approved) cost a GetRegistryRecord each,
+        memoised by revision. Used by the harness catalog, which needs every
+        composable record's descriptor: one Get per record was 102 calls and 14 s
+        per page, and throttled.
+
+        A record missing from the result could not be read; the caller decides
+        what that means for it. A failed BatchGet is not an error here: those
+        records fall back to their per-record Gets.
+        """
+        self._require_configured()
+        approved_ids = [
+            s.record_id for s in summaries if (s.status or "").upper() == "APPROVED"
+        ]
+        try:
+            bulk = self.batch_get_discoverable(approved_ids)
+        except Exception as exc:  # noqa: BLE001 — fall back to the per-record reads
+            logger.warning("BatchGetDiscoverable failed; reading records one by one: %s", exc)
+            bulk = {}
+        details = {
+            record_id: _to_detail(record, discoverable=True, revision="approved")
+            for record_id, record in bulk.items()
+            if record_id
+        }
+
+        def read(summary: RegistryRecordSummary) -> Optional[RegistryRecordDetail]:
+            try:
+                return self._listed_record(summary)
+            except Exception as exc:  # noqa: BLE001 — one unreadable record is not the page
+                logger.warning("Could not read record %s: %s", summary.record_id, exc)
+                return None
+
+        rest = [s for s in summaries if s.record_id not in details]
+        for summary, detail in zip(rest, fan_out(read, rest)):
+            if detail is not None:
+                details[summary.record_id] = detail
+        return details
 
     def approved_revision(self, record_id: str) -> Optional[RegistryRecordDetail]:
         """The discoverable (approved) revision of a record, or None."""
@@ -1148,7 +1272,16 @@ class RegistryService:
         curation already signed off on, and the binding is that revision's, not
         the unreviewed draft's. When nothing is discoverable the latest is
         returned as-is, status and all, for the caller to refuse.
+
+        Served from CHATTABLE for up to CHATTABLE_CACHE_SECONDS; writes through
+        this server drop it at once. Each caller gets its own copy.
         """
+        record = CHATTABLE.get(
+            (self.registry_id, self.region, record_id), lambda: self._read_chattable(record_id)
+        )
+        return record.model_copy(deep=True)
+
+    def _read_chattable(self, record_id: str) -> RegistryRecordDetail:
         latest = self.get_record(record_id)
         if (latest.status or "").upper() == "APPROVED":
             return latest.model_copy(update={"discoverable": True})
@@ -1220,6 +1353,7 @@ class RegistryService:
         resp = self.registry_data.search_discoverable_registry_records(**params)
         return [_to_summary(r) for r in resp.get("registryRecords", [])]
 
+    @_invalidates_listings
     def create_record(
         self, req: CreateRecordRequest, owner: Optional[str] = None
     ) -> RegistryRecordSummary:
@@ -1293,6 +1427,7 @@ class RegistryService:
                 return
             time.sleep(_CREATE_POLL_INTERVAL_SECONDS)
 
+    @_invalidates_listings
     def update_record(
         self, record_id: str, req: UpdateRecordRequest
     ) -> RegistryRecordDetail:
@@ -1355,6 +1490,7 @@ class RegistryService:
         self.registry_control.update_registry_record(**params)
         return self.get_record(record_id)
 
+    @_invalidates_listings
     def trigger_sync(self, record_id: str) -> RegistryRecordDetail:
         """
         Re-fetch a record's definition from its `source.fromUrl`.
@@ -1371,6 +1507,7 @@ class RegistryService:
         )
         return self.get_record(record_id)
 
+    @_invalidates_listings
     def update_status(
         self, record_id: str, action: str, reason: Optional[str] = None
     ) -> RegistryRecordSummary:
@@ -1395,6 +1532,7 @@ class RegistryService:
             )
         )
 
+    @_invalidates_listings
     def delete_record(self, record_id: str) -> None:
         self._require_configured()
         self.registry_control.delete_registry_record(
@@ -1504,18 +1642,19 @@ class RegistryService:
         )
         summaries = [summary for listing in listings for summary in listing]
 
-        def arn_of(summary: RegistryRecordSummary) -> Optional[str]:
-            try:
-                detail = self._listed_record(summary)
-            except Exception as exc:
-                logger.warning("Could not read MCP record %s: %s", summary.record_id, exc)
-                return None
-            return gateway_arn_of(detail.descriptor_content) or (
+        # Descriptors in bulk (`record_details`): one memoised Get per record
+        # was 62 calls against a 10 TPS quota on the first /registry/deployed
+        # after every deploy — 11.6 s live (bst, 2026-10-19).
+        live = [s for s in summaries if not is_deprecated(s)]
+        details = self.record_details(live)
+        for summary in live:
+            detail = details.get(summary.record_id)
+            if detail is None:
+                logger.warning("Could not read MCP record %s", summary.record_id)
+                continue
+            arn = gateway_arn_of(detail.descriptor_content) or (
                 detail.source_arn if ":gateway/" in (detail.source_arn or "") else None
             )
-
-        live = [s for s in summaries if not is_deprecated(s)]
-        for summary, arn in zip(live, fan_out(arn_of, live)):
             if arn:
                 index.setdefault(arn, summary)
         return index

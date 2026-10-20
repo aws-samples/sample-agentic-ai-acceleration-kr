@@ -10,6 +10,7 @@ not editable. Everything an admin does lands in the audit ledger.
 """
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
 
@@ -21,9 +22,9 @@ from core.auth import AuthUser, require_admin
 from core.config import MCP_GATEWAY_ARN, TEAM_CONDITIONED_ACTIONS, TEAM_SHARED_ACTIONS
 from core.dependencies import audit_service, org_directory_service, team_provisioner, team_service, usage_service
 from models.team import TeamConfig, TeamConfigUpdate, TeamCreate, is_tool_pattern, validate_team_name
-from services.org_directory_service import InviteFailed, NotCognitoUser
+from services.org_directory_service import InviteFailed, NotCognitoUser, UserGone
 from services.org_drift import compute_drift
-from services.registry_service import RegistryNotConfigured
+from services.registry_service import ReadThroughCache, RegistryNotConfigured
 from services.team_access import team_of
 from services.team_provisioner import ProvisionError
 from services.team_service import PROVISION_STALE_SECONDS, TeamStorageUnavailable, is_stale
@@ -440,7 +441,11 @@ def _team_records(name: str) -> List[Dict[str, Any]]:
     except Exception as exc:
         logger.warning("Registry unavailable for team record check", exc_info=True)
         raise RegistryReadFailed(str(exc)) from exc
-    return [{"record_id": r.record_id, "name": getattr(r, "name", "")} for r in records if team_of(r) == name]
+    return [
+        {"record_id": r.record_id, "name": getattr(r, "name", ""), "descriptor_type": getattr(r, "descriptor_type", None),
+         "description": getattr(r, "description", None)}
+        for r in records if team_of(r) == name
+    ]
 
 
 @router.get("/teams/{name}/records")
@@ -485,18 +490,41 @@ def _check_role(role: str) -> None:
         raise HTTPException(status_code=400, detail="역할은 admin 또는 user 여야 합니다.")
 
 
+# The 30-day per-user totals are the same for every admin looking at the page, and
+# reading them scans every USERS# partition of the window: 4 paged DynamoDB Queries,
+# 4.6 s at 1,000 users, on every load of the people list. One read serves a minute.
+USAGE_CACHE_SECONDS = 60
+_USAGE_CACHE = ReadThroughCache(USAGE_CACHE_SECONDS)
+
+
 def _usage_by_user() -> Dict[str, Dict[str, int]]:
     usage = _usage()
     if not getattr(usage, "configured", False):
         return {}
-    usage.begin_read()
     start, end = _cost_window()
+    # Keyed on the service object as well as the window: a read that could not
+    # get every partition is answered but not kept, so the next load asks again.
+    complete = getattr(usage, "reads_complete", lambda: True)
     try:
-        totals = usage.user_totals(start, end)
-        costs = usage.user_costs(start, end)
+        return _USAGE_CACHE.get(
+            (usage, start, end),
+            lambda: _read_usage_by_user(usage, start, end),
+            cacheable=lambda _: complete(),
+        )
     except Exception:
         logger.warning("User usage unavailable", exc_info=True)
         return {}
+
+
+def _read_usage_by_user(usage, start: str, end: str) -> Dict[str, Dict[str, int]]:
+    usage.begin_read()
+    # Totals and costs read the same USERS# month partitions; fetching them
+    # concurrently makes the cold read one round trip deep, not one per partition.
+    prefetch = getattr(usage, "prefetch", None)
+    if prefetch is not None:
+        prefetch(["USERS#"], start, end)
+    totals = usage.user_totals(start, end)
+    costs = usage.user_costs(start, end)
     out: Dict[str, Dict[str, int]] = {}
     for sub in set(totals) | set(costs):
         out[sub] = {"turns_30d": int(totals.get(sub, {}).get("turns") or 0),
@@ -512,7 +540,12 @@ def _user_row(person, usage: Dict[str, Dict[str, int]]) -> Dict[str, Any]:
 def list_users(q: str = Query(""), team: str = Query(""), role: str = Query(""), provider: str = Query(""),
                status: str = Query(""), refresh: bool = Query(False), user: AuthUser = Depends(require_admin)) -> dict:
     """`status` is `disabled`, or a Cognito UserStatus such as FORCE_CHANGE_PASSWORD."""
-    people = _directory().list_users(refresh=refresh)
+    # The usage read is independent of the pool read, so it runs alongside it
+    # rather than after (cold, the two were 5 s + 4.6 s back to back).
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        usage_read = pool.submit(_usage_by_user)
+        people = _directory().list_users(refresh=refresh)
+        usage = usage_read.result()
     needle = q.strip().lower()
     rows = []
     for p in people:
@@ -529,7 +562,6 @@ def list_users(q: str = Query(""), team: str = Query(""), role: str = Query(""),
         if status and status != "disabled" and p.status != status:
             continue
         rows.append(p)
-    usage = _usage_by_user()
     return {"users": [_user_row(p, usage) for p in rows], "total": len(people),
             "sources": {"cognito": "live", "entra": "last_login"}}
 
@@ -604,6 +636,8 @@ def update_user(sub: str, body: UserUpdate, user: AuthUser = Depends(require_adm
             _audit().record(user, "user.enable" if body.enabled else "user.disable", person.email or sub)
     except NotCognitoUser as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except UserGone:
+        raise HTTPException(status_code=404, detail="사용자가 없습니다.")
     return _user_row(_directory().get_user(sub) or person, _usage_by_user())
 
 
@@ -614,6 +648,8 @@ def reset_user_password(sub: str, user: AuthUser = Depends(require_admin)) -> No
         _directory().reset_password(person)
     except NotCognitoUser as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except UserGone:
+        raise HTTPException(status_code=404, detail="사용자가 없습니다.")
     _audit().record(user, "user.reset_password", person.email or sub)
 
 
@@ -628,6 +664,8 @@ def delete_user(sub: str, user: AuthUser = Depends(require_admin)) -> None:
         _directory().delete(person)
     except NotCognitoUser as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except UserGone:
+        raise HTTPException(status_code=404, detail="사용자가 없습니다.")
     _audit().record(user, "user.delete", person.email or sub, before=person.model_dump())
 
 

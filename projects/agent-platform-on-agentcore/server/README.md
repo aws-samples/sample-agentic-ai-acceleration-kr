@@ -75,7 +75,7 @@ DynamoDB 테이블을 로컬/수동 생성: `python dynamodb_setup.py`.
 | `mcp` | `/api/mcp/*` | MCP 서버/툴 테스트·호출 (admin — 임의 subprocess 가능), 레지스트리 MCP 레코드 툴 시험 호출 |
 | `mcp_apps` | `/api/mcp-apps/*` | MCP Apps 릴레이 (로그인만) |
 | `artifacts` | `/api/artifacts/*` | 산출물 조회·다운로드·공유·미리보기 |
-| `insights` | `/api/insights/*` | 사용량·비용·평가·트레이스·요율(`rates`)·위젯 배치(`layout`). 집계(summary/telemetry/composition/users)는 admin, `me` 는 본인(또는 admin) |
+| `insights` | `/api/insights/*` | 사용량·비용·평가·트레이스·토큰 가격(`rates`)·위젯 배치(`layout`). 집계(summary/telemetry/composition/users)는 admin, `me` 는 본인(또는 admin) |
 | `settings` | `/api/settings/nav` | 일반 사용자에게 보일 메뉴 (읽기 로그인, 쓰기 admin) |
 
 역할 강제는 서버에서 합니다. bearer 의 `iss` 가 Cognito 풀이면 access token 으로,

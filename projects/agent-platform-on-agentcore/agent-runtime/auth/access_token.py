@@ -1,5 +1,7 @@
 """게이트웨이(AWS_IAM) MCP 툴 로딩. 실행 역할 SigV4로 서명한다."""
 import logging
+import os
+import time
 from mcp.client.streamable_http import streamablehttp_client
 from auth.sigv4 import sigv4_httpx_client_factory
 
@@ -33,10 +35,36 @@ def load_tools_from_mcp(gateway_endpoint, session_scope=None):
     # since the list is sorted, targets late in the alphabet (e.g. `platform-status`)
     # fall onto later pages and the agent never sees them. Follow the cursor to
     # exhaustion so every gateway tool is loaded.
+    #
+    # Each page is retried on its own, and a page that keeps failing ends the list
+    # with what came before it instead of losing every tool. The gateway asks each
+    # target for its page; the `registry` target's endpoint answers 429 under load
+    # ("returned HTTP 429 to the initialize handshake"), and that one error used to
+    # fail the whole load — 442 of 650 sessions ran with no gateway tools at 300
+    # concurrent new chats (bst load test, 2026-10-18). Targets are listed by name,
+    # so a late failing target costs only its own tools and those after it.
+    attempts = max(1, int(os.getenv("MCP_TOOLS_PAGE_ATTEMPTS", "3")))
     tools = []
     token = None
     while True:
-        page = mcp_client.list_tools_sync(pagination_token=token)
+        page = None
+        for attempt in range(1, attempts + 1):
+            try:
+                page = mcp_client.list_tools_sync(pagination_token=token)
+                break
+            except Exception as e:
+                if attempt == attempts:
+                    if not tools:
+                        raise
+                    logger.warning(
+                        f"tools/list page {'after ' + str(len(tools)) + ' tools'} failed {attempts} times; "
+                        f"continuing with the {len(tools)} tools loaded so far: {e}"
+                    )
+                else:
+                    logger.warning(f"tools/list page failed (attempt {attempt}/{attempts}), retrying: {e}")
+                    time.sleep(0.5 * attempt)
+        if page is None:
+            break
         tools.extend(page)
         token = page.pagination_token
         if not token:

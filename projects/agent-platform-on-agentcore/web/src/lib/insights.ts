@@ -85,6 +85,13 @@ export interface AgentUsageRow {
   model_cost_micros: number | null;
   runtime_cost_micros: number | null;
   total_cost_micros: number | null;
+  /**
+   * The runtime cost split across the records sharing that runtime, by turns, and
+   * model + that share. `runtime_cost_micros` keeps a shared runtime whole on every
+   * row; these sum to the window total, so part-to-whole charts use them.
+   */
+  allocated_runtime_micros?: number | null;
+  allocated_cost_micros?: number | null;
   /** Runtime invocations the collector counted (includes keep-warm pings). */
   invocations: number | null;
   sessions: number | null;
@@ -552,10 +559,22 @@ export interface MyUsage extends WindowFields {
  */
 export interface UserUsageRow {
   sub: string;
-  /** The agents this person used in the window, most-used first. */
+  /** The agents this person used in the window, most-used first; the top few only. */
   agents?: { record_id: string; name: string; turns: number }[];
+  /** How many agents this person used, `agents` included. */
+  agents_total?: number;
+  /** Turns on the agents past `agents`. */
+  other_agent_turns?: number;
   /** Days in the window on which this person took at least one turn. */
   active_days?: number;
+  /** This person's days with turns, sparse and oldest first. */
+  daily?: {
+    date: string;
+    turns: number;
+    failed_turns: number;
+    model_cost_micros: number;
+    unpriced_turns: number;
+  }[];
   turns: number;
   input_tokens: number;
   output_tokens: number;
@@ -674,6 +693,18 @@ export function fetchMyUsage(days: number): Promise<MyUsage> {
  */
 export function fetchUserLeaderboard(days: number): Promise<UserLeaderboard> {
   return request<UserLeaderboard>(`/api/insights/users?days=${days}`);
+}
+
+/** One person's leaderboard row, read by exact key; runtime cost is the leaderboard's alone. */
+export interface UserInsights extends WindowFields {
+  sources: { usage: boolean };
+  /** null when the person took no turn in the window. */
+  user: Omit<UserUsageRow, "runtime_cost_micros" | "total_cost_micros" | "guardrail_interventions"> | null;
+}
+
+/** `/api/insights/users/{sub}`, admin only: the Organization user sheet. */
+export function fetchUserInsights(sub: string, days: number): Promise<UserInsights> {
+  return request<UserInsights>(`/api/insights/users/${encodeURIComponent(sub)}?days=${days}`);
 }
 
 export interface TeamUsageRow {

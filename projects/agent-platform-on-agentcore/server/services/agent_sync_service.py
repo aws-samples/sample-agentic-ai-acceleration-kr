@@ -256,6 +256,11 @@ class AgentSyncService:
                 )
             )
 
+        # Only what a sync could act on needs an ownership answer (one tag read
+        # each, in parallel); registered or blocked targets keep foreign=False.
+        candidates = [t for t in targets if not t.registered and not t.reason]
+        for target, ours in zip(candidates, fan_out(self._ours, candidates)):
+            target.foreign = not ours
         return targets
 
     @staticmethod
@@ -382,10 +387,30 @@ class AgentSyncService:
             logger.warning("Could not read tags of harness %s: %s", harness.harness_arn, exc)
             return False, None
 
+    def _ours(self, target: DeployedTarget) -> bool:
+        """Whether a deployed target belongs to this platform deployment.
+
+        A blanket sync used to register every runtime in the region: on a shared
+        account it made eight other projects' runtimes chattable agents here
+        (bst load test, 2026-10-18). Ours = the name prefix this platform's own
+        tooling uses, or the `Platform` tag. A tag that cannot be read counts as
+        not ours — the target is still listed and can be registered by name.
+        """
+        prefix = {TARGET_RUNTIME: f"{PLATFORM}_", TARGET_GATEWAY: f"{PLATFORM}-"}.get(target.kind)
+        if prefix and target.name.startswith(prefix):
+            return True
+        try:
+            return self.harness.platform_of(target.arn) == PLATFORM
+        except Exception as exc:  # noqa: BLE001 — unknown ownership fails closed
+            logger.warning("Could not read tags of %s: %s", target.arn, exc)
+            return False
+
     def sync(self, req: SyncAgentsRequest, owner: Optional[str] = None) -> SyncAgentsResponse:
         """
-        Register every unregistered, ready target (optionally a chosen subset).
-        `owner` is stamped on each new record's metadata (the admin running it).
+        Register every unregistered, ready target of this deployment (optionally
+        a chosen subset). `owner` is stamped on each new record's metadata (the
+        admin running it). A blanket sync skips resources other projects deployed
+        in the same account (`_ours`); naming one in `targets` registers it.
 
         A target whose only record was deprecated is skipped unless it is named
         explicitly: deprecation is terminal, so re-registering creates a second
@@ -403,6 +428,9 @@ class AgentSyncService:
                 response.skipped.append(target)
                 continue
             if target.retired and not named:
+                response.skipped.append(target)
+                continue
+            if target.foreign and not named:
                 response.skipped.append(target)
                 continue
 

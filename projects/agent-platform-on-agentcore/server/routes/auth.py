@@ -19,13 +19,15 @@ Cognito configuration: COGNITO_USER_POOL_CLIENT_ID, COGNITO_REGION, and
 COGNITO_CLIENT_SECRET (optional; when set, SECRET_HASH is computed).
 """
 import base64
+import functools
 import hashlib
 import hmac
 import logging
 import os
 
 import boto3
-from fastapi import APIRouter, Depends, Request
+from botocore.config import Config as BotoConfig
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from core import config
 from core.auth import AuthUser, COGNITO_PROVIDER_ID, cognito_login_enabled, current_user
@@ -42,6 +44,51 @@ def _get_cognito_config():
     region = config.COGNITO_REGION
     client_secret = os.getenv("COGNITO_CLIENT_SECRET")
     return client_id, region, client_secret
+
+
+@functools.lru_cache(maxsize=None)
+def _cognito(region: str):
+    """One Cognito client per region for the process.
+
+    Building a client per request cost ~100ms of credential and endpoint loading,
+    and both password routes did it on the event loop: 200 people signing in at
+    once got 3 logins/s and 42% 504s (bst load test, 2026-10-18). The pool is
+    sized for the threadpool the sync handlers below run on.
+    """
+    return boto3.client(
+        "cognito-idp",
+        region_name=region,
+        # Adaptive: retries back off and the client paces itself once Cognito
+        # starts throttling (InitiateAuth is ~120 requests/s per pool by default).
+        config=BotoConfig(max_pool_connections=64, retries={"mode": "adaptive", "max_attempts": 6}),
+    )
+
+
+# Cognito answers these when it is busy or briefly unwell, not about the
+# credentials. They used to come back as `success: false`: the login form said
+# the sign-in failed, and the refresh said the session was over — the web then
+# cleared the tokens and signed the person out. 1,000 people refreshing within a
+# few seconds is enough (bst, 2026-10-18: TooManyRequestsException on
+# InitiateAuth). As a 503 the web keeps the session and retries (lib/auth.ts).
+_TRANSIENT_COGNITO_CODES = frozenset({
+    "TooManyRequestsException",
+    "ThrottlingException",
+    "InternalErrorException",
+    "ServiceUnavailableException",
+})
+
+
+def _raise_if_transient(exc: Exception) -> None:
+    from botocore.exceptions import ConnectionError as BotoConnectionError, ReadTimeoutError
+
+    code = (getattr(exc, "response", None) or {}).get("Error", {}).get("Code", "")
+    if code in _TRANSIENT_COGNITO_CODES or isinstance(exc, (BotoConnectionError, ReadTimeoutError)):
+        logger.warning("Cognito unavailable for sign-in (%s); answering 503", code or type(exc).__name__)
+        raise HTTPException(
+            status_code=503,
+            detail="인증 서비스가 잠시 바쁩니다. 잠시 후 다시 시도해주세요.",
+            headers={"Retry-After": "2"},
+        ) from exc
 
 
 def _user_repo():
@@ -147,8 +194,11 @@ def _map_cognito_error(exc: Exception) -> str:
     return f"인증에 실패했습니다: {error_msg}"
 
 
+# Both password routes are plain `def`: the Cognito call is blocking boto3, so
+# FastAPI must run it on its threadpool. As `async def` it ran on the event loop
+# and every other request in the process waited behind each sign-in.
 @router.post("/login", response_model=AuthResponse)
-async def login(request: LoginRequest):
+def login(request: LoginRequest):
     """Authenticate an end-user with Cognito USER_PASSWORD_AUTH."""
     client_id, region, client_secret = _get_cognito_config()
 
@@ -159,7 +209,7 @@ async def login(request: LoginRequest):
         )
 
     try:
-        client = boto3.client("cognito-idp", region_name=region)
+        client = _cognito(region)
 
         auth_params = {
             "USERNAME": request.username,
@@ -186,11 +236,12 @@ async def login(request: LoginRequest):
             expires_in=result.get("ExpiresIn"),
         )
     except Exception as exc:  # noqa: BLE001 - map to friendly message
+        _raise_if_transient(exc)
         return AuthResponse(success=False, error=_map_cognito_error(exc))
 
 
 @router.post("/refresh", response_model=AuthResponse)
-async def refresh(request: RefreshRequest):
+def refresh(request: RefreshRequest):
     """Refresh tokens with Cognito REFRESH_TOKEN_AUTH.
 
     Cognito does not return a new refresh_token here; the client keeps the
@@ -205,7 +256,7 @@ async def refresh(request: RefreshRequest):
         )
 
     try:
-        client = boto3.client("cognito-idp", region_name=region)
+        client = _cognito(region)
 
         auth_params = {"REFRESH_TOKEN": request.refresh_token}
         # For a client with a secret, REFRESH_TOKEN_AUTH still needs SECRET_HASH,
@@ -233,5 +284,6 @@ async def refresh(request: RefreshRequest):
             expires_in=result.get("ExpiresIn"),
         )
     except Exception as exc:  # noqa: BLE001
+        _raise_if_transient(exc)
         logger.error(f"Token refresh failed: {exc}")
         return AuthResponse(success=False, error="세션이 만료되었습니다. 다시 로그인해주세요.")

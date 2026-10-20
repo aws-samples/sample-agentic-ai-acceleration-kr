@@ -436,3 +436,111 @@ async def transaction_search_enabled(env: Env, sh: Shell) -> ProbeOutcome:
         f"Transaction Search 를 켜면 trace 패널이 작동합니다.\n\n"
         f"다른 터미널에서 아래 명령을 실행한 뒤 r 로 재점검하세요:\n\n{cmd}"
     )
+
+
+# Service Quotas codes for the limits a first apply runs into on a shared
+# account. Defaults are AWS's, used when the quota cannot be read.
+_VPC_QUOTA = ("vpc", "L-F678F1CE", 5)
+_NAT_PER_AZ_QUOTA = ("vpc", "L-FE5A380F", 5)
+
+
+def _azs(env: Env) -> list[str]:
+    """`azs` from tfvars, else the default variables.tf declares."""
+    path = _tfvars_path(env)
+    raw = ""
+    if path.is_file():
+        raw = hcl.read_values(path.read_text()).get("azs", "")
+    if not raw:
+        for var in hcl.read_variables(env.variables_path):
+            if var.name == "azs":
+                raw = var.default_literal or ""
+    return re.findall(r'"([^"]+)"', raw)
+
+
+async def _quota(env: Env, sh: Shell, quota: tuple[str, str, int]) -> int:
+    service, code_, default = quota
+    code, out = await sh.capture(_aws(
+        env, "service-quotas", "get-service-quota", "--service-code", service,
+        "--quota-code", code_, "--query", "Quota.Value", "--output", "text",
+    ))
+    try:
+        return int(float(out.strip())) if code == 0 else default
+    except ValueError:
+        return default
+
+
+async def _json(env: Env, sh: Shell, *args: str) -> dict | None:
+    code, out = await sh.capture(_aws(env, *args, "--output", "json"))
+    if code != 0:
+        return None
+    try:
+        return json.loads(out)
+    except ValueError:
+        return None
+
+
+async def network_capacity(env: Env, sh: Shell) -> ProbeOutcome:
+    """Room for the stack's VPC, its NAT gateway and that gateway's EIP.
+
+    A first apply on a shared account (2026-10-18, us-west-2) failed three
+    times in a row, each after minutes: AddressLimitExceeded (EIPs were 6 of 5),
+    then NatGatewayLimitExceeded (all five NATs of the region sat in the first
+    AZ, where the module puts its NAT), and changing `azs` afterwards stuck for
+    twenty minutes on the ALB's network interfaces in the old subnets. All three
+    are knowable before anything is created.
+    """
+    project, _ = resolve_project(env)
+    vpcs = await _json(env, sh, "ec2", "describe-vpcs")
+    if vpcs is None:
+        return ProbeOutcome(State.UNKNOWN, "VPC 목록을 읽을 수 없습니다")
+    ours = [v for v in vpcs.get("Vpcs", [])
+            if any(t.get("Key") == "Name" and t.get("Value") == f"{project}-vpc" for t in v.get("Tags") or [])]
+    if ours:
+        # The network exists; its limits were met when it was made.
+        return ProbeOutcome(State.DONE)
+
+    problems: list[str] = []
+    vpc_quota = await _quota(env, sh, _VPC_QUOTA)
+    if len(vpcs.get("Vpcs", [])) >= vpc_quota:
+        problems.append(f"VPC 가 한도에 찼습니다 ({len(vpcs['Vpcs'])}/{vpc_quota}). 쓰지 않는 VPC 를 지우거나 한도(L-F678F1CE) 증설을 요청하세요.")
+
+    attrs = await _json(env, sh, "ec2", "describe-account-attributes", "--attribute-names", "vpc-max-elastic-ips")
+    addresses = await _json(env, sh, "ec2", "describe-addresses")
+    if attrs is not None and addresses is not None:
+        try:
+            eip_max = int(attrs["AccountAttributes"][0]["AttributeValues"][0]["AttributeValue"])
+        except (KeyError, IndexError, ValueError):
+            eip_max = 5
+        used = len(addresses.get("Addresses", []))
+        # Read from EC2, not Service Quotas: an approved increase shows in
+        # Service Quotas while EC2 still enforces the old value.
+        if used >= eip_max:
+            problems.append(f"Elastic IP 가 한도에 찼습니다 ({used}/{eip_max}). NAT 게이트웨이에 1개가 필요합니다.")
+
+    azs = _azs(env)
+    nats = await _json(env, sh, "ec2", "describe-nat-gateways", "--filter", "Name=state,Values=pending,available")
+    subnets = await _json(env, sh, "ec2", "describe-subnets")
+    if azs and nats is not None and subnets is not None:
+        az_of = {s["SubnetId"]: s["AvailabilityZone"] for s in subnets.get("Subnets", [])}
+        per_az: dict[str, int] = {}
+        for nat in nats.get("NatGateways", []):
+            az = az_of.get(nat.get("SubnetId", ""), "")
+            per_az[az] = per_az.get(az, 0) + 1
+        nat_quota = await _quota(env, sh, _NAT_PER_AZ_QUOTA)
+        if per_az.get(azs[0], 0) >= nat_quota:
+            # Reordering is enough when the other listed AZ has room; else a
+            # region AZ that does, kept beside the one already listed.
+            others = sorted({s["AvailabilityZone"] for s in subnets.get("Subnets", [])} - set(azs))
+            roomy = [az for az in azs[1:] + others if per_az.get(az, 0) < nat_quota]
+            hint = ""
+            if roomy:
+                pair = azs[1] if roomy[0] != azs[1] and len(azs) > 1 else azs[0]
+                hint = f' 예: azs = ["{roomy[0]}", "{pair}"]'
+            problems.append(
+                f"NAT 게이트웨이는 azs 의 첫 AZ({azs[0]})에 만들어지는데, 그 AZ 가 한도에 찼습니다 "
+                f"({per_az.get(azs[0], 0)}/{nat_quota}). 첫 apply 전에 azs 의 순서나 AZ 를 바꾸세요.{hint}"
+            )
+
+    if problems:
+        return ProbeOutcome(State.PENDING, "\n".join(problems))
+    return ProbeOutcome(State.DONE)

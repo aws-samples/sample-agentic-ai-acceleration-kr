@@ -85,6 +85,11 @@ def build_bedrock_model(config, model_id: Optional[str], region_name: Optional[s
         kwargs["guardrail_id"] = guardrail_id
         kwargs["guardrail_version"] = getattr(config, "guardrail_version", "DRAFT")
         kwargs["guardrail_trace"] = "enabled"
+        # Input screening on the newest user message only (config.py says why).
+        # Measured on Converse: a benign question after a turn the filter flags
+        # came back `guardrail_intervened` with the whole history screened and
+        # `end_turn` with only the newest message.
+        kwargs["guardrail_latest_message"] = getattr(config, "guardrail_latest_message", True)
         # async, not Bedrock's default sync. In sync mode the guardrail buffers the
         # model's output in scan windows and only releases after each scan, which
         # held the first visible token back ~9s for a long answer (measured raw:

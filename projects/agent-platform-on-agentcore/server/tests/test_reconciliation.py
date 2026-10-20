@@ -50,7 +50,7 @@ class StubCE:
                           float(self.sonnet_output) * q, q, "1K tokens"),
                     group(["USE1-anthropic.claude-sonnet-5-mantle-input-tokens-standard", "us-east-1"],
                           0.0022 * q, q, "1K tokens"),
-                    group(["USE1-anthropic.claude-opus-5-5-mantle-output-tokens-global-standard", "us-east-1"],
+                    group(["USE1-anthropic.claude-opus-6-1-mantle-output-tokens-global-standard", "us-east-1"],
                           0.030 * q, q, "1K tokens"),
                     group(["USE1-anthropic.claude-sonnet-5-mantle-cache-write-tokens-1h-standard", "us-east-1"],
                           0.0055 * q, q, "1K tokens"),
@@ -166,8 +166,8 @@ def test_unregistered_family_on_the_bill_is_surfaced():
         "2026-08-01", "2026-08-25", repository=Repo(), ledger_agent_days={},
     )
     unregistered = [r for r in result["model_rate"] if r["registered"] is False]
-    assert [(r["family"], r["routing"], r["tier"]) for r in unregistered] == [("claude-opus-5-5", "global", "output")]
-    assert result["unregistered_families"] == ["claude-opus-5-5"]
+    assert [(r["family"], r["routing"], r["tier"]) for r in unregistered] == [("claude-opus-6-1", "global", "output")]
+    assert result["unregistered_families"] == ["claude-opus-6-1"]
 
 
 def test_one_hour_cache_writes_and_other_regions_are_not_compared():
@@ -233,8 +233,8 @@ class DailyCE(StubCE):
         return {"ResultsByTime": []}
 
 
-OPUS55_OUT = "USE1-anthropic.claude-opus-5-5-mantle-output-tokens-global-standard"
-OPUS55_IN = "USE1-anthropic.claude-opus-5-5-mantle-input-tokens-global-standard"
+OPUS55_OUT = "USE1-anthropic.claude-opus-6-1-mantle-output-tokens-global-standard"
+OPUS55_IN = "USE1-anthropic.claude-opus-6-1-mantle-input-tokens-global-standard"
 SONNET_OUT = "USE1-anthropic.claude-sonnet-5-mantle-output-tokens-global-standard"
 
 
@@ -251,15 +251,15 @@ def test_an_unregistered_rate_billed_on_two_consecutive_days_is_learned_and_date
     ])).reconcile("2026-09-20", "2026-09-26", repository=repo, ledger_agent_days={})
     learned = learned_items(repo)
     assert set(learned) == {
-        "R#claude-opus-5-5|global|output|2026-09-24",
-        "R#claude-opus-5-5|global|input|2026-09-24",
+        "R#claude-opus-6-1|global|output|2026-09-24",
+        "R#claude-opus-6-1|global|input|2026-09-24",
     }
-    out = learned["R#claude-opus-5-5|global|output|2026-09-24"]
+    out = learned["R#claude-opus-6-1|global|output|2026-09-24"]
     assert out["usd_per_1m"] == "37.5000" and out["days_observed"] == 2 and out["effective_from"] == "2026-09-24"
     assert sorted(e["tier"] for e in result["learned"]) == ["input", "output"]
     # Before the overlay is installed the rows still say unregistered; the
     # collector reloads and the next pass judges them against the learned rate.
-    assert result["unregistered_families"] == ["claude-opus-5-5"]
+    assert result["unregistered_families"] == ["claude-opus-6-1"]
 
 
 def test_one_day_is_not_enough_to_learn_a_rate():
@@ -279,7 +279,7 @@ def test_two_days_that_disagree_or_do_not_divide_cleanly_teach_nothing():
         ("2026-09-25", [(OPUS55_OUT, 0.0301234567, 1000.0)]),  # two prices mixed inside one day
     ])).reconcile("2026-09-20", "2026-09-26", repository=repo, ledger_agent_days={})
     assert learned_items(repo) == {}
-    stored = repo.items[("RECON#2026-09", "D#2026-09-25#K#model_rate#claude-opus-5-5|global|output")]
+    stored = repo.items[("RECON#2026-09", "D#2026-09-25#K#model_rate#claude-opus-6-1|global|output")]
     assert stored["clean"] is False
 
 
@@ -329,8 +329,8 @@ def test_a_model_used_every_other_day_is_still_learned_and_a_usage_gap_does_not_
         ("2026-09-21", [(OPUS55_OUT, 0.0200, 1000.0)]),
     ])).reconcile("2026-09-01", "2026-09-26", repository=repo, ledger_agent_days={})
     learned = learned_items(repo)
-    assert list(learned) == ["R#claude-opus-5-5|global|output|2026-09-10"]
-    assert learned["R#claude-opus-5-5|global|output|2026-09-10"]["days_observed"] == 4
+    assert list(learned) == ["R#claude-opus-6-1|global|output|2026-09-10"]
+    assert learned["R#claude-opus-6-1|global|output|2026-09-10"]["days_observed"] == 4
     assert len(result["learned"]) == 1
 
 

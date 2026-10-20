@@ -388,6 +388,21 @@ def execution_config(request_config: Any, bound: Dict[str, Any]) -> Dict[str, An
     return dict(bound)
 
 
+
+async def _off_loop(fn: Any, *args: Any, **kwargs: Any) -> Any:
+    """Run a blocking ledger/thread write from the stream on a worker thread.
+
+    The stream's generator runs on the event loop, and its per-turn writes — the
+    transcript save, the usage ledger (one conditional put plus four to six
+    ADDs), status and guardrail rows — were plain boto3 calls there. Each held
+    the whole process for its round trips: at 300 concurrent turns the health
+    probe stalled up to 16 s while turns finished (bst load test, 2026-10-18).
+    The generator is suspended meanwhile, so the order of its writes is unchanged.
+    Cancellation cleanup keeps its writes inline (see the except branches): an
+    await there could be cancelled again before the turn is marked.
+    """
+    return await asyncio.to_thread(fn, *args, **kwargs)
+
 class StreamingService:
     """Service for handling thread streaming"""
 
@@ -575,10 +590,14 @@ class StreamingService:
 
         if agent_runtime_arn or qualifier:
             arn = agent_runtime_arn or self.agentcore_client.agent_runtime_arn
+            # The attachment service rides along: without it the client keeps
+            # only the text of a message and drops its file references, and
+            # since the default agent is a record too, that was every chat.
             return AgentCoreClient(
                 agent_runtime_arn=arn,
                 qualifier=qualifier or self.agentcore_client.qualifier,
                 region_name=_region_of(arn),
+                attachment_service=self.agentcore_client.attachment_service,
             )
         return self.agentcore_client
 
@@ -1045,7 +1064,7 @@ class StreamingService:
         # put — after the first run had started writing, clobbering its human
         # message. Reserved, a second request is refused (409) before it writes
         # anything, and a Stop pressed during setup has a run to land on.
-        reservation = self.run_broker.reserve(thread_id, owner_sub=owner_sub or None)
+        reservation = await self.run_broker.claim(thread_id, owner_sub=owner_sub or None)
         try:
             prepared_thread, requested_config, learned_target = await self._prepare_run(
                 thread_id, request, existing, owner_sub, t_request, caller
@@ -1232,7 +1251,7 @@ class StreamingService:
                                 thread.values = {}
                             thread.values["messages"] = existing_messages
                             thread.updated_at = datetime.utcnow().isoformat()
-                            self.thread_service.repository.update(thread_id, thread)
+                            await _off_loop(self.thread_service.repository.update, thread_id, thread)
                             # No reload: the in-memory `thread` already holds the
                             # list we just wrote, so re-reading it from DDB only
                             # spends a round-trip to get back what we have.
@@ -1419,7 +1438,7 @@ class StreamingService:
                             if not turn_usage["guardrail_scanned"] and guardrail_scanned(metadata_dict):
                                 turn_usage["guardrail_scanned"] = 1
                                 try:
-                                    self.usage_service.record_guardrail_scan(
+                                    await _off_loop(self.usage_service.record_guardrail_scan,
                                         agent_record_id=agent_record_id, owner_sub=owner_sub
                                     )
                                 except Exception:
@@ -1431,7 +1450,7 @@ class StreamingService:
                                 if guardrail_event.get("action") == "BLOCKED":
                                     turn_usage["blocked"] = 1
                                 try:
-                                    self.usage_service.record_guardrail_event(
+                                    await _off_loop(self.usage_service.record_guardrail_event,
                                         agent_record_id=agent_record_id,
                                         owner_sub=owner_sub,
                                         action=guardrail_event.get("action"),
@@ -1469,7 +1488,7 @@ class StreamingService:
                                     )
                                 ):
                                     try:
-                                        self.usage_service.record_guardrail_event(
+                                        await _off_loop(self.usage_service.record_guardrail_event,
                                             agent_record_id=agent_record_id,
                                             owner_sub=owner_sub,
                                             action="BLOCKED",
@@ -1692,7 +1711,7 @@ class StreamingService:
                                 ):
                                     denials_recorded.add(result_tool_use_id)
                                     try:
-                                        self.usage_service.record_policy_denial(
+                                        await _off_loop(self.usage_service.record_policy_denial,
                                             agent_record_id=agent_record_id,
                                             owner_sub=owner_sub,
                                             team=turn_team,
@@ -1769,7 +1788,7 @@ class StreamingService:
                                 )
                             else:
                                 try:
-                                    self.usage_service.record_guardrail_event(
+                                    await _off_loop(self.usage_service.record_guardrail_event,
                                         agent_record_id=agent_record_id,
                                         owner_sub=owner_sub,
                                         action="BLOCKED",
@@ -1801,7 +1820,7 @@ class StreamingService:
                         turn_guardrail_stage = "input"
 
                         # Content may be empty when the turn only produced reasoning or tool calls.
-                        if self._persist_turn(
+                        if await _off_loop(self._persist_turn,
                             thread_id,
                             current_messages,
                             message_id=message_id,
@@ -1829,7 +1848,7 @@ class StreamingService:
                             )
                             if record_turns_on_next_flush:
                                 record_turns_on_next_flush = False
-                            self._flush_usage(
+                            await _off_loop(self._flush_usage,
                                 turn_usage,
                                 turn_tool_names,
                                 agent_record_id=agent_record_id,
@@ -1856,11 +1875,11 @@ class StreamingService:
                         new_messages = event.get("messages", [])
                         current_messages = new_messages
                         # Save complete message list to DDB
-                        thread = self.thread_service.get_thread(thread_id)
+                        thread = await _off_loop(self.thread_service.get_thread, thread_id)
                         if thread:
                             thread.values["messages"] = current_messages
                             thread.updated_at = datetime.utcnow().isoformat()
-                            self.thread_service.repository.update(thread_id, thread)
+                            await _off_loop(self.thread_service.repository.update, thread_id, thread)
                         
                         # Throttle DynamoDB updates - only update every UPDATE_INTERVAL seconds
                         current_time = asyncio.get_event_loop().time()
@@ -1869,7 +1888,7 @@ class StreamingService:
 
                 # Final update to ensure all messages are saved
                 # If there's a pending message (stream ended without messageStop), save it
-                self._persist_turn(
+                await _off_loop(self._persist_turn,
                     thread_id,
                     current_messages,
                     message_id=current_message_id,
@@ -1890,7 +1909,7 @@ class StreamingService:
                     and agent_record_id
                 ):
                     try:
-                        self.usage_service.record_guardrail_event(
+                        await _off_loop(self.usage_service.record_guardrail_event,
                             agent_record_id=agent_record_id,
                             owner_sub=owner_sub,
                             action="BLOCKED",
@@ -1918,7 +1937,7 @@ class StreamingService:
                     )
                     if record_turns_on_next_flush:
                         record_turns_on_next_flush = False
-                    self._flush_usage(
+                    await _off_loop(self._flush_usage,
                         turn_usage,
                         turn_tool_names,
                         agent_record_id=agent_record_id,
@@ -1967,7 +1986,7 @@ class StreamingService:
                     for record in collected:
                         yield f"data: {json.dumps({'event': {'artifact': _artifact_event(record)}}, default=str)}\n\n"
 
-                self.thread_service.update_thread_status(thread_id, ThreadStatusEnum.IDLE)
+                await _off_loop(self.thread_service.update_thread_status, thread_id, ThreadStatusEnum.IDLE)
 
                 event = StreamEvent(
                     event="end",

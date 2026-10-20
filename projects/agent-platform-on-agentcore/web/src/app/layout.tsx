@@ -1,4 +1,3 @@
-import { IBM_Plex_Sans_KR, JetBrains_Mono } from "next/font/google";
 import { NuqsAdapter } from "nuqs/adapters/next/app";
 import { Toaster } from "sonner";
 import { Suspense } from "react";
@@ -8,34 +7,6 @@ import {
   THEME_INIT_SCRIPT,
   ThemeProvider,
 } from "@/providers/ThemeProvider";
-
-/**
- * The UI is bilingual, so the body face has to carry Latin *and* Hangul —
- * Inter has no Korean glyphs, which meant every Korean string silently fell
- * back to whatever the OS offered and the two scripts never matched in weight
- * or width. IBM Plex Sans KR covers both from one family.
- *
- * Not preloaded. Google ships the Hangul in ~74 unicode-range slices per
- * weight, and next/font preloads every one of them regardless of `subsets`:
- * each page's <head> carried 374 <link rel="preload"> (2.5MB of woff2), and
- * the JS chunks queued behind them, so /org issued its first API call 4.0s
- * after navigation. Without preload the browser fetches only the slices the
- * rendered text actually uses.
- */
-const sans = IBM_Plex_Sans_KR({
-  subsets: ["latin"],
-  weight: ["300", "400", "500", "600", "700"],
-  variable: "--font-sans",
-  display: "swap",
-  preload: false,
-});
-
-const mono = JetBrains_Mono({
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
-  variable: "--font-mono",
-  display: "swap",
-});
 
 export const metadata = {
   title: "Agent Platform",
@@ -50,7 +21,6 @@ export default function RootLayout({
   return (
     <html
       lang="ko"
-      className={`${sans.variable} ${mono.variable}`}
       // The theme script mutates <html>'s class and style before React runs, so
       // the server markup and the first client render necessarily differ here.
       suppressHydrationWarning

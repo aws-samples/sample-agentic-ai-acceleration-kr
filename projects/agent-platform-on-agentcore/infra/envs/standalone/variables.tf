@@ -131,6 +131,12 @@ variable "web_search_backend" {
   default     = "agentcore"
 }
 
+variable "runtime_mcp_listing_mode" {
+  description = "tools/list handling for runtime_mcp_servers targets: DEFAULT (synchronised schema; run `infra/modules/mcp_gateway/scripts/gateway_target.py sync` after redeploying a server with new tools) or DYNAMIC (asks the server every time — its cold start then sits in every agent session's tool load)."
+  type        = string
+  default     = "DEFAULT"
+}
+
 variable "runtime_mcp_servers" {
   description = "MCP servers on AgentCore Runtime to attach to the MCP gateway: target name => runtime ARN. Set after deploying mcp-apps-server, e.g. { \"platform-status\" = \"<bap_platform_status runtime ARN>\" }."
   type        = map(string)
@@ -139,6 +145,48 @@ variable "runtime_mcp_servers" {
 
 variable "desired_count" {
   description = "Tasks per service. 0 parks the environment without destroying it."
+  type        = number
+  default     = 1
+}
+
+# Task sizes. The defaults suit a pilot. Load-tested 2026-10-18 at 1,000 users
+# (88k threads, 90 days of ledger): one 512-CPU server saturated at ~50 req/s
+# and one 256-CPU web proxy at the same point. The server is one Python process,
+# so a task gets the most out of 1024 CPU; beyond that it scales out
+# (server_tasks; chat runs are leased across tasks). The web proxy is stateless
+# and scales out too (web_tasks).
+variable "server_cpu" {
+  description = "Server task CPU units (512 = 0.5 vCPU). 1024 for an organisation-wide rollout."
+  type        = number
+  default     = 512
+}
+
+variable "server_memory" {
+  description = "Server task memory (MiB)."
+  type        = number
+  default     = 1024
+}
+
+variable "web_cpu" {
+  description = "Web task CPU units."
+  type        = number
+  default     = 256
+}
+
+variable "web_memory" {
+  description = "Web task memory (MiB)."
+  type        = number
+  default     = 512
+}
+
+variable "web_tasks" {
+  description = "Web tasks (stateless proxy, scales out). Ignored while desired_count = 0."
+  type        = number
+  default     = 1
+}
+
+variable "server_tasks" {
+  description = "Server tasks. Two also keep chat up while one is replaced by a deploy. Ignored while desired_count = 0."
   type        = number
   default     = 1
 }
@@ -239,7 +287,7 @@ variable "registry_kms_key_arn" {
 }
 
 variable "registry_tool_on_gateway" {
-  description = "Attach the registry's MCP endpoint to the platform gateway as the \"registry\" target, so agents and harnesses can search the catalog at run time."
+  description = "Attach the registry's MCP endpoint to the platform gateway as the \"registry\" target, so agents and harnesses can search the catalog at run time. Every agent session's tools/list then handshakes with that rate-limited endpoint: at 300 concurrent new chats it answered 429 to a third of them (2026-10-18; the runtime keeps the other targets' tools). With enable_gateway_policy the platform roles are forbidden these tools anyway, so turn this off unless teams use them."
   type        = bool
   default     = true
 }
@@ -352,4 +400,10 @@ variable "demo_expense_teams" {
   type        = list(string)
   description = "With demo_tools: team names whose harness role (`<project>-harness-<team>`, made by the Organization page) may call approve_expense below the amount cap. Empty = no cap policy, and approve_expense stays unreachable."
   default     = []
+}
+
+variable "guardrail_tier" {
+  description = "Bedrock Guardrail safeguard tier. STANDARD evaluates Korean (CLASSIC: English, French, Spanish only) and is routed within the region's geography (us/eu/apac guardrail profile)."
+  type        = string
+  default     = "STANDARD"
 }

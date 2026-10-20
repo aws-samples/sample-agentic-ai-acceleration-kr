@@ -12,6 +12,47 @@ resource "aws_dynamodb_table" "threads" {
     name = "thread_id"
     type = "S"
   }
+  attribute {
+    name = "owner_sub"
+    type = "S"
+  }
+  attribute {
+    name = "agent_record_id"
+    type = "S"
+  }
+  attribute {
+    name = "scope"
+    type = "S"
+  }
+  attribute {
+    name = "updated_at"
+    type = "S"
+  }
+
+  # The sidebar and the per-agent drill-down list threads newest first. They were
+  # a full-table Scan: at 88k threads (589MB) one sidebar load read ~75k RCU, took
+  # 6-9s and pinned the server CPU deserialising transcripts, and 50 concurrent
+  # users got 57% 504s (bst load test, 2026-10-18). The indexes carry only what a
+  # list row shows (`summary` = first question and answer, clipped), so a page is
+  # one Query with no BatchGet of transcripts.
+  dynamic "global_secondary_index" {
+    for_each = {
+      "owner_sub-updated_at-index"       = "owner_sub"       # a user's own threads
+      "agent_record_id-updated_at-index" = "agent_record_id" # one agent's threads (insights)
+      "scope-updated_at-index"           = "scope"           # every thread (admin)
+    }
+    content {
+      name            = global_secondary_index.key
+      hash_key        = global_secondary_index.value
+      range_key       = "updated_at"
+      projection_type = "INCLUDE"
+      # An index's own hash key is projected already and may not be listed.
+      non_key_attributes = setsubtract(
+        ["created_at", "status", "metadata", "agent_name", "summary", "owner_sub", "agent_record_id"],
+        [global_secondary_index.value],
+      )
+    }
+  }
 }
 
 # Each artifact version is its own item, so the panel can list v1..vN and share a
@@ -188,5 +229,29 @@ resource "aws_dynamodb_table" "teams" {
   attribute {
     name = "sk"
     type = "S"
+  }
+}
+
+# Which server task is running a chat turn on which thread (server/services/run_leases.py).
+# One row per thread with a turn in flight: a conditional put is the "one run per
+# thread" check across tasks, and the row names the task that holds the run so
+# another task can hand it a reattach or a Stop. Rows are leases renewed while
+# the run lives and deleted when it ends; `expires_at` (TTL) sweeps the ones a
+# killed task left behind. Nothing here outlives a turn, so no PITR.
+resource "aws_dynamodb_table" "runs" {
+  deletion_protection_enabled = !var.allow_destroy
+
+  name         = var.runs_table_name
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "thread_id"
+
+  attribute {
+    name = "thread_id"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "expires_at"
+    enabled        = true
   }
 }

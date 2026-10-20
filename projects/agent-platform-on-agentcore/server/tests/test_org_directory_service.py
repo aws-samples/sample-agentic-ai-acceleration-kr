@@ -63,6 +63,12 @@ class Cognito:
             raise err("ResourceNotFoundException")
         return {"Group": {"GroupName": GroupName}}
 
+    def admin_list_groups_for_user(self, UserPoolId, Username, Limit=60, NextToken=None):
+        self.calls.append(("groups_for_user", Username))
+        if Username not in self.users:
+            raise err("UserNotFoundException")
+        return {"Groups": [{"GroupName": g} for g in sorted(self.groups) if Username in self.groups[g]]}
+
     def admin_add_user_to_group(self, UserPoolId, Username, GroupName):
         self.calls.append(("add", Username, GroupName))
         if GroupName not in self.groups:
@@ -326,3 +332,30 @@ def test_list_users_failure_is_a_warning(caplog):
 def test_has_pool():
     assert service()[0].has_pool is True
     assert OrgDirectoryService(Cognito(), "", users=Users([])).has_pool is False
+
+
+def test_membership_writes_do_not_trust_a_stale_snapshot():
+    # bst smoke 2026-10-18: a removal on a task whose snapshot had not seen the
+    # add made no call, answered 204, and the team delete after it got 409.
+    cognito = Cognito(POOL, GROUPS)
+    svc, _ = service(cognito)
+    svc.list_users()  # snapshot: sub-a is in no team
+    cognito.groups["team:ops"].add("sub-a")  # another task (or the console) adds her
+    svc.remove_from_team(svc.get_user("sub-a"), "ops")
+    assert ("remove", "sub-a", "team:ops") in cognito.calls
+    assert "sub-a" not in cognito.groups["team:ops"]
+
+    cognito.groups["team:finance"].add("sub-a")  # again behind the snapshot's back
+    svc.list_users()
+    svc.set_teams(svc.get_user("sub-a"), [])
+    assert "sub-a" not in cognito.groups["team:finance"]
+
+
+def test_membership_write_on_a_deleted_user_is_user_gone():
+    from services.org_directory_service import UserGone
+    cognito = Cognito(POOL, GROUPS)
+    svc, _ = service(cognito)
+    bob = svc.get_user("sub-b")
+    del cognito.users["sub-b"]
+    with pytest.raises(UserGone):
+        svc.set_teams(bob, ["hr"])

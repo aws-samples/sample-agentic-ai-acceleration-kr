@@ -181,6 +181,16 @@ resource "aws_security_group" "server" {
     security_groups = [aws_security_group.web.id]
   }
 
+  # A reattach or Stop that lands on a task other than the one running the turn
+  # is handed to that task directly (server/services/run_leases.py).
+  ingress {
+    description = "server tasks to each other"
+    from_port   = 8000
+    to_port     = 8000
+    protocol    = "tcp"
+    self        = true
+  }
+
   egress {
     from_port   = 0
     to_port     = 0

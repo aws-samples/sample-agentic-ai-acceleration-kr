@@ -19,6 +19,7 @@ from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from core.auth import AuthUser, current_user
+from core.aws_errors import client_error_http
 from core.dependencies import artifact_service, thread_service
 from models.artifact import (
     ArtifactContent,
@@ -72,18 +73,14 @@ def _fail(exc: Exception) -> None:
     if isinstance(exc, ArtifactNotFound):
         raise HTTPException(status_code=404, detail=str(exc))
     if isinstance(exc, ClientError):
-        error = exc.response.get("Error", {})
-        raise HTTPException(
-            status_code=502,
-            detail=f"AWS error ({error.get('Code', 'Unknown')}): {error.get('Message', str(exc))}",
-        )
+        raise client_error_http(exc)
     logger.error("Artifact route error: %s", exc)
     logger.error(traceback.format_exc())
     raise HTTPException(status_code=500, detail=str(exc))
 
 
 @router.get("/thread/{thread_id}", response_model=List[ArtifactVersion])
-async def list_thread_artifacts(
+def list_thread_artifacts(
     thread_id: str, user: AuthUser = Depends(current_user)
 ):
     """Every artifact version produced in a thread, newest first."""
@@ -95,7 +92,7 @@ async def list_thread_artifacts(
 
 
 @router.get("/{artifact_id}", response_model=ArtifactDetail)
-async def get_artifact(artifact_id: str, user: AuthUser = Depends(current_user)):
+def get_artifact(artifact_id: str, user: AuthUser = Depends(current_user)):
     try:
         _require_artifact_thread(artifact_id, user)
         return artifact_service.detail(artifact_id)
@@ -104,7 +101,7 @@ async def get_artifact(artifact_id: str, user: AuthUser = Depends(current_user))
 
 
 @router.get("/{artifact_id}/versions/{version}/content", response_model=ArtifactContent)
-async def get_artifact_content(
+def get_artifact_content(
     artifact_id: str, version: int, user: AuthUser = Depends(current_user)
 ):
     try:
@@ -115,7 +112,7 @@ async def get_artifact_content(
 
 
 @router.post("/{artifact_id}/versions/{version}/share", response_model=ArtifactShareResponse)
-async def share_artifact(
+def share_artifact(
     artifact_id: str,
     version: int,
     expires_in: int = Query(604800, ge=60, le=604800),
@@ -136,7 +133,7 @@ async def share_artifact(
 
 
 @router.get("/{artifact_id}/versions/{version}/download")
-async def download_artifact(
+def download_artifact(
     artifact_id: str, version: int, user: AuthUser = Depends(current_user)
 ):
     """The artifact's bytes, named for saving.
@@ -162,7 +159,7 @@ async def download_artifact(
 
 
 @router.get("/{artifact_id}/versions/{version}/preview")
-async def get_artifact_preview(
+def get_artifact_preview(
     artifact_id: str, version: int, user: AuthUser = Depends(current_user)
 ):
     """The extracted preview for a binary artifact, if one exists.

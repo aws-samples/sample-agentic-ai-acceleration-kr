@@ -363,6 +363,31 @@ def test_a_record_route_returns_that_records_trend_and_tools():
     assert isinstance(body["tools"], list)
 
 
+def test_a_record_route_reads_only_the_collector_quantities_it_shows():
+    """The record page shows its runtime's cost and invocations — the collector's
+    `resources` — and used to read `sessions`, `gateways` and `memories` too.
+    `sessions` alone was 2.5 s at 1,000 users (one row per session per day)."""
+
+    read = []
+
+    class Counting:
+        def __getattr__(self, name):
+            def reader(start_date, end_date):
+                read.append(name)
+                return {}
+            return reader
+
+    insights._collector_override = Counting()
+    try:
+        wire(usage_with_one_agent(), StubTelemetry())
+        body = insights.record_insights(record_id="rec-1", days=7, user=user())
+        assert body["totals"]["turns"] == 7
+        assert body["runtime_cost_micros"] is None
+        assert read == ["resources"]
+    finally:
+        insights._collector_override = None
+
+
 def test_me_returns_the_callers_own_usage():
     wire(
         UsageService(
@@ -421,6 +446,7 @@ def test_every_insights_route_is_sync():
         insights.record_insights,
         insights.composition,
         insights.my_insights,
+        insights.user_insights,
     ):
         assert not inspect.iscoroutinefunction(handler), handler.__name__
 
@@ -554,7 +580,7 @@ def test_the_user_leaderboard_is_admin_only():
     assert "users" in body
 
 
-SHARED_RUNTIME = "arn:aws:bedrock-agentcore:us-east-1:1:runtime/shared-KlMnO13579"
+SHARED_RUNTIME = "arn:aws:bedrock-agentcore:us-east-1:1:runtime/shared-KPDg0uGYgb"
 
 
 class ArnRecord:
@@ -579,9 +605,9 @@ def telemetry_for(records, metrics):
 def test_two_records_sharing_a_runtime_are_not_counted_twice():
     """Measured on the live registry, and the aliases do not line up.
 
-        harness_builtin_test_agent  runtime/harness_builtin_test_agent-KlMnO13579
-        builtin_test_agent          harness/builtin_test_agent-OpQrS99001
-                                  + runtime/harness_builtin_test_agent-KlMnO13579
+        harness_builtin_test_agent  runtime/harness_builtin_test_agent-KPDg0uGYgb
+        builtin_test_agent          harness/builtin_test_agent-PHlomQuVSu
+                                  + runtime/harness_builtin_test_agent-KPDg0uGYgb
 
     One physical runtime, two records, and their rows carry byte-identical vended
     figures because they describe the same thing. Summing the rows counted its hours
@@ -595,7 +621,7 @@ def test_two_records_sharing_a_runtime_are_not_counted_twice():
     The per-record rows stay: each record really did serve its turns, and an operator
     comparing two records wants both. It is the *totals* that count runtimes.
     """
-    harness_arn = "arn:aws:bedrock-agentcore:us-east-1:1:harness/twin-OpQrS99001"
+    harness_arn = "arn:aws:bedrock-agentcore:us-east-1:1:harness/twin-PHlomQuVSu"
     result = telemetry_for(
         [
             ArnRecord("rec-a", runtime_arn=SHARED_RUNTIME),
@@ -975,3 +1001,84 @@ def test_a_broken_directory_leaves_the_rows_unnamed_but_served():
 
     assert body["subjects"] == {}
     assert body["users"][0]["sub"] == "sub-1"
+
+
+def test_user_rows_carry_their_own_days_from_the_same_read():
+    """The row-click drill-down draws a person's daily trend. It comes from the
+    USERS# (day, user) items the leaderboard already reads, so the row carries
+    exactly those days — sparse, and agreeing with `active_days` and the
+    daily-active count built from the same items."""
+    wire(usage_with_one_agent({
+        f"USERS#{_current_month}": [
+            {"sk": f"D#{_today_str}#U#sub-1", "turns": Decimal(3), "failed_turns": Decimal(1),
+             "model_cost_micros": Decimal(1200), "unpriced_turns": Decimal(0)},
+            {"sk": f"D#{_today_str}#U#sub-2", "turns": Decimal(0)},
+        ],
+    }), StubTelemetry())
+
+    body = insights.user_leaderboard(days=7, user=user(is_admin=True))
+
+    rows = {row["sub"]: row for row in body["users"]}
+    assert rows["sub-1"]["daily"] == [{
+        "date": _today_str, "turns": 3, "failed_turns": 1,
+        "model_cost_micros": 1200, "unpriced_turns": 0,
+    }]
+    assert rows["sub-1"]["active_days"] == 1
+    assert rows["sub-2"]["daily"] == []
+    today = next(p for p in body["daily_active_users"] if p["date"] == _today_str)
+    assert today["users"] == 1
+
+
+def test_a_user_row_lists_the_top_agents_and_counts_the_rest():
+    """3.8 MB at 1,000 people when every row carried every agent (bst,
+    2026-10-18). The table shows one name and how many more; the drill-down a
+    ranked list. Both still add up."""
+    usage = usage_with_one_agent({
+        f"USERS#{_current_month}": [
+            {"sk": f"D#{_today_str}#U#sub-1", "turns": Decimal(78)},
+        ],
+    })
+    wire(usage, StubTelemetry())
+    matrix = {"sub-1": {f"rec-{i:02d}": i + 1 for i in range(12)}}
+    usage.agent_user_matrix = lambda ids, start, end: matrix
+
+    row = insights.user_leaderboard(days=7, user=user(is_admin=True))["users"][0]
+
+    assert len(row["agents"]) == insights.USER_AGENTS_SHOWN
+    assert row["agents"][0]["turns"] == 12
+    assert row["agents_total"] == 12
+    assert row["other_agent_turns"] == 1 + 2
+    assert sum(a["turns"] for a in row["agents"]) + row["other_agent_turns"] == 78
+
+
+def test_one_persons_row_is_admin_only_and_reads_only_them():
+    wire(
+        UsageService(
+            repository=StubRepo({
+                f"USERS#{_current_month}": [
+                    {"sk": f"D#{_today_str}#U#sub-1", "turns": Decimal(4), "failed_turns": Decimal(1),
+                     "threads_started": Decimal(2), "model_cost_micros": Decimal(1500), "priced_turns": Decimal(4)},
+                    {"sk": f"D#{_today_str}#U#sub-2", "turns": Decimal(99)},
+                ],
+                f"AGENT#rec-1#USERS#{_current_month}": [
+                    {"sk": f"D#{_today_str}#U#sub-1", "turns": Decimal(4)},
+                ],
+            }),
+            registry=StubRegistry([]),
+            harness=StubHarness(),
+        ),
+        StubTelemetry(),
+    )
+    try:
+        insights.user_insights("sub-1", days=30, user=user(sub="sub-1"))
+    except HTTPException as exc:
+        assert exc.status_code == 403
+    else:
+        raise AssertionError("expected 403")
+
+    body = insights.user_insights("sub-1", days=30, user=user(sub="admin-1", is_admin=True))
+    row = body["user"]
+    assert body["days"] == 30
+    assert (row["turns"], row["failed_turns"], row["threads_started"], row["model_cost_micros"]) == (4, 1, 2, 1500)
+    assert row["active_days"] == 1 and row["daily"][0]["turns"] == 4
+    assert insights.user_insights("nobody", days=30, user=user(sub="admin-1", is_admin=True))["user"] is None

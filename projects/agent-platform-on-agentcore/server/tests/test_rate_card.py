@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import routes.insights as insights  # noqa: E402
 from core.auth import AuthUser  # noqa: E402
-from data.model_rates import set_learned_rates  # noqa: E402
+from data.model_rates import RATE_CARD_VERSION, set_learned_rates  # noqa: E402
 from services.pricing_service import PricingService, PricingUnavailable  # noqa: E402
 from services.rate_card_service import RateCardError, RateCardService, validate_entry  # noqa: E402
 from services.usage_service import UsageService  # noqa: E402
@@ -25,7 +25,7 @@ from services.usage_service import UsageService  # noqa: E402
 from test_usage_ledger import LedgerRepo, turn  # noqa: E402
 
 TODAY = "2026-09-25"
-OPUS55 = "global.anthropic.claude-opus-5-5"
+OPUS55 = "global.anthropic.claude-opus-6-1"
 
 
 class Repo(LedgerRepo):
@@ -65,18 +65,18 @@ def recon_rate_row(repo, day, family, routing, tier, usd, *, clean=True, registe
 
 def test_validate_entry_normalises_and_names_the_broken_field():
     ok = validate_entry(
-        {"family": " Claude-Opus-5-5 ", "routing": "GLOBAL", "tier": "input", "usd_per_1m": "4.00", "effective_from": "2026-09-23"},
+        {"family": " Claude-Opus-6-1 ", "routing": "GLOBAL", "tier": "input", "usd_per_1m": "4.00", "effective_from": "2026-09-23"},
         today=TODAY,
     )
-    assert ok == {"family": "claude-opus-5-5", "routing": "global", "tier": "input", "usd_per_1m": "4", "effective_from": "2026-09-23"}
+    assert ok == {"family": "claude-opus-6-1", "routing": "global", "tier": "input", "usd_per_1m": "4", "effective_from": "2026-09-23"}
     bad = [
         ({"family": "Claude5.5Opus"}, "family"),
-        ({"family": "claude-opus-5-5", "routing": "eu"}, "라우팅"),
-        ({"family": "claude-opus-5-5", "routing": "global", "tier": "cached"}, "tier"),
-        ({"family": "claude-opus-5-5", "routing": "global", "tier": "input", "usd_per_1m": "four"}, "요율"),
-        ({"family": "claude-opus-5-5", "routing": "global", "tier": "input", "usd_per_1m": "-1"}, "요율"),
-        ({"family": "claude-opus-5-5", "routing": "global", "tier": "input", "usd_per_1m": "4", "effective_from": "23/09/2026"}, "유효 시작일"),
-        ({"family": "claude-opus-5-5", "routing": "global", "tier": "input", "usd_per_1m": "4", "effective_from": "2026-09-26"}, "오늘 이후"),
+        ({"family": "claude-opus-6-1", "routing": "eu"}, "라우팅"),
+        ({"family": "claude-opus-6-1", "routing": "global", "tier": "cached"}, "tier"),
+        ({"family": "claude-opus-6-1", "routing": "global", "tier": "input", "usd_per_1m": "four"}, "가격"),
+        ({"family": "claude-opus-6-1", "routing": "global", "tier": "input", "usd_per_1m": "-1"}, "가격"),
+        ({"family": "claude-opus-6-1", "routing": "global", "tier": "input", "usd_per_1m": "4", "effective_from": "23/09/2026"}, "유효 시작일"),
+        ({"family": "claude-opus-6-1", "routing": "global", "tier": "input", "usd_per_1m": "4", "effective_from": "2026-09-26"}, "오늘 이후"),
     ]
     for raw, word in bad:
         with pytest.raises(RateCardError) as excinfo:
@@ -98,30 +98,54 @@ def test_overview_shows_an_unregistered_family_with_empty_tiers_and_the_day_it_w
     view = svc.overview("2026-09-01", TODAY)
 
     by_key = {(row["family"], row["routing"]): row for row in view["rows"]}
-    opus = by_key[("claude-opus-5-5", "global")]
+    opus = by_key[("claude-opus-6-1", "global")]
     assert opus["models"] == [OPUS55]
     assert opus["turns"] == 2 and opus["unpriced_turns"] == 2 and opus["unpriced_since"] == "2026-09-23"
     assert opus["tiers"] == {"input": None, "output": None, "cache_read": None, "cache_write": None}
     assert opus["complete"] is False
     sonnet = by_key[("claude-sonnet-5", "global")]
     assert sonnet["unpriced_turns"] == 0 and sonnet["complete"] is True
-    assert sonnet["tiers"]["input"] == {"usd_per_1m": "2.00", "source": "card:2026-09-23.1", "effective_from": None}
+    assert sonnet["tiers"]["input"] == {"usd_per_1m": "2.00", "source": f"card:{RATE_CARD_VERSION}", "effective_from": None}
     assert view["candidates"] == [] and view["entries"] == []
+
+
+def test_overview_shows_the_offered_models_before_their_first_turn():
+    repo = Repo()
+    usage = UsageService(repo)
+    svc = RateCardService(usage=usage, pricing=NoPricing(), offered_models=[
+        "global.anthropic.claude-haiku-5-5",
+        "global.anthropic.claude-opus-5-5",
+        "us.anthropic.claude-sonnet-5-5",
+        "global.openai.gpt-5.6-sol",
+    ])
+
+    view = svc.overview("2026-09-01", TODAY)
+
+    by_key = {(row["family"], row["routing"]): row for row in view["rows"]}
+    assert set(by_key) == {
+        ("claude-haiku-5-5", "global"), ("claude-opus-5-5", "global"), ("claude-sonnet-5-5", "regional"),
+    }
+    opus = by_key[("claude-opus-5-5", "global")]
+    assert opus["turns"] == 0 and opus["models"] == [] and opus["complete"] is True
+    assert opus["tiers"]["input"]["source"] == f"card:{RATE_CARD_VERSION}"
+    # A `us.` profile bills the region's standard tariff, derived from global x1.1.
+    assert Decimal(by_key[("claude-sonnet-5-5", "regional")]["tiers"]["input"]["usd_per_1m"]) == Decimal("2.20")
+    assert by_key[("claude-haiku-5-5", "global")]["tiers"]["long_input"]["usd_per_1m"] == "0.50"
 
 
 def test_overview_lists_registered_entries_with_their_source_and_shows_them_in_force():
     svc, usage, repo = service()
     turn(usage, model_id=OPUS55)
-    repo.set_fields("RATES#learned", "R#claude-opus-5-5|global|input|2026-09-23", {
-        "family": "claude-opus-5-5", "routing": "global", "tier": "input",
+    repo.set_fields("RATES#learned", "R#claude-opus-6-1|global|input|2026-09-23", {
+        "family": "claude-opus-6-1", "routing": "global", "tier": "input",
         "effective_from": "2026-09-23", "usd_per_1m": "4", "source": "admin:a@b.c", "registered_at": "2026-09-25T00:00:00+00:00",
     })
     view = svc.overview("2026-09-01", TODAY)
-    row = next(r for r in view["rows"] if r["family"] == "claude-opus-5-5")
+    row = next(r for r in view["rows"] if r["family"] == "claude-opus-6-1")
     assert row["tiers"]["input"] == {"usd_per_1m": "4", "source": "admin:a@b.c", "effective_from": "2026-09-23"}
     assert row["tiers"]["output"] is None and row["complete"] is False
     assert view["entries"] == [{
-        "key": "R#claude-opus-5-5|global|input|2026-09-23", "family": "claude-opus-5-5", "routing": "global",
+        "key": "R#claude-opus-6-1|global|input|2026-09-23", "family": "claude-opus-6-1", "routing": "global",
         "tier": "input", "effective_from": "2026-09-23", "usd_per_1m": "4", "source": "admin:a@b.c",
         "registered_at": "2026-09-25T00:00:00+00:00",
     }]
@@ -132,13 +156,13 @@ def test_overview_offers_the_bill_after_one_clean_day_and_counts_the_run_behind_
     turn(usage, model_id=OPUS55)
     # Three billed days: the first at a different value, then two at $4.00 — the
     # candidate is the trailing run, effective from its first day.
-    recon_rate_row(repo, "2026-09-22", "claude-opus-5-5", "global", "input", "4.40")
-    recon_rate_row(repo, "2026-09-23", "claude-opus-5-5", "global", "input", "4.00")
-    recon_rate_row(repo, "2026-09-24", "claude-opus-5-5", "global", "input", "4.00")
+    recon_rate_row(repo, "2026-09-22", "claude-opus-6-1", "global", "input", "4.40")
+    recon_rate_row(repo, "2026-09-23", "claude-opus-6-1", "global", "input", "4.00")
+    recon_rate_row(repo, "2026-09-24", "claude-opus-6-1", "global", "input", "4.00")
     # One day for output is enough to be offered.
-    recon_rate_row(repo, "2026-09-24", "claude-opus-5-5", "global", "output", "20.00")
+    recon_rate_row(repo, "2026-09-24", "claude-opus-6-1", "global", "output", "20.00")
     # A day that did not divide cleanly is not evidence.
-    recon_rate_row(repo, "2026-09-24", "claude-opus-5-5", "global", "cache_read", "0.2001", clean=False)
+    recon_rate_row(repo, "2026-09-24", "claude-opus-6-1", "global", "cache_read", "0.2001", clean=False)
     # Somebody else's model is not our candidate.
     recon_rate_row(repo, "2026-09-24", "claude-fable-5-1", "global", "input", "9.00")
     # A figure the card already has at the same value is not a candidate either.
@@ -148,9 +172,9 @@ def test_overview_offers_the_bill_after_one_clean_day_and_counts_the_run_behind_
     view = svc.overview("2026-09-01", TODAY)
 
     assert view["candidates"] == [
-        {"family": "claude-opus-5-5", "routing": "global", "tier": "input", "usd_per_1m": "4", "source": "bill",
+        {"family": "claude-opus-6-1", "routing": "global", "tier": "input", "usd_per_1m": "4", "source": "bill",
          "effective_from": "2026-09-23", "last_day": "2026-09-24", "days_observed": 2, "current_usd_per_1m": None},
-        {"family": "claude-opus-5-5", "routing": "global", "tier": "output", "usd_per_1m": "20", "source": "bill",
+        {"family": "claude-opus-6-1", "routing": "global", "tier": "output", "usd_per_1m": "20", "source": "bill",
          "effective_from": "2026-09-24", "last_day": "2026-09-24", "days_observed": 1, "current_usd_per_1m": None},
     ]
 
@@ -188,14 +212,14 @@ def test_price_list_rows_are_parsed_into_family_routing_tier_per_million():
     pricing._client = FakePricingClient([
         ("USE1-anthropic.claude-haiku-4-5-mantle-input-tokens-standard", "0.0011000000", "1K tokens"),
         ("USE1-anthropic.claude-haiku-4-5-mantle-cache-write-tokens-1h-standard", "0.0022", "1K tokens"),
-        ("USE1-anthropic.claude-opus-5-5-mantle-output-tokens-global-standard", "0.02", "1K tokens"),
+        ("USE1-anthropic.claude-opus-6-1-mantle-output-tokens-global-standard", "0.02", "1K tokens"),
         ("USE1-Claude3Haiku-input-tokens", "0.00025", "1K tokens"),
-        ("USE1-anthropic.claude-opus-5-5-reserved-1-month-input-tokens-per-minute", "0.18", "1K TPM Hour"),
+        ("USE1-anthropic.claude-opus-6-1-reserved-1-month-input-tokens-per-minute", "0.18", "1K TPM Hour"),
     ])
     rows = pricing.bedrock_model_rates()
     assert [(r["family"], r["routing"], r["tier"], r["usd_per_1m"]) for r in rows] == [
         ("claude-haiku-4-5", "regional", "input", "1.1"),
-        ("claude-opus-5-5", "global", "output", "20"),
+        ("claude-opus-6-1", "global", "output", "20"),
     ]
 
 
@@ -204,14 +228,14 @@ def test_published_returns_only_what_the_card_lacks_or_disputes():
         def bedrock_model_rates(self):
             return [
                 {"family": "claude-haiku-4-5", "routing": "regional", "tier": "input", "usd_per_1m": "1.1", "usage_type": "u1", "model": "m"},
-                {"family": "claude-opus-5-5", "routing": "global", "tier": "output", "usd_per_1m": "20", "usage_type": "u2", "model": "m"},
+                {"family": "claude-opus-6-1", "routing": "global", "tier": "output", "usd_per_1m": "20", "usage_type": "u2", "model": "m"},
                 {"family": "claude-sonnet-4-5", "routing": "global", "tier": "input", "usd_per_1m": "3", "usage_type": "u3", "model": "m"},
             ]
     svc, usage, repo = service(pricing=Pricing())
-    out = svc.published(["claude-haiku-4-5", "claude-opus-5-5"])
+    out = svc.published(["claude-haiku-4-5", "claude-opus-6-1"])
     assert out["published"] == 3
     assert out["candidates"] == [{
-        "family": "claude-opus-5-5", "routing": "global", "tier": "output", "usd_per_1m": "20",
+        "family": "claude-opus-6-1", "routing": "global", "tier": "output", "usd_per_1m": "20",
         "usage_type": "u2", "model": "m", "source": "price-list", "current_usd_per_1m": None,
     }]
 
@@ -225,14 +249,14 @@ def test_register_stores_the_entries_under_the_learner_key_and_reprices_at_once(
     assert repo.get("AGENTS#2026-09", "D#2026-09-23#A#rec-1")["unpriced_turns"] == 1
 
     report = svc.register([
-        {"family": "claude-opus-5-5", "routing": "global", "tier": "input", "usd_per_1m": "4", "effective_from": "2026-09-23", "source": "bill"},
-        {"family": "claude-opus-5-5", "routing": "global", "tier": "output", "usd_per_1m": "20", "effective_from": "2026-09-23"},
+        {"family": "claude-opus-6-1", "routing": "global", "tier": "input", "usd_per_1m": "4", "effective_from": "2026-09-23", "source": "bill"},
+        {"family": "claude-opus-6-1", "routing": "global", "tier": "output", "usd_per_1m": "20", "effective_from": "2026-09-23"},
     ], by="admin@example.com", today=TODAY)
 
-    assert report["saved"] == ["R#claude-opus-5-5|global|input|2026-09-23", "R#claude-opus-5-5|global|output|2026-09-23"]
+    assert report["saved"] == ["R#claude-opus-6-1|global|input|2026-09-23", "R#claude-opus-6-1|global|output|2026-09-23"]
     assert report["repriced"] == {"repriced": 1, "newly_priced": 1, "still_unpriced": 0, "unpriced": 0}
-    stored_in = repo.get("RATES#learned", "R#claude-opus-5-5|global|input|2026-09-23")
-    stored_out = repo.get("RATES#learned", "R#claude-opus-5-5|global|output|2026-09-23")
+    stored_in = repo.get("RATES#learned", "R#claude-opus-6-1|global|input|2026-09-23")
+    stored_out = repo.get("RATES#learned", "R#claude-opus-6-1|global|output|2026-09-23")
     assert stored_in["source"] == "bill" and stored_in["registered_by"] == "admin@example.com"
     assert stored_out["source"] == "admin:admin@example.com" and stored_out["usd_per_1m"] == "20"
     event = repo.get("TURNS#2026-09", "T#t-1:h-1")
@@ -248,8 +272,8 @@ def test_register_writes_nothing_when_one_row_is_invalid():
     svc, usage, repo = service()
     with pytest.raises(RateCardError):
         svc.register([
-            {"family": "claude-opus-5-5", "routing": "global", "tier": "input", "usd_per_1m": "4", "effective_from": "2026-09-23"},
-            {"family": "claude-opus-5-5", "routing": "global", "tier": "output", "usd_per_1m": "twenty", "effective_from": "2026-09-23"},
+            {"family": "claude-opus-6-1", "routing": "global", "tier": "input", "usd_per_1m": "4", "effective_from": "2026-09-23"},
+            {"family": "claude-opus-6-1", "routing": "global", "tier": "output", "usd_per_1m": "twenty", "effective_from": "2026-09-23"},
         ], by="a", today=TODAY)
     assert repo.query_prefix("RATES#learned", "R#") == []
 
@@ -257,22 +281,22 @@ def test_register_writes_nothing_when_one_row_is_invalid():
 def test_remove_deletes_the_entry_and_un_prices_the_turns_it_covered():
     svc, usage, repo = service()
     svc.register([
-        {"family": "claude-opus-5-5", "routing": "global", "tier": "input", "usd_per_1m": "4", "effective_from": "2026-09-23"},
+        {"family": "claude-opus-6-1", "routing": "global", "tier": "input", "usd_per_1m": "4", "effective_from": "2026-09-23"},
     ], by="a", today=TODAY)
     turn(usage, model_id=OPUS55, input_tokens=1_000_000, output_tokens=0)
     assert repo.get("TURNS#2026-09", "T#t-1:h-1")["model_cost_micros"] == 4_000_000
     day_before = dict(repo.get("AGENTS#2026-09", "D#2026-09-23#A#rec-1"))
     assert day_before["priced_turns"] == 1 and day_before["model_cost_micros"] == 4_000_000
 
-    report = svc.remove("R#claude-opus-5-5|global|input|2026-09-23", today=TODAY)
+    report = svc.remove("R#claude-opus-6-1|global|input|2026-09-23", today=TODAY)
 
     assert report["repriced"] == {"repriced": 1, "newly_priced": 0, "still_unpriced": 0, "unpriced": 1}
-    assert repo.get("RATES#learned", "R#claude-opus-5-5|global|input|2026-09-23") is None
+    assert repo.get("RATES#learned", "R#claude-opus-6-1|global|input|2026-09-23") is None
     assert repo.get("TURNS#2026-09", "T#t-1:h-1")["model_cost_micros"] is None
     day = repo.get("AGENTS#2026-09", "D#2026-09-23#A#rec-1")
     assert day["priced_turns"] == 0 and day["unpriced_turns"] == 1 and day["model_cost_micros"] == 0
     with pytest.raises(RateCardError):
-        svc.remove("R#claude-opus-5-5|global|input|2026-09-23", today=TODAY)
+        svc.remove("R#claude-opus-6-1|global|input|2026-09-23", today=TODAY)
     with pytest.raises(RateCardError):
         svc.remove("garbage", today=TODAY)
 
@@ -315,19 +339,19 @@ def test_rate_routes_are_admin_only_and_translate_service_errors(monkeypatch):
     assert excinfo.value.status_code == 400
 
     body = insights.RateRegisterRequest(entries=[insights.RateEntryRequest(
-        family="claude-opus-5-5", routing="global", tier="input", usd_per_1m="4", effective_from="2026-09-01",
+        family="claude-opus-6-1", routing="global", tier="input", usd_per_1m="4", effective_from="2026-09-01",
     )])
     out = insights.register_rates(body=body, user=_admin())
-    assert out["saved"] == ["R#claude-opus-5-5|global|input|2026-09-01"]
-    assert repo.get("RATES#learned", "R#claude-opus-5-5|global|input|2026-09-01")["source"] == "admin:admin@example.com"
+    assert out["saved"] == ["R#claude-opus-6-1|global|input|2026-09-01"]
+    assert repo.get("RATES#learned", "R#claude-opus-6-1|global|input|2026-09-01")["source"] == "admin:admin@example.com"
 
     view = insights.get_rate_card(days=30, user=_admin())
     assert view["entries"][0]["source"] == "admin:admin@example.com" and "window" in view
 
     with pytest.raises(HTTPException) as excinfo:
-        insights.delete_rate(key="R#claude-opus-5-5|global|input|2026-01-01", user=_admin())
+        insights.delete_rate(key="R#claude-opus-6-1|global|input|2026-01-01", user=_admin())
     assert excinfo.value.status_code == 404
-    assert insights.delete_rate(key="R#claude-opus-5-5|global|input|2026-09-01", user=_admin())["removed"]
+    assert insights.delete_rate(key="R#claude-opus-6-1|global|input|2026-09-01", user=_admin())["removed"]
 
 
 def test_fetch_route_reports_an_unreachable_price_list_as_503(monkeypatch):

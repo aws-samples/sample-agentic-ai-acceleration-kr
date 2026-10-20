@@ -40,7 +40,7 @@ def test_bare_model_id_is_regional_and_dated_suffix_matches_family():
 
 def test_family_match_does_not_swallow_a_longer_version():
     # opus-5-5 is not opus-5; unregistered means None, never a wrong price.
-    assert resolve_rate("global.anthropic.claude-opus-5-5") is None
+    assert resolve_rate("global.anthropic.claude-opus-6-1") is None
     assert resolve_rate("global.anthropic.claude-opus-5")["family"] == "claude-opus-5"
 
 
@@ -77,15 +77,15 @@ def test_a_learned_family_resolves_from_its_effective_date_and_only_its_tiers():
 
     try:
         set_learned_rates([
-            {"family": "claude-opus-5-5", "routing": "global", "tier": "input", "effective_from": "2026-09-25", "usd_per_1m": "7.5"},
-            {"family": "claude-opus-5-5", "routing": "global", "tier": "output", "effective_from": "2026-09-25", "usd_per_1m": "37.5"},
+            {"family": "claude-opus-6-1", "routing": "global", "tier": "input", "effective_from": "2026-09-25", "usd_per_1m": "7.5"},
+            {"family": "claude-opus-6-1", "routing": "global", "tier": "output", "effective_from": "2026-09-25", "usd_per_1m": "37.5"},
         ])
-        assert resolve_rate("global.anthropic.claude-opus-5-5", "2026-09-24") is None
-        rate = resolve_rate("global.anthropic.claude-opus-5-5", "2026-09-25")
-        assert rate["family"] == "claude-opus-5-5" and rate["version"].endswith("+ce:2026-09-25")
+        assert resolve_rate("global.anthropic.claude-opus-6-1", "2026-09-24") is None
+        rate = resolve_rate("global.anthropic.claude-opus-6-1", "2026-09-25")
+        assert rate["family"] == "claude-opus-6-1" and rate["version"].endswith("+ce:2026-09-25")
         assert rate["usd_per_1m"] == {"input": Decimal("7.5"), "output": Decimal("37.5")}
         # A regional id is a different tariff the bill has not shown: nothing is derived.
-        assert resolve_rate("us.anthropic.claude-opus-5-5", "2026-09-25") is None
+        assert resolve_rate("us.anthropic.claude-opus-6-1", "2026-09-25") is None
         # The longer learned family still is not swallowed by the static claude-opus-5.
         assert resolve_rate("global.anthropic.claude-opus-5", "2026-09-25")["family"] == "claude-opus-5"
         assert cost_micros({"input_tokens": 1_000_000, "output_tokens": 0}, rate) == 7_500_000
@@ -125,3 +125,23 @@ def test_malformed_learned_entries_are_dropped():
         assert learned_rates() == []
     finally:
         set_learned_rates([])
+
+
+def test_a_new_stack_prices_every_default_model_from_its_first_turn():
+    """The 5.5 generation is what a fresh deployment offers; none of it was on
+    the card, so a new stack's first turns had no cost (bst, 2026-10-18)."""
+    from data.model_rates import resolve_rate as _resolve
+
+    for model_id in (
+        "global.anthropic.claude-sonnet-5-5",
+        "global.anthropic.claude-opus-5-5",
+        "global.anthropic.claude-haiku-5-5",
+        "us.anthropic.claude-sonnet-5-5",
+    ):
+        rate = _resolve(model_id)
+        assert rate is not None, model_id
+        assert set(rate["usd_per_1m"]) >= {"input", "output", "cache_read", "cache_write"}
+    # Regional derives at x1.1, which is what the bill showed for the 5.5s.
+    assert _resolve("us.anthropic.claude-opus-5-5")["usd_per_1m"]["output"] == 22
+    # The longer family is never claimed by the shorter one.
+    assert _resolve("global.anthropic.claude-sonnet-5-5")["family"] == "claude-sonnet-5-5"

@@ -527,6 +527,11 @@ export interface RankedEntry {
  * encodes magnitude, and shading each bar darker-where-bigger would spend the
  * only free channel restating it. With `emphasisId` the selected entity takes the
  * accent and the rest go grey, which is the honest form of "this one".
+ *
+ * The list scrolls past about twelve rows. Several of these grow with the
+ * deployment rather than with a top-N cut (every agent or person a guardrail
+ * ever flagged, every team), and unbounded they stretched their grid row — and
+ * the cell beside it — to thousands of pixels.
  */
 export function RankedBars({
   entries,
@@ -549,7 +554,7 @@ export function RankedBars({
   const max = Math.max(...entries.map((entry) => entry.value), 0);
 
   return (
-    <ul className="space-y-1.5">
+    <ul className="max-h-80 space-y-1.5 overflow-y-auto pr-1">
       {entries.map((entry) => {
         const share = shareOf(entry.value, max);
         const emphasised = !emphasisId || entry.id === emphasisId;
@@ -774,6 +779,8 @@ export interface TreemapEntry {
   id?: string;
   /** Grey instead of the hue: a remainder that is no one entity (e.g. unattributed). */
   muted?: boolean;
+  /** A SERIES_COLORS slot, when each tile is a different entity that must separate. */
+  colorIndex?: number;
 }
 
 /**
@@ -800,32 +807,62 @@ export function TreemapShare({
   const total = data.reduce((sum, entry) => sum + entry.value, 0);
 
   return (
-    <div className="h-64 w-full">
-      <ResponsiveContainer width="100%" height="100%" minWidth={0}>
-        <Treemap
-          data={data}
-          dataKey="value"
-          nameKey="name"
-          aspectRatio={4 / 3}
-          isAnimationActive={false}
-          content={(props: TreemapTileProps) => (
-            <TreemapTile {...props} color={color} total={total} />
-          )}
-        >
-          <Tooltip
-            contentStyle={TOOLTIP_CONTENT}
-            labelStyle={TOOLTIP_LABEL}
-            itemStyle={TOOLTIP_ITEM}
-            formatter={(_value, _name, item) => {
-              const entry = item?.payload as TreemapEntry | undefined;
-              return [
-                `${entry?.display ?? ""} · ${shareLabel(shareOf(entry?.value ?? 0, total))}`,
-                entry?.name ?? "",
-              ];
-            }}
-          />
-        </Treemap>
-      </ResponsiveContainer>
+    <div className="space-y-2">
+      <div className="h-64 w-full">
+        <ResponsiveContainer width="100%" height="100%" minWidth={0}>
+          <Treemap
+            data={data}
+            dataKey="value"
+            nameKey="name"
+            aspectRatio={4 / 3}
+            isAnimationActive={false}
+            content={(props: TreemapTileProps) => (
+              <TreemapTile {...props} color={color} total={total} />
+            )}
+          >
+            <Tooltip
+              contentStyle={TOOLTIP_CONTENT}
+              labelStyle={TOOLTIP_LABEL}
+              itemStyle={TOOLTIP_ITEM}
+              formatter={(_value, _name, item) => {
+                const entry = item?.payload as TreemapEntry | undefined;
+                return [
+                  `${entry?.display ?? ""} · ${shareLabel(shareOf(entry?.value ?? 0, total))}`,
+                  entry?.name ?? "",
+                ];
+              }}
+            />
+          </Treemap>
+        </ResponsiveContainer>
+      </div>
+      {/* Tiles too small for a label are still named here, in the tile's own
+          hue — the same legend the component donut beside it carries. Only when
+          tiles are categorical: a single-hue map has nothing to key. */}
+      {data.some((entry) => entry.colorIndex != null) && (
+        <ul className="grid grid-cols-1 gap-x-4 gap-y-1 @md:grid-cols-2">
+          {data.map((entry) => (
+            <li key={entry.id ?? entry.name} className="flex min-w-0 items-center gap-1.5 text-xs">
+              <span
+                className="size-2 shrink-0 rounded-sm"
+                style={{
+                  backgroundColor: entry.muted
+                    ? MUTED_MARK
+                    : entry.colorIndex != null
+                      ? SERIES_COLORS[entry.colorIndex]
+                      : color,
+                }}
+              />
+              <span className="min-w-0 truncate text-muted-foreground" title={entry.name}>
+                {entry.name}
+              </span>
+              <span className="ml-auto shrink-0 tabular-nums">{entry.display}</span>
+              <span className="w-9 shrink-0 text-right text-xxs tabular-nums text-muted-foreground">
+                {shareLabel(shareOf(entry.value, total))}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -840,6 +877,7 @@ interface TreemapTileProps {
   value?: number;
   display?: string;
   muted?: boolean;
+  colorIndex?: number;
 }
 
 function TreemapTile({
@@ -852,6 +890,7 @@ function TreemapTile({
   value = 0,
   display,
   muted,
+  colorIndex,
   color,
   total,
 }: TreemapTileProps & { color: string; total: number }) {
@@ -866,11 +905,12 @@ function TreemapTile({
         width={width}
         height={height}
         rx={4}
-        fill={muted ? MUTED_MARK : color}
+        fill={muted ? MUTED_MARK : colorIndex != null ? SERIES_COLORS[colorIndex] : color}
         // A tint, so the label inside can wear text ink in both themes rather
         // than white on a hue that is light in dark mode. One opacity for all:
-        // bigger tiles a step darker would restate the area.
-        fillOpacity={0.3}
+        // bigger tiles a step darker would restate the area. Categorical tiles
+        // sit a step stronger: at 0.3 neighbouring hues blur into one another.
+        fillOpacity={colorIndex != null && !muted ? 0.45 : 0.3}
         stroke="hsl(var(--card))"
         strokeWidth={BAR_GAP}
       />
@@ -914,12 +954,18 @@ export function ScatterPlot({
   yName,
   colorIndex = 0,
   empty = "표시할 값이 없습니다.",
+  emphasisId,
+  onSelect,
 }: {
   entries: ScatterEntry[];
   xName: string;
   yName: string;
   colorIndex?: number;
   empty?: string;
+  /** The selected entity's dot keeps the hue; the rest go grey, as in `RankedBars`. */
+  emphasisId?: string | null;
+  /** A dot click, with the entry's `id`. */
+  onSelect?: (id: string) => void;
 }) {
   if (entries.length === 0) return <EmptyPlot label={empty} />;
   return (
@@ -974,7 +1020,24 @@ export function ScatterPlot({
             stroke="hsl(var(--card))"
             strokeWidth={2}
             isAnimationActive={false}
-          />
+            cursor={onSelect ? "pointer" : undefined}
+            onClick={
+              onSelect
+                ? (point) => {
+                    const id = (point as { payload?: ScatterEntry }).payload?.id;
+                    if (id) onSelect(id);
+                  }
+                : undefined
+            }
+          >
+            {emphasisId &&
+              entries.map((entry) => (
+                <Cell
+                  key={entry.id ?? entry.name}
+                  fill={entry.id === emphasisId ? SERIES_COLORS[colorIndex] : MUTED_MARK}
+                />
+              ))}
+          </Scatter>
         </ScatterChart>
       </ResponsiveContainer>
     </div>
@@ -990,10 +1053,13 @@ export function ScatterPlot({
  */
 export function CostColumns({
   data,
+  name = "청구액",
 }: {
   data: Array<{ label: string; date: string; cost: number }>;
+  /** The series' name in the tooltip; the default is the bill's. */
+  name?: string;
 }) {
-  if (data.length === 0) return <EmptyPlot label="일별 청구액이 아직 없습니다." />;
+  if (data.length === 0) return <EmptyPlot label={`일별 ${name}이 아직 없습니다.`} />;
 
   return (
     <div className="h-52 w-full">
@@ -1013,13 +1079,13 @@ export function CostColumns({
             itemStyle={TOOLTIP_ITEM}
             formatter={(value) => [
               typeof value === "number" ? `$${value.toFixed(4)}` : String(value),
-              "청구액",
+              name,
             ]}
             labelFormatter={(_, payload) => tooltipDate(payload)}
           />
           <Bar
             dataKey="cost"
-            name="청구액"
+            name={name}
             fill={COST_COLOR}
             maxBarSize={BAR_MAX_SIZE}
             radius={[4, 4, 0, 0]}

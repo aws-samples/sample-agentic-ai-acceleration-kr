@@ -1,6 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { X } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 import {
   cacheHitRate,
@@ -18,7 +22,19 @@ import {
   type UserUsageRow,
 } from "@/lib/insights";
 import { METRIC_COLOR } from "@/app/components/chartTheme";
-import { DailyArea, EmptyPlot, Plot, PlotCell, PlotGrid, ScatterPlot, type ScatterEntry } from "./charts";
+import {
+  CostColumns,
+  DailyArea,
+  DailyColumns,
+  EmptyPlot,
+  Plot,
+  PlotCell,
+  PlotGrid,
+  RankedBars,
+  ScatterPlot,
+  type RankedEntry,
+  type ScatterEntry,
+} from "./charts";
 
 /**
  * Usage per person — the chargeback question, finally rendered.
@@ -44,6 +60,7 @@ export function UserPanel({ days }: { days: number }) {
     "loading",
   );
   const [message, setMessage] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -99,6 +116,8 @@ export function UserPanel({ days }: { days: number }) {
 
   // The email's local part when the server could name the sub, else the sub.
   const label = (sub: string) => subjectLabel(sub, data.subjects);
+  const toggle = (sub: string) => setSelected(selected === sub ? null : sub);
+  const selectedRow = data.users.find((user: UserUsageRow) => user.sub === selected) ?? null;
 
   // One dot per person: turns across, tokens (input + output + cache, the count
   // that tracks spend) up. The reader is looking for the person whose few
@@ -133,21 +152,32 @@ export function UserPanel({ days }: { days: number }) {
   const agentsOf = (user: UserUsageRow) => {
     const agents = user.agents ?? [];
     if (agents.length === 0) return "—";
-    const [top, ...rest] = agents;
-    return rest.length > 0 ? `${top.name} +${rest.length}` : top.name;
+    const others = (user.agents_total ?? agents.length) - 1;
+    return others > 0 ? `${agents[0].name} +${others}` : agents[0].name;
+  };
+  const agentsTitle = (user: UserUsageRow) => {
+    const agents = user.agents ?? [];
+    const listed = agents.map((agent) => `${agent.name} ${agent.turns.toLocaleString("ko-KR")}턴`);
+    const rest = (user.agents_total ?? agents.length) - agents.length;
+    if (rest > 0) {
+      listed.push(`그 외 ${rest}개 ${(user.other_agent_turns ?? 0).toLocaleString("ko-KR")}턴`);
+    }
+    return listed.join(", ");
   };
 
   return (
     <>
       <PlotGrid>
         <PlotCell>
-          <Plot title="사용자별 턴과 토큰" hint="점 하나가 한 사람입니다. 가로는 턴, 세로는 토큰(입력 + 출력 + 캐시)이고, 왼쪽 위일수록 적은 턴에 토큰을 많이 썼습니다.">
+          <Plot title="사용자별 턴과 토큰" hint="점 하나가 한 사람입니다. 가로는 턴, 세로는 토큰(입력 + 출력 + 캐시)이고, 왼쪽 위일수록 적은 턴에 토큰을 많이 썼습니다. 점이나 표의 행을 누르면 그 사람의 상세가 열립니다.">
             <ScatterPlot
               entries={perUser}
               xName="턴"
               yName="토큰"
               colorIndex={METRIC_COLOR.input_tokens}
               empty="이 기간에 대화한 사용자가 없습니다."
+              emphasisId={selected}
+              onSelect={toggle}
             />
           </Plot>
         </PlotCell>
@@ -163,10 +193,13 @@ export function UserPanel({ days }: { days: number }) {
       </PlotGrid>
 
       <PlotCell>
-        <div className="overflow-x-auto rounded-md border border-border">
+        {/* A fixed-height scroller, header and totals pinned: the widget grew a
+            row per person, and at forty people the scatter above was a page
+            away from the totals below. */}
+        <div className="max-h-[26rem] overflow-auto rounded-md border border-border">
           <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b border-border text-muted-foreground">
+            <thead className="sticky top-0 z-[1] bg-card shadow-[inset_0_-1px_0_hsl(var(--border))]">
+              <tr className="text-muted-foreground">
                 <th className="whitespace-nowrap px-3 py-2 text-left font-medium">
                   사용자
                 </th>
@@ -227,7 +260,14 @@ export function UserPanel({ days }: { days: number }) {
                   rate: number;
                 } | null;
                 return (
-                  <tr key={user.sub} className="border-b border-border/50 last:border-0">
+                  <tr
+                    key={user.sub}
+                    className={cn(
+                      "cursor-pointer border-b border-border/50 last:border-0 hover:bg-muted/40",
+                      selected === user.sub && "bg-muted/60",
+                    )}
+                    onClick={() => toggle(user.sub)}
+                  >
                     <td className="whitespace-nowrap px-3 py-2 font-mono text-xxs">
                       {label(user.sub)}
                     </td>
@@ -235,9 +275,7 @@ export function UserPanel({ days }: { days: number }) {
                         full list is the tooltip. */}
                     <td
                       className="whitespace-nowrap px-3 py-2 text-xxs"
-                      title={(user.agents ?? [])
-                        .map((agent) => `${agent.name} ${agent.turns.toLocaleString("ko-KR")}턴`)
-                        .join(", ")}
+                      title={agentsTitle(user)}
                     >
                       {agentsOf(user)}
                     </td>
@@ -307,7 +345,7 @@ export function UserPanel({ days }: { days: number }) {
                         </span>
                         {user.unpriced_turns > 0 && user.model_cost_micros !== null && (
                           <span className="text-xxs text-muted-foreground">
-                            요율 미등록 {user.unpriced_turns}턴 제외
+                            가격 미등록 {user.unpriced_turns}턴 제외
                           </span>
                         )}
                       </span>
@@ -321,7 +359,9 @@ export function UserPanel({ days }: { days: number }) {
                   </tr>
                 );
               })}
-              <tr className="border-t border-border bg-muted/30 font-medium">
+            </tbody>
+            <tfoot className="sticky bottom-0 z-[1] bg-card shadow-[inset_0_1px_0_hsl(var(--border))]">
+              <tr className="bg-muted/30 font-medium">
                 <td className="whitespace-nowrap px-3 py-2 text-left">
                   합계
                 </td>
@@ -368,7 +408,7 @@ export function UserPanel({ days }: { days: number }) {
                   )}
                 </td>
               </tr>
-            </tbody>
+            </tfoot>
           </table>
         </div>
         <p className="mt-2 text-xxs text-muted-foreground">
@@ -393,6 +433,122 @@ export function UserPanel({ days }: { days: number }) {
           )}
         </p>
       </PlotCell>
+
+      {selectedRow && (
+        <PlotCell>
+          <UserDetail
+            row={selectedRow}
+            name={label(selectedRow.sub)}
+            dates={(data.daily_active_users ?? []).map((point) => point.date)}
+            onClose={() => setSelected(null)}
+          />
+        </PlotCell>
+      )}
     </>
+  );
+}
+
+/**
+ * One person, opened from a row or a dot.
+ *
+ * Built only from what the leaderboard response already carries: the row's
+ * counters, its agent list (the table shows the top one), and its own days from
+ * the USERS# items the route reads anyway. No request of its own — the agent
+ * drill-down reads traces and runs judges, this one adds no read at all.
+ */
+function UserDetail({
+  row,
+  name,
+  dates,
+  onClose,
+}: {
+  row: UserUsageRow;
+  name: string;
+  /** The window's days, dense, so a quiet day is a gap rather than missing. */
+  dates: string[];
+  onClose: () => void;
+}) {
+  const byDay = new Map((row.daily ?? []).map((point) => [point.date, point]));
+  const daily = dates.map((date) => {
+    const point = byDay.get(date);
+    return {
+      date,
+      label: date.slice(5),
+      turns: point?.turns ?? 0,
+      failed: point?.failed_turns ?? 0,
+      cost: (point?.model_cost_micros ?? 0) / 1_000_000,
+    };
+  });
+  const ranked = (name: string, turns: number): RankedEntry => ({
+    name,
+    value: turns,
+    display: `${turns.toLocaleString("ko-KR")}턴`,
+    meta: row.turns > 0 ? formatRate({ rate: turns / row.turns }) : undefined,
+  });
+  const agents: RankedEntry[] = (row.agents ?? []).map((agent) => ranked(agent.name, agent.turns));
+  const unlisted = (row.agents_total ?? agents.length) - agents.length;
+  if (unlisted > 0) agents.push(ranked(`그 외 ${unlisted}개`, row.other_agent_turns ?? 0));
+  const threads = row.threads_started ?? 0;
+  const perTurn =
+    row.model_cost_micros !== null && row.priced_turns > 0
+      ? row.model_cost_micros / row.priced_turns
+      : null;
+
+  return (
+    <section className="rounded-md border border-border">
+      <header className="flex items-center gap-2 border-b border-border px-4 py-2">
+        <h3 className="min-w-0 truncate font-mono text-xs font-semibold">{name}</h3>
+        <span className="shrink-0 text-xxs text-muted-foreground">
+          턴 {row.turns.toLocaleString("ko-KR")} · 활동일 {(row.active_days ?? 0).toLocaleString("ko-KR")}/
+          {dates.length.toLocaleString("ko-KR")}
+        </span>
+        <Button variant="ghost" size="sm" className="ml-auto shrink-0" onClick={onClose} aria-label="닫기">
+          <X className="size-3.5" />
+        </Button>
+      </header>
+      <div className="@container space-y-4 p-4">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+          <span>
+            스레드당 턴{" "}
+            <span className="text-muted-foreground">
+              {threads > 0 ? (row.turns / threads).toFixed(1) : "—"}
+            </span>
+          </span>
+          <span>
+            턴당 모델 비용{" "}
+            <span className="text-muted-foreground">{formatMicros(perTurn)}</span>
+          </span>
+          <span>
+            턴당 툴 호출{" "}
+            <span className="text-muted-foreground">
+              {row.turns > 0 ? ((row.tool_calls ?? 0) / row.turns).toFixed(1) : "—"}
+            </span>
+          </span>
+          <span>
+            캐시 적중{" "}
+            <span className="text-muted-foreground">
+              {formatRate(cacheHitRate(row) as { rate: number } | null)}
+            </span>
+          </span>
+        </div>
+        <div className="overflow-hidden rounded-md border border-border">
+          <PlotGrid>
+            <PlotCell>
+              <Plot title="일별 턴">
+                <DailyColumns data={daily} dataKey="turns" name="턴" colorIndex={METRIC_COLOR.turns} />
+              </Plot>
+            </PlotCell>
+            <PlotCell>
+              <Plot title="일별 모델 비용" hint="가격이 등록된 턴만 합한 값입니다.">
+                <CostColumns data={daily} name="모델 비용" />
+              </Plot>
+            </PlotCell>
+          </PlotGrid>
+        </div>
+        <Plot title="사용한 에이전트" hint="숫자 옆은 이 사람 턴 중 비율입니다.">
+          <RankedBars entries={agents} colorIndex={METRIC_COLOR.turns} empty="에이전트 기록이 없습니다." />
+        </Plot>
+      </div>
+    </section>
   );
 }

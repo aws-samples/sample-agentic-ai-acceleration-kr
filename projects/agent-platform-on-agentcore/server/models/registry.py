@@ -234,6 +234,9 @@ class DeployedTarget(BaseModel):
     gateway_url: Optional[str] = None
     # Set when the target cannot be registered as-is (not READY, harness-managed).
     reason: Optional[str] = None
+    # Deployed by something other than this platform (another project sharing the
+    # account and region): listed, but a blanket sync leaves it alone.
+    foreign: bool = False
 
 
 class SyncFailure(BaseModel):

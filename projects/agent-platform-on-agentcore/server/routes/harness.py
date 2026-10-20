@@ -6,6 +6,7 @@ from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException
 
 from core.auth import AuthUser, current_user, require_admin
+from core.aws_errors import client_error_http
 from models.harness import (
     ComposeHarnessRequest,
     ComposeHarnessResponse,
@@ -37,11 +38,7 @@ def _fail(exc: Exception) -> None:
     if isinstance(exc, ValueError):
         raise HTTPException(status_code=400, detail=str(exc))
     if isinstance(exc, ClientError):
-        error = exc.response.get("Error", {})
-        raise HTTPException(
-            status_code=502,
-            detail=f"AWS error ({error.get('Code', 'Unknown')}): {error.get('Message', str(exc))}",
-        )
+        raise client_error_http(exc)
     logger.error("Harness route error: %s", exc)
     logger.error(traceback.format_exc())
     raise HTTPException(status_code=500, detail=str(exc))

@@ -93,9 +93,10 @@ Switching is a plain `terraform apply`: the connector target is gated by the val
 
 `approve_expense` and `lookup_salary` are canned mocks for the team/policy
 workshop. They stay in `tools.json` but the upsert drops them
-(`--drop-tool`) unless `demo_tools = true`. The flag is not a `null_resource`
-trigger (adding one would replace the live target), so flipping it on an
-existing stack needs `terraform apply -replace=module.mcp_gateway.null_resource.target`.
+(`--drop-tool`) unless `demo_tools = true`. Flipping the flag re-runs the
+upsert through `null_resource.target_tool_set`, which updates the live target in
+place (the target itself is not replaced). Anything that names these tools —
+the Cedar policies — waits for `tools_ready`.
 
 ## Target replacement is destroy-first
 

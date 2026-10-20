@@ -84,6 +84,11 @@ variable "registry_sync_role_arn" {
   default     = ""
 }
 
+variable "runs_table_arn" {
+  description = "Chat run leases table ARN (server/services/run_leases.py)."
+  type        = string
+}
+
 variable "teams_table_arn" {
   description = "Teams/audit table ARN (Organization page). Required: an empty string inside a `resources` list is an invalid ARN."
   type        = string

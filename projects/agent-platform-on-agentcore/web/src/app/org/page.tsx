@@ -6,38 +6,37 @@ import { Building2 } from "lucide-react";
 import { PageBody, PageHeader } from "@/app/components/PageHeader";
 import { useRequireRole } from "@/app/components/AppShell";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { TeamsTab } from "./components/TeamsTab";
-import { UsersTab } from "./components/UsersTab";
+import { OrgDirectory } from "./components/OrgDirectory";
+import { viewFromParams } from "./orgTable.mjs";
 import { AuditTab } from "./components/AuditTab";
 
 /**
- * Organization: teams (provisioned for real), people (the pool, live; Entra
- * as of last login) and what admins did here. Admin-only; `?tab=` selects.
+ * Organization: teams (provisioned for real) and the people in them (the pool,
+ * live; Entra as of last login) in one directory, and what admins did here.
+ * Admin-only; `?tab=audit` opens the log, `?team=` / `?view=` pick in the
+ * directory (the old `?tab=users` lands on 모든 사용자).
  */
-const TABS = ["teams", "users", "audit"] as const;
-type Tab = (typeof TABS)[number];
+type Tab = "teams" | "audit";
 
 function OrgPageInner() {
   const params = useSearchParams();
   const requested = params.get("tab");
-  const tab: Tab = (TABS as readonly string[]).includes(requested ?? "") ? (requested as Tab) : "teams";
+  const tab: Tab = requested === "audit" ? "audit" : "teams";
 
   return (
     <>
-      <PageHeader icon={Building2} title="Organization" hint="팀과 사용자를 관리합니다. Cognito 는 지금 상태, Entra 는 마지막 로그인 기준입니다." />
+      <PageHeader icon={Building2} title="Organization" hint="팀과 사용자를 관리합니다." />
       <PageBody>
         <div className="mx-auto flex w-full max-w-6xl flex-col gap-4">
           {/* Native history, not router.replace: the tab is a view of this page, and a
               router navigation that never commits (seen live 2026-10-11) left the
               click dead with the address unchanged. Next syncs useSearchParams. */}
-          <Tabs value={tab} onValueChange={(v) => window.history.replaceState(null, "", `/org?tab=${v}`)}>
+          <Tabs value={tab} onValueChange={(v) => window.history.replaceState(null, "", v === "audit" ? "/org?tab=audit" : "/org")}>
             <TabsList>
-              <TabsTrigger value="teams">팀</TabsTrigger>
-              <TabsTrigger value="users">사용자</TabsTrigger>
+              <TabsTrigger value="teams">팀·사용자</TabsTrigger>
               <TabsTrigger value="audit">감사 로그</TabsTrigger>
             </TabsList>
-            <TabsContent value="teams"><section className="rounded-lg border bg-card p-4 shadow-sm"><TeamsTab /></section></TabsContent>
-            <TabsContent value="users"><section className="rounded-lg border bg-card p-4 shadow-sm"><UsersTab /></section></TabsContent>
+            <TabsContent value="teams"><OrgDirectory initial={viewFromParams(new URLSearchParams(params.toString()))} /></TabsContent>
             <TabsContent value="audit"><section className="rounded-lg border bg-card p-4 shadow-sm"><AuditTab /></section></TabsContent>
           </Tabs>
         </div>

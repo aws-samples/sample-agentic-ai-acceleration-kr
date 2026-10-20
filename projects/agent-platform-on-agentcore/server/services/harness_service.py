@@ -364,14 +364,19 @@ class HarnessService:
                     ),
                     list(types),
                 )
-                composables = fan_out(
-                    lambda pair: self._composable(pair[0], pair[1]),
-                    [
-                        (descriptor_type, summary)
-                        for descriptor_type, summaries in zip(types, listings)
-                        for summary in summaries
-                    ],
-                )
+                pairs = [
+                    (descriptor_type, summary)
+                    for descriptor_type, summaries in zip(types, listings)
+                    for summary in summaries
+                ]
+                # Every composable record's descriptor in one bulk read (approved
+                # records need no per-record Get). Re-reading each record here cost
+                # 102 GetRegistryRecord calls and 14 s per page, and hit the throttle.
+                details = self.registry.record_details([summary for _, summary in pairs])
+                composables = [
+                    self._composable(descriptor_type, summary, details.get(summary.record_id))
+                    for descriptor_type, summary in pairs
+                ]
             except Exception as exc:
                 if not is_registry_unavailable(exc):
                     raise
@@ -402,9 +407,16 @@ class HarnessService:
         return SkillBundleService(bucket=self.skills_bucket).list_skills()
 
     def _composable(
-        self, descriptor_type: str, summary: RegistryRecordSummary
+        self,
+        descriptor_type: str,
+        summary: RegistryRecordSummary,
+        detail: Optional[Any] = None,
     ) -> ComposableRecord:
-        """Whether a record carries the descriptor content composition needs."""
+        """Whether a record carries the descriptor content composition needs.
+
+        `detail` is the record's latest revision when the caller has it (the
+        catalog reads them in bulk); otherwise it is read here.
+        """
         reason: Optional[str] = None
         # The source this record becomes on a harness. The edit form maps an
         # existing harness's tools/skills back onto catalogue rows by these —
@@ -413,7 +425,8 @@ class HarnessService:
         gateway_arn: Optional[str] = None
         s3_uri: Optional[str] = None
         try:
-            detail = self.registry.get_record(summary.record_id)
+            if detail is None:
+                detail = self.registry.get_record(summary.record_id)
             if descriptor_type == DESCRIPTOR_MCP:
                 # A gateway-backed record needs no URL: it attaches by ARN, and the
                 # harness resolves the endpoint itself.
@@ -909,6 +922,16 @@ class HarnessService:
         team = normalize_team(tags.get("Team"))
         self._team_tag_cache[harness_arn] = (now, team)
         return team
+
+    def platform_of(self, resource_arn: str) -> Optional[str]:
+        """The `Platform` tag on any AgentCore resource (runtime, harness,
+        gateway), or None when it has none. Raises when the tags cannot be read.
+
+        deploy.sh tags runtimes, create_harness tags harnesses and Terraform tags
+        gateways with it, so it is how a bulk sync tells this deployment's
+        resources from another project's in the same account and region."""
+        tags = self.control.list_tags_for_resource(resourceArn=resource_arn).get("tags") or {}
+        return tags.get("Platform")
 
     def list_harnesses(self, with_tools: bool = False) -> List[HarnessSummary]:
         summaries: List[HarnessSummary] = []

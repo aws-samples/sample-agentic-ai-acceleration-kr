@@ -452,10 +452,27 @@ class CollectorService:
     # --- reads ---------------------------------------------------------------
 
     def _grouped(self, prefix: str, marker: str, start_date: str, end_date: str) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        """key -> day -> item over the window. Read by date range where the
+        repository can (`query`, concurrent day ranges), so a month partition
+        past 1 MB is not paged through whole for a week of it; the day check
+        below is then a no-op but stays, for the prefix-only fallback."""
         out: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        ranged = getattr(self.repository, "query", None)
+        extra: Dict[str, Any] = {}
+        if ranged is not None:
+            import inspect
+
+            try:
+                if "ranges" in inspect.signature(ranged).parameters:
+                    extra["ranges"] = 4
+            except (TypeError, ValueError):
+                pass
         for shard in month_shards(start_date, end_date):
             try:
-                items = self.repository.query_prefix(f"{prefix}{shard}", "D#")
+                if ranged is not None:
+                    items = ranged(f"{prefix}{shard}", start_date, end_date, **extra)
+                else:
+                    items = self.repository.query_prefix(f"{prefix}{shard}", "D#")
             except Exception:
                 logger.warning("Collector read failed: %s%s", prefix, shard, exc_info=True)
                 continue
@@ -489,7 +506,7 @@ class CollectorService:
 
     @staticmethod
     def runtime_name(arn: str, *, strip_harness: bool = False) -> str:
-        """`…runtime/bap_default-AbCdE12345` -> `bap_default`.
+        """`…runtime/bap_default-kcI3BE7YIb` -> `bap_default`.
 
         The id suffix after the last `-` is AgentCore's; the rest is the name the
         runtime was launched with. A harness's companion runtime is named
@@ -534,11 +551,23 @@ class CollectorService:
 
         arns = set()
         try:
-            for summary in self.registry.list_records(descriptor_type="MCP"):
+            summaries = self.registry.list_records(descriptor_type="MCP")
+            # Descriptors in bulk where the registry offers it (one BatchGet per
+            # 100 instead of one Get per record against a 10 TPS quota).
+            bulk = getattr(self.registry, "record_details", None)
+            details: Dict[str, Any] = {}
+            if bulk is not None:
                 try:
-                    detail = self.registry.get_record(summary.record_id)
+                    details = dict(bulk(summaries))
                 except Exception:
-                    continue
+                    logger.warning("Collector bulk record read failed", exc_info=True)
+            for summary in summaries:
+                detail = details.get(summary.record_id)
+                if detail is None:
+                    try:
+                        detail = self.registry.get_record(summary.record_id)
+                    except Exception:
+                        continue
                 arn = gateway_arn_of(getattr(detail, "descriptor_content", None))
                 if arn:
                     arns.add(arn)

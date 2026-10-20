@@ -208,16 +208,17 @@ class FakeHarness:
 
 
 class Harness:
-    def __init__(self, name, gateway_arn):
+    def __init__(self, name, gateway_arn, status="READY"):
         self.harness_id = f"{name}-abcdefghij"
         self.harness_name = name
+        self.status = status
         self.tools = [
             {"agentCoreGateway": {"gatewayArn": gateway_arn}}
         ] if gateway_arn else []
 
     def as_summary(self):
         """The same harness as ListHarnesses reports it: no tools."""
-        return Harness(self.harness_name, None)
+        return Harness(self.harness_name, None, self.status)
 
 
 def build(harnesses=None, source_buckets=("corp-docs",),
@@ -676,6 +677,18 @@ def test_deleting_a_knowledge_base_a_harness_uses_is_refused_by_default():
 
     assert "support_bot" in str(caught.value)
     assert repository.get(record.kb_key) is not None
+
+
+def test_a_harness_being_deleted_does_not_block_the_delete():
+    # s15 smoke: deleting the harness, then its knowledge base, got a 409 naming
+    # the harness that was already DELETING.
+    service, repository, _ = build()
+    record = seed(repository)
+    service.harness.harnesses = [Harness("support_bot", record.gateway_arn, status="DELETING")]
+
+    service.delete(ALICE, record.kb_key)
+
+    assert repository.get(record.kb_key) is None
 
 
 def test_force_deletes_it_anyway():

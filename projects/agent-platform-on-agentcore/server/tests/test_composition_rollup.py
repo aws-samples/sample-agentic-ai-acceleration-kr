@@ -196,6 +196,61 @@ def test_a_knowledge_base_is_matched_by_its_gateway_arn():
     assert "Company handbook" in names
 
 
+class KB:
+    def __init__(self, kb_key, name, gateway_arn):
+        self.kb_key, self.name, self.gateway_arn = kb_key, name, gateway_arn
+
+
+def test_knowledge_bases_come_from_the_knowledge_store_and_gateway_records_stay_mcp():
+    """bst 2026-10-19: knowledge bases are never registry records, and the
+    platform tool gateway's MCP record was listed under Knowledge instead."""
+    harness_arn = "arn:aws:bedrock-agentcore:us-east-1:1:harness/rec-1"
+    tools_gw = "arn:aws:bedrock-agentcore:us-east-1:1:gateway/platform-tools"
+    service = UsageService(
+        repository=StubRepo({"AGENTS#2026-08": [turns("rec-1", 6)]}),
+        registry=StubRegistry(
+            [StubRecord("rec-1", "policy_helper", harness_arn=harness_arn),
+             StubRecord("gw-1", "platform-gateway", descriptor_type="MCP")],
+            {"gw-1": {"server": {"gatewayArn": tools_gw}}},
+        ),
+        harness=StubHarness([
+            Harness("rec-1", harness_arn, tools=[
+                {"type": "agentcore_gateway", "name": "kb",
+                 "config": {"agentCoreGateway": {"gatewayArn": GATEWAY_ARN}}},
+                {"type": "agentcore_gateway", "name": "tools",
+                 "config": {"agentCoreGateway": {"gatewayArn": tools_gw}}},
+            ])
+        ]),
+    )
+    service.knowledge_bases = lambda: [KB("kb_handbook_1", "company-handbook", GATEWAY_ARN),
+                                       KB("kb_unused_2", "unused", "arn:aws:bedrock-agentcore:us-east-1:1:gateway/x")]
+
+    entries = service.composition("2026-08-15", "2026-08-15")
+
+    assert [(e["name"], e["turns"], e["agents"]) for e in entries["knowledge_bases"]] == [
+        ("company-handbook", 6, 1), ("unused", 0, 0)]
+    assert [(e["name"], e["turns"]) for e in entries["mcp"]] == [("platform-gateway", 6)]
+
+
+def test_a_record_fronting_a_knowledge_base_gateway_is_not_counted_twice():
+    harness_arn = "arn:aws:bedrock-agentcore:us-east-1:1:harness/rec-1"
+    service = UsageService(
+        repository=StubRepo({"AGENTS#2026-08": [turns("rec-1", 2)]}),
+        registry=StubRegistry(
+            [StubRecord("rec-1", "w", harness_arn=harness_arn), StubRecord("kb-rec", "handbook-record", descriptor_type="MCP")],
+            {"kb-rec": {"server": {"gatewayArn": GATEWAY_ARN}}},
+        ),
+        harness=StubHarness([Harness("rec-1", harness_arn, tools=[
+            {"type": "agentcore_gateway", "name": "kb", "config": {"agentCoreGateway": {"gatewayArn": GATEWAY_ARN}}}])]),
+    )
+    service.knowledge_bases = lambda: [KB("kb_handbook_1", "company-handbook", GATEWAY_ARN)]
+
+    entries = service.composition("2026-08-15", "2026-08-15")
+
+    assert [e["name"] for e in entries["knowledge_bases"]] == ["company-handbook"]
+    assert entries["mcp"] == []
+
+
 def test_tools_are_reported_by_real_call_count():
     """Unlike skills, tool calls are counted by the stream, so this figure is
     exact and labelled as such."""
@@ -529,8 +584,10 @@ def test_composition_credits_a_runtime_hosted_mcp_server_through_its_fronting_ta
 
     mcp = service.composition("2026-08-15", "2026-08-15")["mcp"]
 
-    assert [(e["name"], e["turns"], e["agents"]) for e in mcp] == [
-        ("platform status", 4, 1)
+    # The gateway's own record is a tool server too, credited with the agents
+    # that attach the gateway (it used to be filed under knowledge bases).
+    assert sorted((e["name"], e["turns"], e["agents"]) for e in mcp) == [
+        ("gateway", 4, 1), ("platform status", 4, 1)
     ]
 
 
@@ -575,3 +632,41 @@ def test_a_gateways_daily_series_counts_only_its_own_targets_calls():
         {"date": "2026-08-14", "turns": 0, "tool_calls": 2},
         {"date": "2026-08-15", "turns": 4, "tool_calls": 3},
     ]
+
+
+def test_record_descriptors_are_read_in_bulk_not_one_get_each():
+    """One GetRegistryRecord per MCP/skill record was 102 serial calls (15.7 s)
+    at 100 such records. The registry's bulk read answers them together."""
+    arn = "arn:aws:bedrock-agentcore:us-east-1:1:harness/rec-1"
+    contents = {"mcp-1": {"server": {"remotes": [{"url": MCP_URL}]}}}
+
+    class BulkRegistry(StubRegistry):
+        bulk_calls = []
+
+        def record_details(self, summaries):
+            self.bulk_calls.append([s.record_id for s in summaries])
+            out = {}
+            for summary in summaries:
+                summary.descriptor_content = contents.get(summary.record_id)
+                out[summary.record_id] = summary
+            return out
+
+        def get_record(self, record_id):
+            raise AssertionError("descriptor read one record at a time")
+
+    registry = BulkRegistry([StubRecord("rec-1", "writer", harness_arn=arn),
+                             StubRecord("mcp-1", "example/tools", descriptor_type="MCP")])
+    service = UsageService(
+        repository=StubRepo({"AGENTS#2026-08": [turns("rec-1", 4)]}),
+        registry=registry,
+        harness=StubHarness([
+            Harness("rec-1", arn, tools=[
+                {"type": "remote_mcp", "name": "tools", "config": {"remoteMcp": {"url": MCP_URL}}},
+            ])
+        ]),
+    )
+
+    out = service.composition("2026-08-15", "2026-08-15")["mcp"]
+
+    assert [(entry["name"], entry["turns"]) for entry in out] == [("example/tools", 4)]
+    assert registry.bulk_calls == [["mcp-1"], []]

@@ -18,12 +18,16 @@ a second request on the thread is refused before it can write anything, and so
 that a Stop pressed during setup has something to land on. It is *launched* once
 the generator exists.
 
-In-memory on purpose: the server runs one task (`desired_count=1`). More replicas
-would need a shared event log instead of `ActiveRun.frames`.
+The run itself stays in this process: its generator, its frames, its
+subscribers. With more than one server task, `claim` also takes a lease row
+(services/run_leases.py) so a second request on another task is refused too,
+and the routes hand a reattach or Stop to the task the row names, where the
+run is local. The frames never need to leave the task that fills them.
 """
 import asyncio
 import logging
-from typing import AsyncIterator, Dict, Iterable, List, Optional, Set
+import uuid
+from typing import Any, AsyncIterator, Dict, Iterable, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +70,9 @@ class ActiveRun:
         self.loop: Optional[asyncio.AbstractEventLoop] = None
         self._subscribers: Set[asyncio.Queue] = set()
         self._overflowed: Set[asyncio.Queue] = set()
+        # The lease row this run holds (services/run_leases.py), if it took one.
+        self.run_id: Optional[str] = None
+        self.lease_held = False
 
     def publish(self, frame: str) -> None:
         # Append and enqueue with no await between: a subscriber registering at
@@ -127,8 +134,11 @@ class ActiveRun:
 
 
 class RunBroker:
-    def __init__(self) -> None:
+    def __init__(self, leases: Optional[Any] = None, heartbeat_seconds: float = 15) -> None:
         self._runs: Dict[str, ActiveRun] = {}
+        # services/run_leases.RunLeases when the server may run as several tasks.
+        self.leases = leases
+        self.heartbeat_seconds = heartbeat_seconds
 
     def get(self, thread_id: str) -> Optional[ActiveRun]:
         return self._runs.get(thread_id)
@@ -145,6 +155,37 @@ class RunBroker:
         run.loop = asyncio.get_running_loop()
         self._runs[thread_id] = run
         return run
+
+    async def claim(self, thread_id: str, owner_sub: Optional[str] = None) -> ActiveRun:
+        """`reserve`, and across tasks too when leases are configured.
+
+        The local reservation comes first, so two requests on this task never
+        both reach DynamoDB. A lease already live elsewhere is RunAlreadyActive,
+        as a local one is. A lease write that fails outright (not the
+        condition: DynamoDB itself) lets the run go ahead unleased: the turn
+        matters more than the cross-task guard, and this task still refuses a
+        second request on its own.
+        """
+        run = self.reserve(thread_id, owner_sub)
+        if self.leases is None:
+            return run
+        run.run_id = uuid.uuid4().hex
+        try:
+            acquired = await asyncio.to_thread(self.leases.acquire, thread_id, run.run_id, owner_sub)
+        except Exception:
+            logger.warning("Run lease for thread %s could not be written; running unleased", thread_id, exc_info=True)
+            return run
+        if not acquired:
+            self._finished(run)
+            raise RunAlreadyActive(thread_id)
+        run.lease_held = True
+        return run
+
+    def remote_holder(self, thread_id: str) -> Optional[str]:
+        """The other task whose run this thread is on, if any. Blocking (DynamoDB)."""
+        if self.leases is None or thread_id in self._runs:
+            return None
+        return self.leases.remote_holder(thread_id)
 
     def launch(
         self,
@@ -185,6 +226,56 @@ class RunBroker:
         run.finish()
         if self._runs.get(run.thread_id) is run:
             del self._runs[run.thread_id]
+        if run.lease_held:
+            run.lease_held = False
+            self._release_lease_soon(run)
+
+    def _release_lease_soon(self, run: ActiveRun) -> None:
+        # Called from a task's done callback, on the loop: the delete is a
+        # blocking boto3 call, so it goes to the executor. Off a loop (a test,
+        # a sync caller) it simply runs.
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is None:
+            self._release_lease(run.thread_id, run.run_id)
+        else:
+            loop.run_in_executor(None, self._release_lease, run.thread_id, run.run_id)
+
+    def _release_lease(self, thread_id: str, run_id: Optional[str]) -> None:
+        try:
+            self.leases.release(thread_id, run_id)
+        except Exception:
+            # Left to expire: the next claim takes it RUN_LEASE_SECONDS later.
+            logger.warning("Run lease for thread %s was not released", thread_id, exc_info=True)
+
+    async def heartbeat_forever(self) -> None:
+        """Renew every lease this task holds; act on Stops flagged by other tasks."""
+        while True:
+            await asyncio.sleep(self.heartbeat_seconds)
+            await self.renew_leases()
+
+    async def renew_leases(self) -> None:
+        runs = [r for r in self._runs.values() if r.lease_held and not r.done]
+        if not runs:
+            return
+        rows = await asyncio.gather(
+            *(asyncio.to_thread(self.leases.renew, r.thread_id, r.run_id) for r in runs),
+            return_exceptions=True,
+        )
+        for run, row in zip(runs, rows):
+            if isinstance(row, BaseException):
+                logger.warning("Run lease for thread %s not renewed: %s", run.thread_id, row)
+            elif row is None:
+                # Expired and claimed by someone else (this task stalled past
+                # the lease). Nothing to undo; stop pretending to hold it.
+                logger.warning("Run lease for thread %s was taken over", run.thread_id)
+                run.lease_held = False
+            elif row.get("cancel_requested"):
+                # Flagged by a task that could not reach this one; the flag was
+                # only set for the run's owner (RunRepository.request_cancel).
+                self.cancel(run.thread_id)
 
     async def _pump(self, run: ActiveRun, source: AsyncIterator[str]) -> None:
         try:
@@ -244,3 +335,10 @@ class RunBroker:
                 tasks.append(run.task)
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        # The done callbacks handed the lease deletes to the executor; wait for
+        # them here, while the process still lives to make them.
+        if self.leases is not None:
+            await asyncio.gather(
+                *(asyncio.to_thread(self._release_lease, r.thread_id, r.run_id) for r in runs if r.run_id),
+                return_exceptions=True,
+            )

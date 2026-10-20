@@ -23,6 +23,7 @@ from fastapi import (
 from starlette.background import BackgroundTasks
 
 from core.auth import AuthUser, current_user
+from core.aws_errors import client_error_http
 from core.dependencies import knowledge_service
 from models.knowledge import (
     CreateKnowledgeBaseRequest,
@@ -66,11 +67,7 @@ def _fail(exc: Exception) -> None:
             raise HTTPException(status_code=409, detail=message)
         raise HTTPException(status_code=400, detail=message)
     if isinstance(exc, ClientError):
-        error = exc.response.get("Error", {})
-        raise HTTPException(
-            status_code=502,
-            detail=f"AWS error ({error.get('Code', 'Unknown')}): {error.get('Message', str(exc))}",
-        )
+        raise client_error_http(exc)
     logger.error("Knowledge route error: %s", exc)
     logger.error(traceback.format_exc())
     raise HTTPException(status_code=500, detail=str(exc))
@@ -168,14 +165,16 @@ def delete_knowledge_base(
         _fail(exc)
 
 
+# Plain `def`: storing the document (S3, the KB data source) is blocking boto3, so
+# it runs on the threadpool; the spooled upload is read synchronously.
 @router.post("/{kb_key}/documents", response_model=KnowledgeDocument)
-async def upload_document(
+def upload_document(
     kb_key: str,
     file: UploadFile = File(...),
     user: AuthUser = Depends(current_user),
 ):
     try:
-        body = await file.read()
+        body = file.file.read()
         return _service().add_document(
             user,
             kb_key,

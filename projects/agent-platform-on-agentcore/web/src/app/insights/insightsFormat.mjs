@@ -475,7 +475,7 @@ export const COMPONENT_LABELS = {
 export function formatMicros(micros, reason = {}) {
   const unmeasured = reason?.unmeasured ?? 0;
   if (micros === null || micros === undefined || (micros === 0 && unmeasured > 0)) {
-    if ((reason?.unpriced ?? 0) > 0) return "요율 미등록";
+    if ((reason?.unpriced ?? 0) > 0) return "가격 미등록";
     return "—";
   }
   return `$${(micros / 1_000_000).toFixed(4)}`;
@@ -503,7 +503,7 @@ export function coverageHint(totals) {
   const unpriced = Number(totals?.unpriced_turns ?? 0);
   const unsettled = Math.max(0, turns - unmeasured - priced - unpriced);
   const parts = [];
-  if (unpriced > 0) parts.push(`요율 미등록 ${NUMBER.format(unpriced)}턴`);
+  if (unpriced > 0) parts.push(`가격 미등록 ${NUMBER.format(unpriced)}턴`);
   if (unsettled > 0) parts.push(`비용 미산정 ${NUMBER.format(unsettled)}턴`);
   if (unmeasured > 0) parts.push(`토큰 기록 없음 ${NUMBER.format(unmeasured)}턴`);
   return parts.length > 0 ? `${parts.join(" · ")} 제외` : null;
@@ -750,7 +750,7 @@ export function costAnomalies(daily, { partialDay = null, k = 2, minSamples = 3 
  */
 export function rateSourceLabel(source) {
   const text = String(source ?? "");
-  if (text.startsWith("card:")) return "요율표";
+  if (text.startsWith("card:")) return "가격표";
   if (text === "bill" || text.startsWith("Cost Explorer")) return "AWS 청구서";
   if (text === "price-list") return "Price List";
   if (text.startsWith("admin:")) return `직접 입력 · ${text.slice(6)}`;
@@ -803,7 +803,7 @@ export function missingTiers(row) {
 /**
  * The dated overlay in one clause for the bill panel: how many figures sit on
  * top of the committed card and where each kind came from, e.g.
- * "요율표에 추가된 요율 6개 (청구서 학습 2 · 직접 입력 4) · claude-opus-5-5". The earlier
+ * "가격표에 추가된 항목 6개 (청구서 학습 2 · 직접 입력 4) · claude-opus-5-5". The earlier
  * text called every entry "청구서에서 확인해 추가한", which was false the moment an
  * admin typed one in.
  */
@@ -822,5 +822,5 @@ export function overlaySummary(entries) {
   if (counts.price > 0) kinds.push(`Price List ${counts.price}`);
   if (counts.admin > 0) kinds.push(`직접 입력 ${counts.admin}`);
   const families = [...new Set(rows.map((row) => row.family))].sort();
-  return `요율표에 추가된 요율 ${rows.length}개 (${kinds.join(" · ")}) · ${families.join(", ")}`;
+  return `가격표에 추가된 항목 ${rows.length}개 (${kinds.join(" · ")}) · ${families.join(", ")}`;
 }

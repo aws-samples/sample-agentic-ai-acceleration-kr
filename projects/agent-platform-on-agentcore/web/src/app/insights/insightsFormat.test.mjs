@@ -81,7 +81,7 @@ test("coverageHint names every kind of turn outside the cost figure, or nothing"
   );
   assert.equal(
     coverageHint({ turns: 10, unmeasured_turns: 2, priced_turns: 4, unpriced_turns: 4 }),
-    "요율 미등록 4턴 · 토큰 기록 없음 2턴 제외",
+    "가격 미등록 4턴 · 토큰 기록 없음 2턴 제외",
   );
   assert.equal(coverageHint(undefined), null);
 });
@@ -568,9 +568,9 @@ test("dailySeries carries guardrail interventions as a plain count, zero when ab
 test("formatMicros renders exact dollars and names the reason for a gap", () => {
   assert.equal(formatMicros(1234567), "$1.2346");
   assert.equal(formatMicros(0), "$0.0000");
-  assert.equal(formatMicros(null, { unpriced: 2 }), "요율 미등록");
+  assert.equal(formatMicros(null, { unpriced: 2 }), "가격 미등록");
   assert.equal(formatMicros(null, { unmeasured: 3 }), "—");
-  assert.equal(formatMicros(null, { unpriced: 2, unmeasured: 3 }), "요율 미등록");
+  assert.equal(formatMicros(null, { unpriced: 2, unmeasured: 3 }), "가격 미등록");
   assert.equal(formatMicros(null), "—");
   assert.equal(formatMicros(undefined), "—");
 });
@@ -733,7 +733,7 @@ test("guardrailEventRows resolves agent names, shortens subjects and keeps the t
 });
 
 test("rate sources read as the admin's words, not the machine tag", () => {
-  assert.equal(rateSourceLabel("card:2026-09-23.1"), "요율표");
+  assert.equal(rateSourceLabel("card:2026-09-23.1"), "가격표");
   assert.equal(rateSourceLabel("bill"), "AWS 청구서");
   assert.equal(rateSourceLabel("Cost Explorer daily lines 2026-09-20..2026-09-21"), "AWS 청구서");
   assert.equal(rateSourceLabel("price-list"), "Price List");
@@ -786,7 +786,7 @@ test("the overlay summary names each source instead of calling everything the bi
       { family: "claude-haiku-4-5", source: "price-list" },
       { family: "claude-haiku-4-5", source: "bill" },
     ]),
-    "요율표에 추가된 요율 5개 (청구서 학습 2 · Price List 1 · 직접 입력 2) · claude-haiku-4-5, claude-opus-5-5, claude-sonnet-5",
+    "가격표에 추가된 항목 5개 (청구서 학습 2 · Price List 1 · 직접 입력 2) · claude-haiku-4-5, claude-opus-5-5, claude-sonnet-5",
   );
 });
 

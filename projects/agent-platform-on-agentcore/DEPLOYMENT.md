@@ -73,6 +73,32 @@ aws sts get-caller-identity   # 배포할 계정이 맞는지 확인
 - Amazon Bedrock 콘솔의 **Model access** 에서 Anthropic Claude 모델(기본값 Sonnet 5.5,
   스레드 오버라이드 선택지 `allowed_models` 의 Opus 5.5·Haiku 5.5)을 켭니다.
 
+**계정 한도**
+
+첫 apply 는 VPC 1개, NAT 게이트웨이 1개(`azs` 의 첫 AZ), Elastic IP 1개를 만듭니다. 여러 프로젝트가
+같이 쓰는 계정이면 이 셋이 이미 한도에 차 있어서, apply 가 몇 분씩 진행한 뒤
+`VpcLimitExceeded`·`AddressLimitExceeded`·`NatGatewayLimitExceeded` 로 멈출 수 있습니다. 인스톨러는
+`계정 한도 점검` 단계에서 이를 미리 확인하고, 수동으로 할 때는 아래로 확인합니다.
+
+```bash
+R=<region>
+aws ec2 describe-vpcs --region $R --query 'length(Vpcs)'                       # VPC 한도 기본 5
+aws ec2 describe-account-attributes --region $R --attribute-names vpc-max-elastic-ips \
+  --query 'AccountAttributes[0].AttributeValues[0].AttributeValue'             # EIP 한도
+aws ec2 describe-addresses --region $R --query 'length(Addresses)'             # 사용 중인 EIP
+# AZ 별 NAT 게이트웨이 수 (AZ 당 기본 5)
+for s in $(aws ec2 describe-nat-gateways --region $R --filter Name=state,Values=pending,available \
+    --query 'NatGateways[].SubnetId' --output text); do
+  aws ec2 describe-subnets --region $R --subnet-ids $s --query 'Subnets[0].AvailabilityZone' --output text
+done | sort | uniq -c
+```
+
+NAT 가 찬 AZ 가 있으면 `azs` 에서 여유 있는 AZ 를 첫째로 둡니다. EIP 한도 증설은 Service Quotas 가
+승인으로 바뀐 뒤에도 EC2 가 이전 값을 한동안 강제하므로, 위 `vpc-max-elastic-ips` 값으로 반영을
+확인합니다. `azs` 는 첫 apply 전에 정합니다. 배포 뒤에 바꾸면 서브넷이 교체되는데, ALB 의 네트워크
+인터페이스가 옛 서브넷에 남아 삭제가 20분 대기 뒤 `DependencyViolation` 으로 실패합니다(복구:
+새 AZ 에 임시 서브넷을 만들어 `aws elbv2 set-subnets` 로 ALB 를 옮긴 뒤 다시 apply).
+
 **비용**
 
 ALB, NAT 게이트웨이, Fargate 태스크 2개는 사용량과 관계없이 시간당 요금이 붙습니다.
@@ -187,6 +213,7 @@ user_password  = "<choose-a-password>"
 | `alert_email` | `""` | CloudWatch 알람 SNS 구독 주소 |
 | `bucket_suffix` | `""` | S3 버킷 이름이 이미 쓰이고 있으면 `-<account-id>` 등을 덧붙임 |
 | `enable_agent_registry` | `true` | 조직 SCP 가 Registry API 를 막는 경우 `false` |
+| `guardrail_tier` | `STANDARD` | Guardrail 등급. `CLASSIC` 은 영어·프랑스어·스페인어만 판정해 한국어 입력은 걸러지지 않습니다. `STANDARD` 는 같은 지역권(us/eu/apac) 안의 리전으로 평가를 보냅니다 |
 
 > **HTTPS 를 권장합니다.** `certificate_arn` 없이 올리면 ALB 는 평문 HTTP 입니다. 대부분의
 > 기능은 동작하지만 Entra ID 로그인은 HTTPS 가 전제이고, 사내망 밖에 노출한다면
@@ -442,6 +469,18 @@ cd infra/envs/standalone && terraform apply
 terraform output runtime_mcp_endpoints   # 4단계에서 쓸 URL
 ```
 
+타깃은 Gateway 가 생성 시점에 동기화한 툴 목록으로 `tools/list` 에 답합니다(`runtime_mcp_listing_mode =
+"DEFAULT"`). MCP 서버를 새 툴과 함께 다시 배포했다면 한 번 동기화합니다.
+
+```bash
+python3 infra/modules/mcp_gateway/scripts/gateway_target.py sync \
+  --gateway-id $(terraform -chdir=infra/envs/standalone output -raw mcp_gateway_id) \
+  --name platform-status --region <region>
+```
+
+`DYNAMIC` 은 매 `tools/list` 를 서버에 전달하므로 재동기화가 필요 없지만, 에이전트 세션마다 MCP 서버의
+microVM 콜드 스타트를 기다리게 됩니다(동시 50 세션에서 툴 로딩 p50 8.8초, 동기화 목록은 0.47초).
+
 **4) Registry 에 MCP 레코드로 등록**
 
 웹의 Registry 화면 → 등록 → 유형 **MCP** 로, 원격 URL 에 위 출력의
@@ -496,8 +535,8 @@ apply 뒤 `/org` 에서 팀을 만들면 달라지는 것:
 `demo_tools = true` 는 워크숍용 모의 툴(`approve_expense`, `lookup_salary`)을 Gateway 에
 싣습니다. 금액 한도가 있는 정책 예제를 보여 주기 위한 것이라 평소에는 꺼 둡니다.
 `demo_expense_teams = ["finance"]` 처럼 `/org` 에서 만든 팀 이름을 적으면 그 팀 역할만
-한도 아래 `approve_expense` 를 부를 수 있습니다. 켜고 끌 때는 Gateway 타깃을 `-replace`
-해야 합니다(`infra/modules/mcp_gateway/README.md`).
+한도 아래 `approve_expense` 를 부를 수 있습니다. 켜고 끈 뒤 apply 하면 Gateway 타깃의 툴
+목록이 제자리에서 갱신됩니다.
 
 사용자를 팀에 넣는 가장 빠른 방법은 `/org` 사용자 탭(또는 Cognito 콘솔의 `team:<name>`
 그룹)이고, 아래 데모 사용자 스크립트는 `--teams finance,hr` 로 이미 만든 팀에 나눠 넣습니다.
@@ -529,6 +568,46 @@ python scripts/seed_demo_users.py --password '<choose-a-password>' --teams finan
 ```bash
 aws ecs update-service --cluster bap-cluster --service server --force-new-deployment --region ap-northeast-1
 aws ecs update-service --cluster bap-cluster --service web    --force-new-deployment --region ap-northeast-1
+```
+
+**쓰레드 목록 인덱스(기존 배포 업그레이드).** 쓰레드 목록은 threads 테이블의 GSI 3개
+(`owner_sub`·`agent_record_id`·`scope` + `updated_at`)를 읽습니다. 이 인덱스가 없던 버전에서 올라왔다면
+apply 로 인덱스가 ACTIVE 가 된 뒤, 이전 쓰레드에 인덱스 속성을 채웁니다. 다시 실행해도 안전합니다.
+
+```bash
+cd server
+python scripts/backfill_thread_index.py --table <project>-threads --region <region> --dry-run
+python scripts/backfill_thread_index.py --table <project>-threads --region <region>
+```
+
+백필 전에도 사용자 목록은 동작하고(요약이 없는 행만 원본을 읽음), 관리자 전체 목록에만 이전 쓰레드가 빠집니다.
+
+**Guardrail 등급(기존 배포 업그레이드).** `guardrail_tier` 기본값 `STANDARD` 는 평가를 같은 지역권의 다른 리전으로도
+보내므로, Runtime 실행 역할에 `arn:aws:bedrock:*:<account>:guardrail-profile/*` 의 `bedrock:ApplyGuardrail` 이 있어야
+합니다. Terraform 의 Runtime 역할은 apply 로 받습니다. 예전에 `EXECUTION_ROLE` 없이 배포해 starter toolkit 이 만든
+역할(`AmazonBedrockAgentCoreSDKRuntime-*`)로 도는 런타임이 있다면, 먼저 `deploy.sh` 로 다시 배포해(빈 `EXECUTION_ROLE`
+은 Terraform output 으로 채워집니다) 역할을 옮긴 뒤 apply 합니다.
+
+**Guardrail 강도.** 필터 강도는 신뢰도 임계값입니다(HIGH 는 LOW 신뢰도까지 막습니다). 기본값은 Standard 등급에서
+강도별로 보정한 값으로, 입력 필터 MEDIUM·출력 필터 LOW·PROMPT_ATTACK LOW 입니다. 실제 채팅 턴에서 공격 20건 중 19건,
+명백한 유해 요청 15건 전부를 막고 평범한 지시 40건 중 2건을 막았습니다. 출력을 HIGH 로 올리면 역사·뉴스·문학 답이,
+PROMPT_ATTACK 을 MEDIUM 으로 올리면 "앞의 질문은 무시하고…" 같은 평범한 지시가 더 막힙니다. 바꾸려면
+`modules/bedrock_guardrail` 의 `content_input_strength`·`content_output_strength`·`prompt_attack_strength` 를 씁니다.
+
+**규모별 크기.** 기본 태스크 크기는 시범 운영용입니다. 사용자 1,000명 규모(쓰레드 8.8만, 원장 90일)에서
+서버 태스크(1 vCPU) 하나의 상한은 약 70 req/s 였고, 2개로 늘리면 약 138 req/s 와 동시 채팅 300 의 첫 토큰
+p50 8.8초(1개일 때 15.9초)였습니다. 서버는 프로세스 하나라 태스크당 `server_cpu = 1024` 까지가 쓸모 있는
+크기이고, 그 위로는 `server_tasks` 로 늘립니다. 진행 중인 채팅 런은 runs 테이블의 리스로 태스크 사이에서
+공유되어, 어느 태스크가 받든 중복 실행은 409 로 막히고 재접속·중지는 런을 가진 태스크로 전달됩니다.
+2개 이상이면 태스크 하나가 교체되는 동안에도 서비스가 이어집니다(1개일 때는 약 46초 중단).
+
+```hcl
+server_cpu    = 1024
+server_memory = 2048
+server_tasks  = 2
+web_cpu       = 512
+web_memory    = 1024
+web_tasks     = 2
 ```
 
 **Runtime 에이전트 업데이트.** 같은 `AGENT_MODULE` 로 `deploy.sh` 를 다시 실행하면 기존

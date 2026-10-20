@@ -21,7 +21,7 @@ a new model, or a changed price — is *learned* only when the same exact value
 was billed on two consecutive complete days; it is then stored with the first of
 those days as its effective date (`RATES#learned`) and overlaid here by
 `set_learned_rates`. Until then a turn on that model is priced at *nothing* — the
-caller records it without a cost and the dashboard says "요율 미등록", which is a
+caller records it without a cost and the dashboard says "가격 미등록", which is a
 true statement where a guess would not be — and the learned rate reprices it.
 
 Every rate therefore has an effective date, and `resolve_rate(model_id, day)`
@@ -34,7 +34,7 @@ import re
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, Iterable, List, Mapping, Optional, TypedDict
 
-RATE_CARD_VERSION = "2026-09-23.1"
+RATE_CARD_VERSION = "2026-10-18.1"
 
 TIERS = ("input", "output", "cache_read", "cache_write")
 # A second card for the calls whose prompt crossed the family's long-context
@@ -96,6 +96,32 @@ MODEL_RATES: Dict[str, Dict[str, Dict[str, Decimal]]] = {
             "cache_read": _D("0.11"), "cache_write": _D("1.375"),
         },
     },
+    # The 5.5 generation is every model a new stack offers by default, and
+    # until 2026-10-18 none of it was on the card: a fresh deployment priced no
+    # turn until the bill had shown each tier on two consecutive days (bst,
+    # 2026-10-18: the first turns had no cost). These are the rates the bill
+    # taught the us-east-1 stack, each confirmed by a regional line at x1.1.
+    "claude-sonnet-5-5": {
+        "global": {
+            "input": _D("2.00"), "output": _D("10.00"),
+            "cache_read": _D("0.10"), "cache_write": _D("2.50"),
+        },
+    },
+    "claude-opus-5-5": {
+        "global": {
+            "input": _D("4.00"), "output": _D("20.00"),
+            "cache_read": _D("0.20"), "cache_write": _D("5.00"),
+        },
+    },
+    "claude-haiku-5-5": {
+        "global": {
+            "input": _D("0.10"), "output": _D("0.50"),
+            "cache_read": _D("0.01"), "cache_write": _D("0.125"),
+            # Calls over LONG_CONTEXT_THRESHOLDS bill every tier on this card.
+            "long_input": _D("0.50"), "long_output": _D("2.50"),
+            "long_cache_read": _D("0.05"), "long_cache_write": _D("0.625"),
+        },
+    },
 }
 
 # Where each family's numbers were read, so a reviewer can re-check them.
@@ -104,6 +130,9 @@ RATE_SOURCES: Dict[str, str] = {
     "claude-opus-5": "Cost Explorer USE1-anthropic.claude-opus-5-mantle-* 2026-09-16..23",
     "claude-opus-4-8": "Cost Explorer USE1-anthropic.claude-opus-4-8-mantle-* 2026-09-01..23",
     "claude-haiku-4-5": "Price List AmazonBedrockService (regional rows) + CE global-standard rows",
+    "claude-sonnet-5-5": "Cost Explorer global-standard 2026-10-06..14 (input, cache read) + bill (output, cache write); regional 2.20/11.00 from 2026-10-03",
+    "claude-opus-5-5": "Bill 2026-09-23 (global); Cost Explorer regional 4.40/22.00/0.22/5.50 2026-09-23..24",
+    "claude-haiku-5-5": "Cost Explorer 2026-10-08..10, plain and long-ctx global-standard lines; regional x1.1",
 }
 
 REGIONAL_MULTIPLIER = _D("1.1")

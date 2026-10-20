@@ -12,6 +12,8 @@ import os
 import sys
 from decimal import Decimal
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -21,6 +23,13 @@ from data.model_rates import cost_micros, long_context_threshold, resolve_rate, 
 from models.common import StreamConfig, StreamRequest  # noqa: E402
 from services.billing_service import _tier_of, model_key  # noqa: E402
 from services.pricing_service import PricingService  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _an_unregistered_long_context_family(monkeypatch):
+    """These tests are about a family the static card does not price, so they
+    use a future one and give it the 100K split Haiku 5.5 has."""
+    monkeypatch.setitem(model_rates.LONG_CONTEXT_THRESHOLDS, "claude-haiku-6-1", 100_000)
 from services.rate_card_service import RateCardError, validate_entry  # noqa: E402
 from services.streaming_service import StreamingService  # noqa: E402
 from services.usage_service import UsageService  # noqa: E402
@@ -41,20 +50,20 @@ def _allow_every_model_this_file_uses(monkeypatch):
     checkout has none, and these tests are about pricing, not the allow-list."""
     import core.config as cfg
     monkeypatch.setattr(cfg, "ALLOWED_MODELS", [
-        "global.anthropic.claude-haiku-5-5",
-        "global.anthropic.claude-sonnet-5-5",
-        "global.anthropic.claude-opus-5-5",
+        "global.anthropic.claude-haiku-6-1",
+        "global.anthropic.claude-sonnet-6-1",
+        "global.anthropic.claude-opus-6-1",
     ])
 
 
-HAIKU55 = "global.anthropic.claude-haiku-5-5"
+HAIKU55 = "global.anthropic.claude-haiku-6-1"
 PLAIN = {"input": "0.10", "output": "0.50", "cache_read": "0.01", "cache_write": "0.125"}
 LONG = {"long_input": "0.50", "long_output": "2.50", "long_cache_read": "0.05", "long_cache_write": "0.625"}
 
 
 def install_haiku55(cards=(PLAIN, LONG)):
     set_learned_rates([
-        {"family": "claude-haiku-5-5", "routing": "global", "tier": tier,
+        {"family": "claude-haiku-6-1", "routing": "global", "tier": tier,
          "usd_per_1m": usd, "effective_from": "2026-10-08", "source": "test"}
         for card in cards for tier, usd in card.items()
     ])
@@ -69,8 +78,8 @@ def teardown_function(_):
 
 def test_only_a_family_with_a_long_card_has_a_threshold():
     assert long_context_threshold(HAIKU55) == 100_000
-    assert long_context_threshold("us.anthropic.claude-haiku-5-5") == 100_000
-    assert long_context_threshold("global.anthropic.claude-sonnet-5-5") is None
+    assert long_context_threshold("us.anthropic.claude-haiku-6-1") == 100_000
+    assert long_context_threshold("global.anthropic.claude-sonnet-6-1") is None
     assert long_context_threshold("global.anthropic.claude-haiku-4-5-20251001-v1:0") is None
     assert long_context_threshold(None) is None
 
@@ -111,14 +120,14 @@ def test_the_regional_derivation_carries_a_static_long_card_too(monkeypatch):
 
 
 def test_long_tiers_are_accepted_by_the_overlay_and_the_admin_form():
-    set_learned_rates([{"family": "claude-haiku-5-5", "routing": "global", "tier": "long_output",
+    set_learned_rates([{"family": "claude-haiku-6-1", "routing": "global", "tier": "long_output",
                         "usd_per_1m": "2.5", "effective_from": "2026-10-08"}])
     assert resolve_rate(HAIKU55, "2026-10-09")["usd_per_1m"] == {"long_output": Decimal("2.5")}
-    entry = validate_entry({"family": "claude-haiku-5-5", "routing": "global", "tier": "long_input",
+    entry = validate_entry({"family": "claude-haiku-6-1", "routing": "global", "tier": "long_input",
                             "usd_per_1m": "0.5", "effective_from": "2026-10-08"}, today="2026-10-10")
     assert entry["tier"] == "long_input"
     try:
-        validate_entry({"family": "claude-haiku-5-5", "routing": "global", "tier": "long_ctx_input",
+        validate_entry({"family": "claude-haiku-6-1", "routing": "global", "tier": "long_ctx_input",
                         "usd_per_1m": "0.5", "effective_from": "2026-10-08"}, today="2026-10-10")
     except RateCardError:
         pass
@@ -128,10 +137,10 @@ def test_long_tiers_are_accepted_by_the_overlay_and_the_admin_form():
 
 # --- the bill ---------------------------------------------------------------
 
-H55_IN = "USE1-anthropic.claude-haiku-5-5-mantle-input-tokens-global-standard"
-H55_OUT = "USE1-anthropic.claude-haiku-5-5-mantle-output-tokens-global-standard"
-H55_LONG_IN = "USE1-anthropic.claude-haiku-5-5-mantle-input-tokens-long-ctx-global-standard"
-H55_LONG_OUT = "USE1-anthropic.claude-haiku-5-5-mantle-output-tokens-long-ctx-global-standard"
+H55_IN = "USE1-anthropic.claude-haiku-6-1-mantle-input-tokens-global-standard"
+H55_OUT = "USE1-anthropic.claude-haiku-6-1-mantle-output-tokens-global-standard"
+H55_LONG_IN = "USE1-anthropic.claude-haiku-6-1-mantle-input-tokens-long-ctx-global-standard"
+H55_LONG_OUT = "USE1-anthropic.claude-haiku-6-1-mantle-output-tokens-long-ctx-global-standard"
 
 
 def test_a_long_context_line_is_its_own_tier_of_the_same_model():
@@ -152,10 +161,10 @@ def test_two_days_billed_only_long_teach_the_long_card_not_the_plain_one():
     ])).reconcile("2026-10-01", "2026-10-10", repository=repo, ledger_agent_days={})
     learned = learned_items(repo)
     assert set(learned) == {
-        "R#claude-haiku-5-5|global|long_input|2026-10-08",
-        "R#claude-haiku-5-5|global|long_output|2026-10-08",
+        "R#claude-haiku-6-1|global|long_input|2026-10-08",
+        "R#claude-haiku-6-1|global|long_output|2026-10-08",
     }
-    assert learned["R#claude-haiku-5-5|global|long_input|2026-10-08"]["usd_per_1m"] == "0.5000"
+    assert learned["R#claude-haiku-6-1|global|long_input|2026-10-08"]["usd_per_1m"] == "0.5000"
 
 
 def test_a_day_with_both_cards_keeps_each_rate_clean():
@@ -167,8 +176,8 @@ def test_a_day_with_both_cards_keeps_each_rate_clean():
         ("2026-10-10", []),
     ])).reconcile("2026-10-01", "2026-10-10", repository=repo, ledger_agent_days={})
     learned = learned_items(repo)
-    assert learned["R#claude-haiku-5-5|global|input|2026-10-08"]["usd_per_1m"] == "0.1000"
-    assert learned["R#claude-haiku-5-5|global|long_input|2026-10-08"]["usd_per_1m"] == "0.5000"
+    assert learned["R#claude-haiku-6-1|global|input|2026-10-08"]["usd_per_1m"] == "0.1000"
+    assert learned["R#claude-haiku-6-1|global|long_input|2026-10-08"]["usd_per_1m"] == "0.5000"
 
 
 class _PriceList:
@@ -188,8 +197,8 @@ class _PriceList:
 def test_the_price_list_reads_a_long_context_row_as_its_long_tier():
     svc = PricingService(region_name="us-east-1")
     svc._client = _PriceList([
-        ("USE1-anthropic.claude-haiku-5-5-mantle-input-tokens-long-ctx-global-standard", "0.0005000000"),
-        ("USE1-anthropic.claude-haiku-5-5-mantle-input-tokens-global-standard", "0.0001000000"),
+        ("USE1-anthropic.claude-haiku-6-1-mantle-input-tokens-long-ctx-global-standard", "0.0005000000"),
+        ("USE1-anthropic.claude-haiku-6-1-mantle-input-tokens-global-standard", "0.0001000000"),
     ])
     rows = {(r["tier"], r["usd_per_1m"]) for r in svc.bedrock_model_rates()}
     assert rows == {("long_input", "0.5"), ("input", "0.1")}
@@ -305,5 +314,13 @@ def test_the_stream_counts_only_the_calls_whose_prompt_crossed_the_threshold(mon
 
 
 def test_a_model_with_one_card_never_records_a_long_subset(monkeypatch):
-    turn = _drain(monkeypatch, "global.anthropic.claude-sonnet-5-5")
+    turn = _drain(monkeypatch, "global.anthropic.claude-sonnet-6-1")
     assert not any(turn["long_tokens"].values())
+
+
+def test_haiku_5_5_is_priced_on_both_cards_from_the_first_turn():
+    """A new stack's default fast model: plain and long card on the static card."""
+    rate = resolve_rate("global.anthropic.claude-haiku-5-5")
+    assert long_context_threshold("global.anthropic.claude-haiku-5-5") == 100_000
+    assert cost_micros({"input_tokens": 200_000, "long_input_tokens": 200_000}, rate) == 100_000
+    assert cost_micros({"input_tokens": 1_000_000}, rate) == 100_000

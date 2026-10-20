@@ -301,13 +301,25 @@ def test_an_aws_error_is_502_with_the_code_in_the_detail(client):
     from botocore.exceptions import ClientError
 
     http, _ = client(error=ClientError(
-        {"Error": {"Code": "ThrottlingException", "Message": "slow down"}}, "Ingest"
+        {"Error": {"Code": "AccessDeniedException", "Message": "no"}}, "Ingest"
     ))
 
     response = http.get("/api/knowledge")
 
     assert response.status_code == 502
-    assert "ThrottlingException" in response.json()["detail"]
+    assert "AccessDeniedException" in response.json()["detail"]
+
+
+def test_a_throttle_is_503_with_retry_after(client):
+    from botocore.exceptions import ClientError
+
+    http, _ = client(error=ClientError(
+        {"Error": {"Code": "ThrottlingException", "Message": "slow down"}}, "Ingest"
+    ))
+
+    response = http.get("/api/knowledge")
+
+    assert response.status_code == 503 and response.headers.get("retry-after") == "2"
 
 
 def test_the_source_bucket_listing_is_not_swallowed_by_the_key_route(client):

@@ -100,10 +100,13 @@ class Directory:
     def __init__(self, sizes=None, broken=False):
         self.sizes, self.broken = sizes or {}, broken
 
-    def group_members(self, team):
+    def team_sizes(self):
         if self.broken:
             raise RuntimeError("cognito down")
-        return [object()] * self.sizes.get(team, 0)
+        return dict(self.sizes)
+
+    def group_members(self, team):
+        raise AssertionError("one live ListUsersInGroup per team; read team_sizes() once instead")
 
 
 def test_series_are_dense_and_the_remainder_is_per_day(monkeypatch):

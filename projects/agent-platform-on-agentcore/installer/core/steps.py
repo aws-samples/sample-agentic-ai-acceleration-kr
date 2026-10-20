@@ -144,6 +144,13 @@ def build_plan(env: Env) -> Plan:
             probe=probe.tfvars_complete,
         ),
         Step(
+            id="capacity",
+            title="계정 한도 점검 (VPC · Elastic IP · AZ 별 NAT)",
+            requires=("tfvars",),
+            action=None,
+            probe=probe.network_capacity,
+        ),
+        Step(
             id="init",
             title="terraform init",
             requires=("backend", "tfvars"),
@@ -156,7 +163,7 @@ def build_plan(env: Env) -> Plan:
         Step(
             id="first_apply",
             title="1차 apply (서비스는 0으로, ECR 리포지토리 생성)",
-            requires=("init",),
+            requires=("init", "capacity"),
             # The probe's own flags: whatever tfvars says, the first apply and the
             # plan that judges it must agree on the images (probe.first_apply_vars).
             action=_tf(env, "apply", "-auto-approve", *probe.first_apply_vars(env)),

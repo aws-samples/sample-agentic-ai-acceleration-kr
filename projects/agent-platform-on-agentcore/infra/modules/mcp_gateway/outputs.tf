@@ -23,3 +23,8 @@ output "runtime_mcp_endpoints" {
   description = "Runtime MCP endpoints attached as targets (name => URL). The same URL goes in the MCP record's remote URL when registering the server in the Agent Registry."
   value       = local.runtime_mcp_endpoints
 }
+
+output "tools_ready" {
+  description = "Changes once the tools target carries the current tool list. Depend on it before naming those tools (Cedar policies validate action names against the gateway)."
+  value       = null_resource.target_tool_set.id
+}

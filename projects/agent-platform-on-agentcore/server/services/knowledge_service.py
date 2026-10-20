@@ -852,6 +852,10 @@ class KnowledgeService:
             return []
 
         def attaches(summary: Any) -> Optional[str]:
+            # A harness on its way out stops using the gateway with it; counting
+            # it made the delete that follows a harness delete a 409 (s15 smoke).
+            if str(getattr(summary, "status", "") or "").upper() == "DELETING":
+                return None
             try:
                 detail = self.harness.get_harness(summary.harness_id)
             except Exception as exc:

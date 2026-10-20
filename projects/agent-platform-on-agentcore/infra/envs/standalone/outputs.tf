@@ -3,6 +3,16 @@ output "alb_url" {
   value       = local.https_enabled ? "https://${local.public_host}" : "http://${module.ecs.alb_dns_name}"
 }
 
+output "project" {
+  description = "Name prefix of this stack. agent-runtime/scripts/deploy.sh reads it for the runtime name stem and its Platform tag."
+  value       = var.project
+}
+
+output "region" {
+  description = "Region this stack is deployed in; deploy.sh deploys runtimes here unless REGION_NAME says otherwise."
+  value       = var.region
+}
+
 output "ecr_repository_urls" {
   description = "Push the server/web images here, then set server_image / web_image and re-apply."
   value       = module.ecr.repository_urls

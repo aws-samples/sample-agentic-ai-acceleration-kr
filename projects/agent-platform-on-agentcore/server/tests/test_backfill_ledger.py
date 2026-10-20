@@ -324,11 +324,11 @@ def test_a_day_is_priced_from_its_events_first_and_the_timeline_for_the_rest():
     repo.items[("TURNS#2026-09", "T#t1:h1")] = {
         "pk": "TURNS#2026-09", "sk": "T#t1:h1", "turn_id": "t1:h1", "thread_id": "t1", "agent_record_id": "rec-1",
         "owner_sub": "sub-1", "started_at": "2026-09-20T08:59:00+00:00", "ended_at": "2026-09-20T09:00:00+00:00",
-        "status": "completed", "measured": True, "source": "stream", "model_id": "global.anthropic.claude-opus-5-5",
+        "status": "completed", "measured": True, "source": "stream", "model_id": "global.anthropic.claude-opus-6-1",
         "input_tokens": 200_000, "output_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0, "model_calls": 1,
     }
     run(repo, w["threads"], w["timelines"], today=w["today"], apply=True)
-    opus = repo.get("AGENT_MODELS#2026-09", "D#2026-09-20#A#rec-1#M#global.anthropic.claude-opus-5-5")
+    opus = repo.get("AGENT_MODELS#2026-09", "D#2026-09-20#A#rec-1#M#global.anthropic.claude-opus-6-1")
     sonnet = repo.get("AGENT_MODELS#2026-09", "D#2026-09-20#A#rec-1#M#global.anthropic.claude-sonnet-5")
     assert opus["turns"] == 1 and opus["unpriced_turns"] == 1 and opus["input_tokens"] == 200_000
     assert "model_cost_micros" not in opus

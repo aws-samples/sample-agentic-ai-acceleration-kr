@@ -20,6 +20,7 @@ from models.registry import (  # noqa: E402
     RegistryRecordSummary,
     SyncAgentsRequest,
 )
+from core.config import PLATFORM  # noqa: E402
 from services.agent_sync_service import AgentSyncService  # noqa: E402
 
 RUNTIME_ARN = "arn:aws:bedrock-agentcore:us-east-1:1:runtime/plain-1"
@@ -82,8 +83,17 @@ class FakeRegistry:
 
 
 class FakeHarness:
-    def __init__(self, harnesses=None):
+    def __init__(self, harnesses=None, platform_tags=None):
         self._harnesses = list(harnesses or [])
+        # arn -> Platform tag. Unlisted ARNs carry this deployment's tag, so the
+        # tests below that are not about ownership see every target as ours.
+        self._platform_tags = dict(platform_tags or {})
+
+    def platform_of(self, arn):
+        tag = self._platform_tags.get(arn, PLATFORM)
+        if isinstance(tag, Exception):
+            raise tag
+        return tag
 
     def list_harnesses(self):
         return list(self._harnesses)
@@ -120,7 +130,8 @@ def gateway(status="READY", authorizer_type="AWS_IAM", name="builtin_tools"):
     )
 
 
-def service(records=None, runtimes=None, harnesses=None, gateways=None, gateway_records=None):
+def service(records=None, runtimes=None, harnesses=None, gateways=None, gateway_records=None,
+            platform_tags=None):
     return AgentSyncService(
         registry=FakeRegistry(
             records=records,
@@ -128,7 +139,7 @@ def service(records=None, runtimes=None, harnesses=None, gateways=None, gateway_
             gateways=gateways,
             gateway_records=gateway_records,
         ),
-        harness=FakeHarness(harnesses=harnesses),
+        harness=FakeHarness(harnesses=harnesses, platform_tags=platform_tags),
     )
 
 
@@ -662,3 +673,39 @@ def test_sync_stamps_the_running_admin_as_owner_of_every_record():
     result = svc.sync(SyncAgentsRequest(), owner="admin@example.com")
     assert len(result.registered) == 2
     assert svc.registry.owners == ["admin@example.com", "admin@example.com"]
+
+
+# --- other projects in the same account ---------------------------------------
+
+FOREIGN_ARN = "arn:aws:bedrock-agentcore:us-east-1:1:runtime/sa_copilot-9"
+
+
+def test_bulk_sync_skips_another_projects_runtime():
+    """A shared account: a blanket sync must not make someone else's runtime a
+    chattable agent here (eight were, on the 2026-10-18 load-test stack)."""
+    svc = service(runtimes=[runtime(name="sa_copilot", arn=FOREIGN_ARN)],
+                  platform_tags={FOREIGN_ARN: None})
+    result = svc.sync(SyncAgentsRequest())
+
+    assert svc.registry.created == []
+    assert [t.name for t in result.skipped] == ["sa_copilot"]
+    assert result.skipped[0].foreign is True
+
+
+def test_bulk_sync_registers_by_name_prefix_without_reading_tags():
+    boom = RuntimeError("tags unreadable")
+    arn = "arn:aws:bedrock-agentcore:us-east-1:1:runtime/x"
+    svc = service(runtimes=[runtime(name=f"{PLATFORM}_default", arn=arn)], platform_tags={arn: boom})
+    assert len(svc.sync(SyncAgentsRequest()).registered) == 1
+
+
+def test_bulk_sync_fails_closed_when_tags_cannot_be_read():
+    svc = service(runtimes=[runtime()], platform_tags={RUNTIME_ARN: RuntimeError("AccessDenied")})
+    assert svc.sync(SyncAgentsRequest()).registered == []
+
+
+def test_naming_a_foreign_runtime_still_registers_it():
+    svc = service(runtimes=[runtime(name="sa_copilot", arn=FOREIGN_ARN)],
+                  platform_tags={FOREIGN_ARN: "other"})
+    result = svc.sync(SyncAgentsRequest(targets=["sa_copilot"]))
+    assert len(result.registered) == 1

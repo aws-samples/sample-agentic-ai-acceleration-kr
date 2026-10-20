@@ -1038,6 +1038,9 @@ export function useStream<T = any>(options: UseStreamOptions) {
         interruptBefore?: string[];
         interruptAfter?: string[];
         command?: any;
+        /** The id a new thread should get, when something already used it —
+         *  attachments uploaded before the first turn live under it. */
+        threadId?: string;
       }
     ) => {
       // Stop any existing stream
@@ -1120,7 +1123,8 @@ export function useStream<T = any>(options: UseStreamOptions) {
       // Use current thread ID or create new one
       // If threadId prop is null, always generate a new UUID (don't reuse ref)
       // This ensures we create a new thread when starting fresh
-      const targetThreadId = threadId ?? (currentThreadIdRef.current || randomId());
+      const targetThreadId =
+        threadId ?? options?.threadId ?? (currentThreadIdRef.current || randomId());
 
       // Claim the id before the request goes out, so that when it comes back as a
       // changed `threadId` prop the sync effect recognises it as this run's own

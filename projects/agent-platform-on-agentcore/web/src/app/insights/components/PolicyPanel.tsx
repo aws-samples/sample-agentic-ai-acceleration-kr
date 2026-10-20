@@ -169,108 +169,114 @@ function Policy({ data, agents }: { data: TeamInsights; agents: AgentUsageRow[] 
         </PlotCell>
       </PlotGrid>
 
-      <PlotCell>
-        <Plot title="팀 × 툴 거부" hint="어느 팀이 어느 툴에서 막혔는지입니다. 진할수록 많습니다.">
-          {matrix.tools.length === 0 ? (
-            <EmptyPlot label="이 기간 대화에서 확인된 정책 거부가 없습니다." />
-          ) : (
-            <div className="overflow-auto">
-              <table className="text-xs">
-                <thead>
-                  <tr className="text-muted-foreground">
-                    <th className="px-2 py-1 text-left font-medium">팀</th>
-                    {matrix.tools.map((tool) => (
-                      <th key={tool} className="px-2 py-1 text-center font-mono text-xxs font-medium" title={tool}>
-                        {toolLabel(tool)}
-                      </th>
-                    ))}
-                    <th className="px-2 py-1 text-right font-medium">합계</th>
-                  </tr>
-                </thead>
-                <tbody className="tabular-nums">
-                  {matrix.rows.map((row) => (
-                    <tr key={row.team}>
-                      <td className="whitespace-nowrap px-2 py-1 font-medium">{row.name}</td>
-                      {row.cells.map((n, i) => (
-                        <td key={matrix.tools[i]} className="p-0.5">
-                          <div
-                            className="flex h-7 min-w-14 items-center justify-center rounded"
-                            // A tint of the alert hue scaled to the hottest cell; zero is the bare surface.
-                            style={{
-                              backgroundColor:
-                                n > 0 ? `hsl(var(--chart-8) / ${0.15 + 0.6 * (n / matrix.max)})` : "hsl(var(--muted) / 0.4)",
-                            }}
-                          >
-                            {n > 0 ? n : ""}
-                          </div>
-                        </td>
+      {/* One row, not two bands: the matrix is as wide as the tools that were
+          denied (two or three columns live), and alone on a full-width band it
+          left most of the row empty. The event list takes the wider share
+          because it has six columns to the matrix's handful. */}
+      <div className="grid grid-cols-1 gap-px bg-border @3xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+        <PlotCell>
+          <Plot title="팀 × 툴 거부" hint="어느 팀이 어느 툴에서 막혔는지입니다. 진할수록 많습니다.">
+            {matrix.tools.length === 0 ? (
+              <EmptyPlot label="이 기간 대화에서 확인된 정책 거부가 없습니다." />
+            ) : (
+              <div className="max-h-[26rem] overflow-auto">
+                <table className="text-xs">
+                  <thead>
+                    <tr className="text-muted-foreground">
+                      <th className="px-2 py-1 text-left font-medium">팀</th>
+                      {matrix.tools.map((tool) => (
+                        <th key={tool} className="px-2 py-1 text-center font-mono text-xxs font-medium" title={tool}>
+                          {toolLabel(tool)}
+                        </th>
                       ))}
-                      <td className="px-2 py-1 text-right">{row.total}</td>
+                      <th className="px-2 py-1 text-right font-medium">합계</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Plot>
-      </PlotCell>
-
-      <PlotCell>
-        <Plot title="최근 정책 거부" hint="대화에서 확인된 거부 한 건이 한 줄입니다. 대화를 열어 어떤 요청이었는지 봅니다.">
-          {data.recent_denials.length === 0 ? (
-            <EmptyPlot label="거부 이벤트가 아직 없습니다." />
-          ) : (
-            <div className="max-h-64 overflow-auto rounded-md border border-border">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b border-border text-muted-foreground">
-                    <th className="whitespace-nowrap px-2 py-1 text-left font-medium">시각</th>
-                    <th className="whitespace-nowrap px-2 py-1 text-left font-medium">팀</th>
-                    <th className="whitespace-nowrap px-2 py-1 text-left font-medium">사용자</th>
-                    <th className="whitespace-nowrap px-2 py-1 text-left font-medium">에이전트</th>
-                    <th className="whitespace-nowrap px-2 py-1 text-left font-medium">툴</th>
-                    <th className="whitespace-nowrap px-2 py-1 text-right font-medium">대화</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.recent_denials.map((e, i) => {
-                    const agent = nameOf.get(e.agent_record_id) ?? e.agent_record_id ?? "—";
-                    return (
-                      <tr key={`${e.at}#${i}`} className="border-b border-border/50 last:border-0">
-                        <td className="whitespace-nowrap px-2 py-1 tabular-nums">{eventTime(e.at)}</td>
-                        <td className="whitespace-nowrap px-2 py-1">{e.team ? labelOf.get(e.team) ?? e.team : "미귀속"}</td>
-                        <td className="whitespace-nowrap px-2 py-1 font-mono text-xxs">
-                          {e.owner_sub ? subjectLabel(e.owner_sub, data.subjects) : "—"}
-                        </td>
-                        <td className="max-w-40 truncate px-2 py-1" title={agent}>
-                          {agent}
-                        </td>
-                        <td className="px-2 py-1 font-mono text-xxs" title={e.tool_name}>
-                          {toolLabel(e.tool_name)}
-                        </td>
-                        <td className="whitespace-nowrap px-2 py-1 text-right">
-                          {e.thread_id ? (
-                            <a
-                              className="text-info underline"
-                              href={`/?threadId=${encodeURIComponent(e.thread_id)}`}
-                              target="_blank"
-                              rel="noreferrer"
+                  </thead>
+                  <tbody className="tabular-nums">
+                    {matrix.rows.map((row) => (
+                      <tr key={row.team}>
+                        <td className="whitespace-nowrap px-2 py-1 font-medium">{row.name}</td>
+                        {row.cells.map((n, i) => (
+                          <td key={matrix.tools[i]} className="p-0.5">
+                            <div
+                              className="flex h-7 min-w-14 items-center justify-center rounded"
+                              // A tint of the alert hue scaled to the hottest cell; zero is the bare surface.
+                              style={{
+                                backgroundColor:
+                                  n > 0 ? `hsl(var(--chart-8) / ${0.15 + 0.6 * (n / matrix.max)})` : "hsl(var(--muted) / 0.4)",
+                              }}
                             >
-                              열기
-                            </a>
-                          ) : (
-                            "—"
-                          )}
-                        </td>
+                              {n > 0 ? n : ""}
+                            </div>
+                          </td>
+                        ))}
+                        <td className="px-2 py-1 text-right">{row.total}</td>
                       </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Plot>
-      </PlotCell>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Plot>
+        </PlotCell>
+
+        <PlotCell>
+          <Plot title="최근 정책 거부" hint="대화에서 확인된 거부 한 건이 한 줄입니다. 대화를 열어 어떤 요청이었는지 봅니다.">
+            {data.recent_denials.length === 0 ? (
+              <EmptyPlot label="거부 이벤트가 아직 없습니다." />
+            ) : (
+              <div className="max-h-64 overflow-auto rounded-md border border-border">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-border text-muted-foreground">
+                      <th className="whitespace-nowrap px-2 py-1 text-left font-medium">시각</th>
+                      <th className="whitespace-nowrap px-2 py-1 text-left font-medium">팀</th>
+                      <th className="whitespace-nowrap px-2 py-1 text-left font-medium">사용자</th>
+                      <th className="whitespace-nowrap px-2 py-1 text-left font-medium">에이전트</th>
+                      <th className="whitespace-nowrap px-2 py-1 text-left font-medium">툴</th>
+                      <th className="whitespace-nowrap px-2 py-1 text-right font-medium">대화</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.recent_denials.map((e, i) => {
+                      const agent = nameOf.get(e.agent_record_id) ?? e.agent_record_id ?? "—";
+                      return (
+                        <tr key={`${e.at}#${i}`} className="border-b border-border/50 last:border-0">
+                          <td className="whitespace-nowrap px-2 py-1 tabular-nums">{eventTime(e.at)}</td>
+                          <td className="whitespace-nowrap px-2 py-1">{e.team ? labelOf.get(e.team) ?? e.team : "미귀속"}</td>
+                          <td className="whitespace-nowrap px-2 py-1 font-mono text-xxs">
+                            {e.owner_sub ? subjectLabel(e.owner_sub, data.subjects) : "—"}
+                          </td>
+                          <td className="max-w-40 truncate px-2 py-1" title={agent}>
+                            {agent}
+                          </td>
+                          <td className="px-2 py-1 font-mono text-xxs" title={e.tool_name}>
+                            {toolLabel(e.tool_name)}
+                          </td>
+                          <td className="whitespace-nowrap px-2 py-1 text-right">
+                            {e.thread_id ? (
+                              <a
+                                className="text-info underline"
+                                href={`/?threadId=${encodeURIComponent(e.thread_id)}`}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                열기
+                              </a>
+                            ) : (
+                              "—"
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Plot>
+        </PlotCell>
+      </div>
     </PlotStack>
   );
 }

@@ -234,7 +234,7 @@ export function RecentTurns({ turns }: { turns: RecordTurn[] }) {
                 labelStyle={TOOLTIP_LABEL}
                 itemStyle={TOOLTIP_ITEM}
                 formatter={(value) => [
-                  typeof value === "number" ? `$${value.toFixed(4)}` : "요율 미등록",
+                  typeof value === "number" ? `$${value.toFixed(4)}` : "가격 미등록",
                   "비용",
                 ]}
                 labelFormatter={(_, payload) => tooltipTurn(payload)}

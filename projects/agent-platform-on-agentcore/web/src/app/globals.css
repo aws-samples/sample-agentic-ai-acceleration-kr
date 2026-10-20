@@ -17,6 +17,19 @@
 @layer base {
   :root {
     /*
+     * OS-installed faces only — no web font is downloaded. Each stack names the
+     * platform's bundled face that carries both Latin and Hangul, so one family
+     * renders both scripts and they match in weight and width. Malgun Gothic
+     * sits ahead of Segoe UI on purpose: Segoe has no Hangul, and listing it
+     * first gave Latin in Segoe and Korean in Malgun on Windows.
+     */
+    --font-sans: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo",
+      "Malgun Gothic", "Segoe UI", "Noto Sans KR", "Noto Sans CJK KR", Roboto,
+      "Helvetica Neue", Arial;
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas,
+      "Liberation Mono";
+
+    /*
      * Brand: slate blue-grey. 600 is `#3F5266` exactly — the odd-looking 23.6%
      * / 32.4% is what round-trips to that hex, so don't "tidy" it to 24%/32%
      * (that lands on #3E5165).
@@ -421,6 +434,21 @@ button {
 }
 button:disabled {
   cursor: not-allowed;
+}
+
+/*
+ * recharts positions its tooltip and its legend as sibling `absolute` boxes
+ * with no z-index, so they paint in DOM order — legend last. A tooltip that
+ * outgrows the plot (the stacked team-cost chart lists nine series: 274px of
+ * tooltip over a 208px plot) is therefore drawn *under* the legend, and under
+ * the next chart's SVG when it reaches that far. The box is fully opaque; it
+ * only looks translucent because other content is painted on top of it.
+ * recharts sets position/visibility/transform inline but never z-index, so one
+ * rule lifts every chart tooltip in the app. 10 keeps it under the `z-50`
+ * overlays (dialogs, popovers, menus).
+ */
+.recharts-tooltip-wrapper {
+  z-index: 10;
 }
 
 /* Tabular figures wherever numbers are compared down a column. */

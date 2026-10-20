@@ -32,6 +32,23 @@ class StubThreadService:
         )
 
 
+class _Url:
+    def __init__(self, path):
+        self.path = path
+
+
+class FakeRequest:
+    """What the attach route reads off a request: headers and the path."""
+
+    def __init__(self, path, headers=None):
+        self.url = _Url(path)
+        self.headers = headers or {}
+
+
+def request(thread_id, headers=None):
+    return FakeRequest(f"/threads/{thread_id}/runs/stream", headers)
+
+
 class StubStreamingService:
     def __init__(self):
         self.run_broker = RunBroker()
@@ -69,7 +86,7 @@ def test_attaching_replays_the_run_so_far():
     async def scenario():
         streaming.run_broker.start("t-1", two_frames_then_hang())
         await asyncio.sleep(0.05)  # both frames are out before anyone listens
-        response = thread_routes.attach_thread_run("t-1", ALICE)
+        response = await thread_routes.attach_thread_run("t-1", request("t-1"), ALICE)
         assert response.status_code == 200
         assert response.media_type == "text/event-stream"
         assert response.headers["cache-control"] == "no-cache, no-transform"
@@ -159,7 +176,7 @@ def test_attaching_sends_the_baseline_before_the_replay():
         reservation = streaming.run_broker.reserve("t-1", owner_sub=ALICE.sub)
         streaming.run_broker.launch(reservation, two_frames_then_hang(), ["u-1", "a-1", "u-2"])
         await asyncio.sleep(0.05)
-        response = thread_routes.attach_thread_run("t-1", ALICE)
+        response = await thread_routes.attach_thread_run("t-1", request("t-1"), ALICE)
         agen = response.body_iterator.__aiter__()
         first = await agen.__anext__()
         second = await agen.__anext__()

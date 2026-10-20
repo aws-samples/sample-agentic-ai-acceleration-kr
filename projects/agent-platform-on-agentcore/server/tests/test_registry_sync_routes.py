@@ -8,6 +8,8 @@ import os
 import sys
 
 import pytest
+
+from core.config import PLATFORM
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -72,6 +74,9 @@ class StubRegistry:
 class StubHarness:
     def __init__(self, error=None):
         self._error = error
+
+    def platform_of(self, arn):
+        return PLATFORM
 
     def list_harnesses(self):
         if self._error:

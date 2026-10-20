@@ -39,7 +39,7 @@ import type { LeaderboardRow } from "@/lib/insights";
  * published rate. The bill is not a column — it lags two days; the AgentCore
  * 청구 비용 widget shows it per agent, and its check on the Runtime figure is a
  * footnote under 비용 구성.
- * "요율 미등록" says why a cost cell has no number instead of showing $0; a dash
+ * "가격 미등록" says why a cost cell has no number instead of showing $0; a dash
  * is a figure that could not be stated.
  */
 const COLUMNS: {
@@ -294,10 +294,13 @@ export function AgentLeaderboard({
        * second time, so the chart is gone and the column bar stayed: it is the one
        * that survives a re-sort by cost or latency.
        */}
-      <div className="overflow-x-auto rounded-md border border-border">
+      {/* Capped and scrolled with the header pinned: a row per agent made the
+          card as tall as the registry, and the drill-down a click opens below
+          sat a screen or more away from the row that opened it. */}
+      <div className="max-h-[26rem] overflow-auto rounded-md border border-border">
         <table className="w-full text-xs">
-          <thead>
-            <tr className="border-b border-border text-muted-foreground">
+          <thead className="sticky top-0 z-[1] bg-card shadow-[inset_0_-1px_0_hsl(var(--border))]">
+            <tr className="text-muted-foreground">
               {COLUMNS.map((column) => (
                 <th
                   key={column.key as string}

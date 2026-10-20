@@ -92,7 +92,7 @@ def load_mcp_server_presets() -> List[Dict[str, Any]]:
 
 
 @router.get("/servers")
-async def get_mcp_server_presets(
+def get_mcp_server_presets(
     category: Optional[str] = Query(None, description="Filter by category (aws-labs, community, official)"),
     tag: Optional[str] = Query(None, description="Filter by tag"),
     _: AuthUser = Depends(require_admin),
@@ -264,7 +264,7 @@ def load_tools_from_mcp_server(server_name: str, server_config: Dict[str, Any]) 
 
 
 @router.post("/tools", response_model=MCPToolsListResponse)
-async def list_mcp_tools(
+def list_mcp_tools(
     request: MCPServerConfigRequest, _: AuthUser = Depends(require_admin)
 ):
     """
@@ -304,7 +304,7 @@ async def list_mcp_tools(
 
 
 @router.post("/tools/call", response_model=MCPToolCallResponse)
-async def call_mcp_tool(
+def call_mcp_tool(
     request: MCPToolCallRequest, _: AuthUser = Depends(require_admin)
 ):
     """
@@ -406,7 +406,7 @@ def _explain(cause: str) -> str:
 
 
 @router.get("/records/{record_id:path}/tools", response_model=MCPRecordToolsResponse)
-async def list_record_tools(record_id: str, _: AuthUser = Depends(require_admin)):
+def list_record_tools(record_id: str, _: AuthUser = Depends(require_admin)):
     """Live tools/list against a registered MCP record.
 
     Goes through the MCP Apps relay rather than MCPClientManager because that is
@@ -433,7 +433,7 @@ async def list_record_tools(record_id: str, _: AuthUser = Depends(require_admin)
 
 
 @router.post("/records/tools/call", response_model=MCPToolCallResponse)
-async def call_record_tool(
+def call_record_tool(
     request: MCPRecordToolCallRequest, _: AuthUser = Depends(require_admin)
 ):
     """Call one tool on a registered MCP record.
@@ -464,7 +464,7 @@ async def call_record_tool(
 
 
 @router.post("/cognito/login", response_model=CognitoLoginResponse)
-async def cognito_login(
+def cognito_login(
     request: CognitoLoginRequest, _: AuthUser = Depends(require_admin)
 ):
     """

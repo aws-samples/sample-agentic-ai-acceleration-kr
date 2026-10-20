@@ -228,6 +228,23 @@ def test_renaming_updates_the_descriptor_copy_of_the_name():
     assert card["name"] == "agent_two"
 
 
+def test_mcp_rename_keeps_the_server_json_namespace():
+    # server.json requires "namespace/name". Overwriting the descriptor copy with
+    # the bare display name made every MCP rename a ValidationException.
+    service, stub = _service(_mcp_detail())
+    service.update_record("rec-2", UpdateRecordRequest(name="warehouse-sql"))
+    assert stub.calls[0]["displayName"] == {"optionalValue": "warehouse-sql"}
+    server = json.loads(_sent_descriptor(stub)["mcpServer"]["data"])
+    assert server["name"] == "acme/warehouse-sql"
+
+
+def test_mcp_rename_to_a_namespaced_name_is_sent_as_is():
+    service, stub = _service(_mcp_detail())
+    service.update_record("rec-2", UpdateRecordRequest(name="corp/warehouse-sql"))
+    server = json.loads(_sent_descriptor(stub)["mcpServer"]["data"])
+    assert server["name"] == "corp/warehouse-sql"
+
+
 def test_content_override_wins_over_the_existing_payload():
     service, stub = _service(_mcp_detail())
     service.update_record(

@@ -67,7 +67,7 @@ def test_full_stack_plan_is_the_whole_procedure_in_order():
     ids = [s.id for s in stepsmod.build_plan(FULL).steps]
     assert ids == [
         "preflight", "bootstrap", "backend", "transaction_search", "tfvars",
-        "init", "first_apply", "images", "second_apply", "memory", "local_env",
+        "capacity", "init", "first_apply", "images", "second_apply", "memory", "local_env",
     ]
 
 

@@ -228,7 +228,7 @@ resource "awscc_bedrockagentcore_gateway" "this" {
 
 # Only when an engine is attached; re-sleeps whenever the role policy changes.
 resource "time_sleep" "gateway_role_policy" {
-  count           = var.policy_engine_arn == "" ? 0 : 1
+  count           = var.attach_policy_engine ? 1 : 0
   create_duration = "30s"
   depends_on      = [aws_iam_role_policy.gateway]
   triggers = {
@@ -256,13 +256,22 @@ resource "null_resource" "gateway_tags" {
 # --- Gateway target ----------------------------------------------------------
 
 # The workshop's mock team tools return canned approvals and salary bands, so
-# they ship only when asked for. Not a trigger: toggling demo_tools on an
-# existing stack needs `-replace` of this target (see README).
+# they ship only when asked for. Not a trigger of `target` (that would delete and
+# recreate the live target); `target_tool_set` below re-runs the upsert in place
+# when the flag flips.
 locals {
   drop_demo_tools = var.demo_tools ? [] : [
     "--drop-tool", "approve_expense",
     "--drop-tool", "lookup_salary",
   ]
+  target_upsert_command = join(" ", concat([
+    "python3", local.script, "upsert",
+    "--gateway-id", awscc_bedrockagentcore_gateway.this.gateway_identifier,
+    "--name", local.target_name,
+    "--lambda-arn", aws_lambda_function.tools.arn,
+    "--schema", local.tool_schema,
+    "--region", var.region,
+  ], local.drop_demo_tools))
 }
 
 resource "null_resource" "target" {
@@ -282,14 +291,7 @@ resource "null_resource" "target" {
   }
 
   provisioner "local-exec" {
-    command = join(" ", concat([
-      "python3", local.script, "upsert",
-      "--gateway-id", awscc_bedrockagentcore_gateway.this.gateway_identifier,
-      "--name", local.target_name,
-      "--lambda-arn", aws_lambda_function.tools.arn,
-      "--schema", local.tool_schema,
-      "--region", var.region,
-    ], local.drop_demo_tools))
+    command = local.target_upsert_command
   }
 
   provisioner "local-exec" {
@@ -298,6 +300,22 @@ resource "null_resource" "target" {
   }
 
   depends_on = [aws_iam_role_policy.gateway, aws_lambda_permission.gateway]
+}
+
+# Flipping demo_tools used to need `apply -replace` of the target; without it the
+# gateway kept the old tool list and the platform forbid naming the mock tools
+# failed validation ("unrecognized action"), which Terraform reported only as a
+# Cloud Control InternalFailure after seven minutes (2026-10-18). Re-running the
+# upsert updates the existing target in place — no delete, no new target id.
+resource "null_resource" "target_tool_set" {
+  triggers = {
+    demo_tools = tostring(var.demo_tools)
+    target     = null_resource.target.id
+  }
+
+  provisioner "local-exec" {
+    command = local.target_upsert_command
+  }
 }
 
 # --- Web search target (native connector) ------------------------------------
@@ -361,10 +379,11 @@ locals {
 resource "null_resource" "runtime_mcp_target" {
   for_each = local.runtime_mcp_endpoints
   triggers = {
-    gateway_id  = awscc_bedrockagentcore_gateway.this.gateway_identifier
-    endpoint    = each.value
-    script_sha  = filesha256(local.script)
-    target_name = each.key
+    gateway_id   = awscc_bedrockagentcore_gateway.this.gateway_identifier
+    endpoint     = each.value
+    listing_mode = var.runtime_mcp_listing_mode
+    script_sha   = filesha256(local.script)
+    target_name  = each.key
     delete_command = join(" ", [
       "python3", abspath(local.script), "delete",
       "--gateway-id", awscc_bedrockagentcore_gateway.this.gateway_identifier,
@@ -379,6 +398,7 @@ resource "null_resource" "runtime_mcp_target" {
       "--gateway-id", awscc_bedrockagentcore_gateway.this.gateway_identifier,
       "--name", each.key,
       "--mcp-endpoint", each.value,
+      "--listing-mode", var.runtime_mcp_listing_mode,
       "--region", var.region,
     ])
   }

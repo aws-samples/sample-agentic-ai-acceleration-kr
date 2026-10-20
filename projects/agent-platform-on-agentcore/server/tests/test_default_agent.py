@@ -104,3 +104,24 @@ def test_a_deprecated_or_unapproved_record_is_not_the_default():
     assert is_default_record(approved, RUNTIME) is True
     assert default_record(_Registry([deprecated, draft, approved]), RUNTIME).record_id == "ok"
     assert [r.is_default for r in mark_default([deprecated, approved], RUNTIME)] == [False, True]
+
+
+def _rec(record_id, name, created_at=None):
+    return RegistryRecordSummary(record_id=record_id, name=name, agent_runtime_arn=RUNTIME,
+                                 status="APPROVED", created_at=created_at)
+
+
+def test_many_records_on_the_default_runtime_flag_only_the_one_named_after_it():
+    # bst 2026-10-18: 91 records pointed at the default runtime and all were
+    # flagged; the web opened every new chat on whichever came first.
+    records = [_rec("r1", "load_agent_075", "2026-10-01"), _rec("r2", "bap_default", "2026-10-05"),
+               _rec("r3", "load_agent_018", "2026-09-01")]
+    out = mark_default(records, RUNTIME)
+    assert [r.record_id for r in out if r.is_default] == ["r2"]
+    assert default_record(_Registry(records), RUNTIME).record_id == "r2"
+
+
+def test_without_the_runtime_named_record_the_first_registered_wins_in_any_order():
+    records = [_rec("r1", "team_copy", "2026-10-01"), _rec("r3", "other_copy", "2026-09-01")]
+    for order in (records, list(reversed(records))):
+        assert [r.record_id for r in mark_default(order, RUNTIME) if r.is_default] == ["r3"]

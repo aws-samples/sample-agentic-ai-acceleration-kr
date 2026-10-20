@@ -8,11 +8,13 @@ from repositories.usage_repository import UsageRepository
 from repositories.prefs_repository import PrefsRepository
 from repositories.user_repository import UserRepository
 from repositories.team_repository import TeamRepository
+from repositories.run_repository import RunRepository
 from services.artifact_service import ArtifactService
 from services.thread_service import ThreadService
 from services.mcp_apps_service import shared_relay
 from services.streaming_service import StreamingService
 from services.run_broker import RunBroker
+from services.run_leases import RunLeases
 from services.harness_output_service import HarnessOutputService
 from services.artifact_preview_service import ArtifactPreviewService
 from services.knowledge_provisioner import KnowledgeProvisioner
@@ -39,6 +41,10 @@ from agents.agentcore_client import AgentCoreClient
 from core.config import (
     MCP_GATEWAY_ID,
     TEAMS_TABLE,
+    RUNS_TABLE,
+    RUN_LEASE_SECONDS,
+    RUN_HEARTBEAT_SECONDS,
+    SERVER_PORT,
     COGNITO_REGION,
     COGNITO_USER_POOL_ID,
     ARTIFACTS_BUCKET,
@@ -61,6 +67,8 @@ from core.config import (
     MCP_GATEWAY_ARN,
     TEAM_SHARED_ACTIONS,
     SKILLS_BUCKET,
+    ALLOWED_MODELS,
+    BEDROCK_MODEL_ID,
 )
 import boto3
 
@@ -70,8 +78,9 @@ thread_repository = ThreadRepository(
     region_name=AWS_REGION
 )
 
-# The base repository raises when the table is missing, so only construct it once
-# artifact storage is configured. Without it artifacts still stream to the UI,
+# Every repository built here is verified at startup (`verify_tables`), and a
+# missing table stops the server, so only construct it once artifact storage is
+# configured. Without it artifacts still stream to the UI,
 # just unpersisted.
 artifact_repository = (
     ArtifactRepository(table_name=ARTIFACTS_TABLE, region_name=AWS_REGION)
@@ -111,9 +120,9 @@ harness_output_service = HarnessOutputService(
     preview_service=artifact_preview_service,
 )
 
-# Same conditional construction as artifact_repository: the base repository probes
-# its table at import time, so without the table name the container would fail to
-# start instead of reporting the feature as unconfigured.
+# Same conditional construction as artifact_repository: without the table name the
+# startup check would fail the container instead of reporting the feature as
+# unconfigured.
 usage_repository = (
     UsageRepository(table_name=USAGE_TABLE, region_name=AWS_REGION)
     if USAGE_TABLE
@@ -147,8 +156,20 @@ evaluation_service = EvaluationService(region_name=AWS_REGION)
 # stamped with the MCP record that serves it: the runtime knows only the ui:// URI,
 # and the relay resolves endpoints from records alone.
 # One broker for the process: the routes that attach to and cancel runs must see
-# the same runs the start route created. See services/run_broker.py.
-run_broker = RunBroker()
+# the same runs the start route created. See services/run_broker.py. With
+# RUNS_TABLE it also leases each run so other server tasks see it
+# (services/run_leases.py).
+run_repository = (
+    RunRepository(table_name=RUNS_TABLE, region_name=AWS_REGION) if RUNS_TABLE else None
+)
+run_broker = RunBroker(
+    leases=(
+        RunLeases(run_repository, port=SERVER_PORT, lease_seconds=RUN_LEASE_SECONDS)
+        if run_repository is not None
+        else None
+    ),
+    heartbeat_seconds=RUN_HEARTBEAT_SECONDS,
+)
 
 streaming_service = StreamingService(
     thread_service=thread_service,
@@ -160,9 +181,9 @@ streaming_service = StreamingService(
     run_broker=run_broker,
 )
 
-# Same conditional construction as artifact_repository: the base repository
-# probes its table at import time, so without the table name the container would
-# fail to start instead of reporting the feature as unconfigured.
+# Same conditional construction as artifact_repository: without the table name the
+# startup check would fail the container instead of reporting the feature as
+# unconfigured.
 knowledge_repository = (
     KnowledgeRepository(table_name=KNOWLEDGE_TABLE, region_name=AWS_REGION)
     if KNOWLEDGE_TABLE
@@ -175,6 +196,9 @@ knowledge_provisioner = KnowledgeProvisioner(
     service_role_arn=KB_SERVICE_ROLE_ARN,
     gateway_role_arn=KB_GATEWAY_ROLE_ARN,
 )
+
+if knowledge_repository is not None:
+    usage_service.knowledge_bases = knowledge_repository.all_records
 
 knowledge_service = KnowledgeService(
     repository=knowledge_repository,
@@ -189,9 +213,8 @@ knowledge_service = KnowledgeService(
 )
 
 # Per-user preferences: same conditional construction as artifact_repository.
-# The base repository probes its table at import time, so without the table name
-# the container would fail to start instead of reporting the feature as
-# unconfigured. A degraded layout service operates in unpersisted mode.
+# Without the table name the startup check would fail the container instead of
+# reporting the feature as unconfigured. A degraded layout service operates in unpersisted mode.
 prefs_repository = (
     PrefsRepository(table_name=PREFS_TABLE, region_name=AWS_REGION)
     if PREFS_TABLE
@@ -241,7 +264,9 @@ audit_service = AuditService(repository=team_repository)
 
 # The rate card an admin can read into and fill. Shares the usage service (the
 # overlay lives in its table and it reprices) and the Price List client.
-rate_card_service = RateCardService(usage=usage_service, pricing=pricing_service)
+rate_card_service = RateCardService(
+    usage=usage_service, pricing=pricing_service, offered_models=[BEDROCK_MODEL_ID, *ALLOWED_MODELS]
+)
 
 # The collector shares the usage repository and the pricing cache. It is only
 # *constructed* here; `main.py`'s lifespan decides whether it runs, so importing
@@ -283,6 +308,9 @@ org_directory_service = OrgDirectoryService(
     user_pool_id=COGNITO_USER_POOL_ID,
     users=user_repository,
     entra_teams=team_service.teams_for_entra_groups,
+    # The teams table carries the directory version every task checks its
+    # snapshot against (None without a table: one process, nothing to share).
+    version=team_repository,
 )
 # Registry records are stamped with their registering user's e-mail; a Cognito
 # access token only names the sub, so the directory resolves it.
@@ -315,3 +343,24 @@ if collector_service is not None:
         # A harness composed from the UI gets its delivery the moment its companion
         # runtime is READY, rather than on the collector's next pass.
         usage_service.harness.on_runtime_ready = observability_service.ensure_usage_logs
+
+
+def verify_tables() -> None:
+    """Probe every configured table once; raise on the first that is unusable.
+
+    Called from the server's lifespan, not at import: importing this module makes
+    no AWS call, so tests and scripts load it without credentials, while a task
+    with a wrong table name or a missing DescribeTable grant still never comes up.
+    """
+    for repository in (
+        thread_repository,
+        artifact_repository,
+        usage_repository,
+        knowledge_repository,
+        prefs_repository,
+        team_repository,
+        user_repository,
+        run_repository,
+    ):
+        if repository is not None:
+            repository.verify()

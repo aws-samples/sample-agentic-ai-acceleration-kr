@@ -3,6 +3,8 @@ AgentCore Runtime client for connecting to AgentCore Runtime agents
 AgentCore events are passed through as-is, similar to Strands Agent SDK
 """
 import json
+import os
+import random
 import boto3
 import asyncio
 import hashlib
@@ -54,7 +56,12 @@ def stream_boto_config() -> BotoConfig:
 #
 # FastAPI's own threadpool, which runs the sync routes, is anyio's and is
 # separate — a stream cannot starve `GET /threads` by occupying this one.
-_STREAM_READ_THREADS = 64
+#
+# One thread per streaming turn for its whole length, so this is the server's
+# ceiling on concurrent chats. It was 64, and at 300 concurrent turns the rest
+# queued for a thread before their first token (bst load test, 2026-10-18).
+# These threads only wait on sockets, so the ceiling is set by memory, not CPU.
+_STREAM_READ_THREADS = int(os.getenv("STREAM_READ_THREADS", "512"))
 _stream_executor = ThreadPoolExecutor(
     max_workers=_STREAM_READ_THREADS, thread_name_prefix="agentcore-stream"
 )
@@ -77,6 +84,39 @@ async def call_off_loop(fn: Any, **kwargs: Any) -> Any:
     """
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(_stream_executor, lambda: fn(**kwargs))
+
+
+# Errors that mean "not now" rather than "no": the request was refused before
+# anything ran, so sending it again cannot run a turn twice.
+_RETRYABLE_OPEN_ERRORS = {"ThrottlingException", "TooManyRequestsException", "ServiceQuotaExceededException"}
+# Eight attempts wait up to ~30 s in total. The 25/s session-creation cap is
+# per account — every runtime in it, MCP servers behind gateways included — so
+# a burst of 300 new chats stayed throttled past 15 s (2026-10-18). The SSE
+# heartbeat keeps the response alive meanwhile.
+_OPEN_ATTEMPTS = int(os.getenv("STREAM_OPEN_ATTEMPTS", "8"))
+
+
+async def open_stream_with_retry(fn: Any, **kwargs: Any) -> Any:
+    """`call_off_loop` for the call that opens a turn's stream, retried with
+    jittered backoff when AgentCore throttles it.
+
+    The streaming client has botocore retries off (a retried read mid-stream
+    would replay a turn), so a throttled open reached the user as an error
+    frame: "New Runtime session creation" is capped at 25/s per account and 300
+    chats started together hit it (bst load test, 2026-10-18). Only the open is
+    retried, and only for throttling, which AgentCore answers before running
+    anything.
+    """
+    for attempt in range(1, _OPEN_ATTEMPTS + 1):
+        try:
+            return await call_off_loop(fn, **kwargs)
+        except ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code", "")
+            if code not in _RETRYABLE_OPEN_ERRORS or attempt == _OPEN_ATTEMPTS:
+                raise
+            delay = min(8.0, 0.5 * 2 ** (attempt - 1)) * (0.5 + random.random())
+            logger.warning("Stream open throttled (%s), retry %d/%d in %.1fs", code, attempt, _OPEN_ATTEMPTS - 1, delay)
+            await asyncio.sleep(delay)
 
 
 async def iter_blocking_stream(blocking_iterable: Any) -> AsyncIterator[Any]:
@@ -782,7 +822,7 @@ class AgentCoreClient(AgentClient):
             # Invoke AgentCore Runtime - this returns a streaming response
             logger.info(f"Invoking AgentCore with ARN: {agent_runtime_arn}, qualifier: {qualifier}")
 
-            response = await call_off_loop(self.agentcore_client.invoke_agent_runtime, **invoke_params)
+            response = await open_stream_with_retry(self.agentcore_client.invoke_agent_runtime, **invoke_params)
 
             # Check content type
             content_type = response.get("contentType", "")
