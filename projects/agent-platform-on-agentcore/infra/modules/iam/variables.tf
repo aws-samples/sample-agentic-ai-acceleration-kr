@@ -112,3 +112,14 @@ variable "gateway_arn" {
   type        = string
   default     = ""
 }
+
+variable "create_slack_policy" {
+  description = "Attach the Slack DM integration managed policy (its table, its secrets, the Cognito reads that map a Slack user). A plain bool so `count` is known at plan time; mirrors slack_integration_enabled."
+  type        = bool
+  default     = false
+}
+
+variable "slack_table_arn" {
+  description = "Slack DM integration table ARN. Required even with the feature off: the table always exists."
+  type        = string
+}

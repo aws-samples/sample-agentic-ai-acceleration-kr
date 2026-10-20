@@ -41,6 +41,8 @@ OUTPUTS = {
     "harness_execution_role_arn": "arn:aws:iam::1:role/harness",
     "mcp_gateway_url": "https://gw.example/mcp",
     "usage_table_name": "bap-usage",
+    "slack_table_name": "bap-slack",
+    "slack_secret_prefix": "bap/slack",
     "guardrail_id": "gr-abc123",
     "guardrail_version": "1",
     "agent_runtime_role_arn": "arn:aws:iam::1:role/runtime",
@@ -257,3 +259,15 @@ def test_every_runtime_env_source_is_a_derived_output():
 
     for name in (*writes._RUNTIME_KEYS, *writes._SERVER_KEYS):
         assert name in values.DERIVED_OUTPUTS, name
+
+
+def test_slack_storage_is_copied_but_the_switch_is_not():
+    """A local server sharing the deployed Slack apps would split their DMs with
+    the deployed one, so only where the data lives reaches the local .env."""
+    server, runtime = writes.env_updates_from_outputs(
+        OUTPUTS, memory_id="mem-1", alb_url=OUTPUTS["alb_url"]
+    )
+    assert server["SLACK_TABLE"] == "bap-slack"
+    assert server["SLACK_SECRET_PREFIX"] == "bap/slack"
+    assert "SLACK_INTEGRATION_ENABLED" not in server
+    assert not any(k.startswith("SLACK_") for k in runtime)

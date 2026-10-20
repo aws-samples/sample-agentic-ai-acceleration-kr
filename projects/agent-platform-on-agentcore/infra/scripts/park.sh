@@ -75,7 +75,7 @@ cmd_status() {
   aws elbv2 describe-load-balancers --names "$project-alb" \
     --query 'LoadBalancers[0].[DNSName,State.Code]' --output text 2>/dev/null || echo "   none"
   echo "== Preserved data"
-  for t in threads users usage artifacts knowledge-bases prefs; do
+  for t in threads users usage artifacts knowledge-bases prefs slack; do
     aws dynamodb describe-table --table-name "$project-$t" 2>/dev/null \
       --query 'Table.[TableName,ItemCount]' --output text | awk '{printf "   %-40s items=%s\n",$1,$2}' || true
   done

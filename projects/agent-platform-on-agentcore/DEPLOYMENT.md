@@ -502,6 +502,65 @@ apply 뒤 `/org` 에서 팀을 만들면 달라지는 것:
 사용자를 팀에 넣는 가장 빠른 방법은 `/org` 사용자 탭(또는 Cognito 콘솔의 `team:<name>`
 그룹)이고, 아래 데모 사용자 스크립트는 `--teams finance,hr` 로 이미 만든 팀에 나눠 넣습니다.
 
+## Slack DM 연동
+
+admin 이 Harness 화면에서 Harness 하나에 Slack 앱 하나를 연결하고, 사용자는 봇에게 1:1 DM 으로
+질문합니다. 권한·모델·사용량은 웹과 같은 규칙을 따르고, DM 대화는 사용자의 웹 대화 목록에도
+보여 웹에서 이어갈 수 있습니다(웹의 답은 Slack 으로 보내지 않습니다).
+
+**켜기.** Socket Mode 는 서버 태스크에서 Slack 으로 나가는 HTTPS·WSS 연결만 쓰므로 ALB 나
+공개 엔드포인트가 필요 없습니다. 프라이빗 서브넷의 NAT 경로만 있으면 됩니다(`park.sh down`
+으로 NAT 를 내리면 연결도 끊깁니다).
+
+```hcl
+slack_integration_enabled = true
+```
+
+```bash
+cd infra/envs/standalone && terraform apply
+aws ecs update-service --cluster bap-cluster --service server --force-new-deployment --region ap-northeast-1
+```
+
+apply 는 서버 환경변수(`SLACK_INTEGRATION_ENABLED`·`SLACK_TABLE`·`SLACK_SECRET_PREFIX`·`SLACK_WEB_ORIGIN`)와
+`<project>-ecs-task-slack-policy`(테이블, `<project>/slack/*` 시크릿, Cognito 사용자 조회)를 붙입니다.
+`<project>-slack` 테이블은 기능과 무관하게 항상 만들어집니다. 새 태스크로 교체되기 전에는 이전
+태스크가 `slackEnabled: false` 로 답해 버튼이 보이지 않을 수 있습니다. 서버 로그의
+`Slack DM integration started` 로 확인합니다.
+
+**연결.** Harness 화면에서 READY·승인된 Harness 의 `Slack` 버튼(admin)을 누릅니다.
+
+1. 대화상자의 manifest 로 앱을 만듭니다(`Slack에서 열기` 또는 Create New App → From a manifest).
+2. 워크스페이스에 설치하고 `xoxb-` Bot Token 을 복사합니다.
+3. Basic Information → App-Level Tokens 에서 `connections:write` 로 `xapp-` 토큰을 만듭니다.
+4. 두 토큰을 넣고 `검사` → `저장`. 검사는 토큰 형식·유효성·필수 scope·두 토큰의 앱 일치·
+   앱 중복 연결·Harness 준비/승인 상태를 봅니다. 토큰은 `<project>/slack/<harness_id>/<id>`
+   시크릿에만 저장되고 다시 표시되지 않습니다. 토큰을 바꾸려면 연동을 삭제하고 다시 연결합니다.
+
+사용자 매핑은 Slack 프로필 이메일과 정확히 한 플랫폼 계정이 일치할 때만 됩니다(Cognito 는
+활성·확인된 계정, Entra 는 한 번 이상 웹에 로그인한 계정). 같은 이메일의 계정이 둘 이상이면
+거절합니다. 공개·비공개 채널, 그룹 DM, Slack Connect 외부 사용자, 첨부파일 입력은 지원하지 않습니다.
+
+**삭제.** 대화상자의 `연동 삭제` 는 수신 중단 → Bot Token 폐기(`auth.revoke`) → 시크릿·연동 정보
+삭제 순서로 진행하고, 실패하면 남은 단계를 보여 주며 같은 버튼으로 재시도합니다. DM 대화 기록과
+사용량은 지우지 않습니다. Slack 앱 자체와 Slack 에 남은 메시지는 api.slack.com/apps 와 Slack 에서
+직접 지웁니다. Harness 를 삭제하면 연동 정리가 먼저 실행되고, 정리가 끝나지 않으면 Harness 는
+지워지지 않습니다(409).
+
+**끄기.** `slack_integration_enabled = false` 로 apply 하면 연결이 모두 멈추지만 시크릿·연동
+정보는 남습니다. 토큰을 폐기하고 시크릿을 지우려면 끄기 전에 각 연동을 화면에서 삭제합니다.
+이미 끈 뒤라면 Terraform 밖에서 만든 시크릿을 직접 지웁니다(Bot Token 은 Slack 에서 앱을 삭제하거나
+재설치해 무효화).
+
+```bash
+aws secretsmanager list-secrets --region ap-northeast-1 \
+  --filters Key=name,Values=bap/slack/ --query 'SecretList[].Name' --output text
+aws secretsmanager delete-secret --region ap-northeast-1 --force-delete-without-recovery --secret-id <name>
+```
+
+**로컬 시험.** installer 는 로컬 `server/.env` 에 `SLACK_TABLE`·`SLACK_SECRET_PREFIX` 만 복사하고
+`SLACK_INTEGRATION_ENABLED` 는 복사하지 않습니다. 로컬 서버가 배포 서버와 같은 앱에 연결되면
+DM 이 두 서버에 나뉘어 들어가므로, 로컬에서 켤 때는 배포와 다른 Slack 앱으로 연결합니다.
+
 ## Microsoft Entra ID 로그인
 
 Cognito 옆에 두 번째 로그인 공급자로 붙일 수 있습니다. HTTPS 가 전제입니다. 앱 등록과
@@ -549,7 +608,8 @@ Runtime 이 갱신됩니다.
 
 Terraform 밖에서 만든 리소스를 먼저 지웁니다. 붙이지 않은 항목은 건너뜁니다.
 
-1. 웹 화면에서 만든 Harness 와 Knowledge Base 를 각 화면에서 삭제합니다.
+1. 웹 화면에서 만든 Harness 와 Knowledge Base 를 각 화면에서 삭제합니다. Slack 연동이 있는
+   Harness 는 삭제 과정에서 Bot Token 폐기와 시크릿 삭제가 함께 진행됩니다.
 2. 내장 툴 게이트웨이: `./infra/builtin_tools_gateway/deploy.py down`
 3. keep-warm 스케줄: `./agent-runtime/scripts/keepwarm.sh down`
 4. 배포한 Runtime(`bap_default`, 붙였다면 `bap_platform_status` 같은 MCP 서버)과

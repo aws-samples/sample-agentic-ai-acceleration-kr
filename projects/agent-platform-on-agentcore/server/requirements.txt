@@ -9,6 +9,9 @@ pyyaml>=6.0
 strands-agents>=1.21.0
 strands-agents-tools>=0.2.6
 httpx>=0.28.0
+# Slack Socket Mode client (integrations/slack). Also pulled in by uvicorn[standard],
+# named here because the server imports it directly.
+websockets>=14.0
 pyjwt[crypto]>=2.12.0
 mcp>=1.23.0,<2
 # Light previews for binary artifacts produced inside a harness sandbox. Both are

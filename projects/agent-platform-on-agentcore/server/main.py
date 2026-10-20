@@ -18,9 +18,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Import routers
-from routes import health, threads, mcp_apps, mcp, auth, registry, harness, artifacts, knowledge, insights, config, settings, org
+from routes import health, threads, mcp_apps, mcp, auth, registry, harness, artifacts, knowledge, insights, config, settings, org, slack
 from core.config import COLLECTOR_ENABLED, COLLECTOR_INTERVAL_SECONDS
-from core.dependencies import collector_service, streaming_service
+from core.dependencies import collector_service, slack_manager, streaming_service
 
 
 @asynccontextmanager
@@ -33,6 +33,11 @@ async def lifespan(app: FastAPI):
     blocking boto3 calls never stall request handling.
 
     Also drains in-flight chat runs on shutdown; see services/run_broker.py.
+
+    The Slack DM connections (integrations/slack) start here when the feature
+    is on, and stop in three steps on shutdown: no new events first, then the
+    runs are cancelled with everyone else's, then the DM handlers get a moment
+    to post their "interrupted" note and release their locks.
     """
     task = None
     if COLLECTOR_ENABLED and collector_service is not None:
@@ -40,13 +45,20 @@ async def lifespan(app: FastAPI):
         logger.info("Insights collector started (every %ss)", COLLECTOR_INTERVAL_SECONDS)
     elif COLLECTOR_ENABLED:
         logger.warning("COLLECTOR_ENABLED but USAGE_TABLE is unset; collector not started")
+    if slack_manager is not None:
+        await slack_manager.start()
+        logger.info("Slack DM integration started")
     try:
         yield
     finally:
+        if slack_manager is not None:
+            await slack_manager.stop_receiving()
         # ECS stops a task with SIGTERM and uvicorn runs this before exiting.
         # Each run's generator writes `interrupted` on cancellation, so a
         # redeploy leaves no thread stuck on `busy` with nothing behind it.
         await streaming_service.run_broker.shutdown()
+        if slack_manager is not None:
+            await slack_manager.drain()
         if task is not None:
             task.cancel()
 
@@ -81,6 +93,7 @@ app.include_router(knowledge.router)
 app.include_router(insights.router)
 app.include_router(settings.router)
 app.include_router(org.router)
+app.include_router(slack.router)
 
 
 if __name__ == "__main__":

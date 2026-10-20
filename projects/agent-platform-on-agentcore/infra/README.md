@@ -27,9 +27,9 @@ MCP 게이트웨이 authorizer는 **`AWS_IAM`**이다. 런타임·harness는 실
 | `ecs` | Fargate 클러스터, web/server 서비스·태스크 정의, ALB(:80/:8081, 인증서가 있으면 :443/:8443), Cloud Map 내부 DNS |
 | `ecr` | web/server 이미지 리포지토리 |
 | `cognito` | User Pool·앱 클라이언트·`admin`/`user` 그룹과 초기 사용자, Hosted UI 도메인(선택) |
-| `dynamodb` | `threads`·`artifacts`·`knowledge-bases`·`usage`·`prefs`·`users`. 전부 삭제 보호+PITR(`allow_destroy` 로 해제) |
+| `dynamodb` | `threads`·`artifacts`·`knowledge-bases`·`usage`·`prefs`·`users`·`teams`·`slack`. 전부 삭제 보호+PITR(`allow_destroy` 로 해제). `slack` 은 Slack DM 연동을 끈 상태에서도 만들어 둔다(끌 때 삭제 보호된 테이블을 지우려다 apply 가 실패하지 않게) |
 | `s3_artifacts` / `s3_knowledge` / `s3_skills` | 산출물·지식 베이스 원본·스킬 번들 버킷 |
-| `iam` | ECS 태스크 역할: 테이블·버킷, AgentCore, CloudWatch, Cost Explorer, Pricing, Cognito ListUsers |
+| `iam` | ECS 태스크 역할: 테이블·버킷, AgentCore, CloudWatch, Cost Explorer, Pricing, Cognito ListUsers. `slack_integration_enabled` 이면 `<project>-ecs-task-slack-policy`(slack 테이블, `<project>/slack/*` 시크릿, Cognito 사용자 조회)를 붙인다 |
 | `agent_runtime_role` / `harness_role` / `knowledge_roles` | 런타임 실행 역할, harness 실행 역할, KB 서비스·게이트웨이 역할 |
 | `mcp_gateway` | 툴 게이트웨이: AgentCore Web Search 커넥터(`web_search_backend`, 기본 `agentcore`) + Lambda 툴(`fetch_url`·`current_time`·`calculate`·artifact), `AWS_IAM` authorizer |
 | `agent_registry` | AgentCore Agent Registry(boto3 스크립트). `auto_approval` 은 별도 `null_resource` 가 `UpdateRegistry` 로 맞추므로 값을 바꿔도 레지스트리가 재생성되지 않는다(재생성되면 레코드가 전부 지워진다) |

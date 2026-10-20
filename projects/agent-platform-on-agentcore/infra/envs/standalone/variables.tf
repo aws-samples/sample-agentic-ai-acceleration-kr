@@ -353,3 +353,19 @@ variable "demo_expense_teams" {
   description = "With demo_tools: team names whose harness role (`<project>-harness-<team>`, made by the Organization page) may call approve_expense below the amount cap. Empty = no cap policy, and approve_expense stays unreachable."
   default     = []
 }
+
+variable "slack_integration_enabled" {
+  description = <<-EOT
+    Slack DM integration: an admin links one Slack app (Socket Mode) per Harness
+    from the Harness page, and users talk to the agent in 1:1 DMs. Turning it on
+    starts the connection manager in the server and attaches the
+    `<project>-ecs-task-slack-policy` managed policy (its table, its secrets,
+    Cognito user reads). The `<project>-slack` table exists either way.
+
+    Turning it off stops every connection but deletes nothing: delete each
+    integration from the UI first if its Bot Token should be revoked and its
+    secret removed (see DEPLOYMENT.md).
+  EOT
+  type        = bool
+  default     = false
+}

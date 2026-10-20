@@ -6,6 +6,10 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime
 from .common import ThreadStatus
 
+# Thread.source values.
+THREAD_SOURCE_WEB = "web"
+THREAD_SOURCE_SLACK_DM = "slack_dm"
+
 
 class Thread(BaseModel):
     """Thread model"""
@@ -55,6 +59,12 @@ class Thread(BaseModel):
     # decision: services/agent_access.py re-reads the record whenever the client
     # sends something else. Top-level for the same reason as agent_record_id.
     agent_target: Optional[Dict[str, Optional[str]]] = None
+    # Where the conversation was started: "web", or "slack_dm" for a thread a
+    # Slack DM created (server/integrations/slack). Set by the server when the
+    # thread is created and never changed afterwards. Top-level rather than in
+    # `metadata` for the same reason as owner_sub: PATCH /state merges
+    # caller-supplied metadata, and the origin is not the caller's to rewrite.
+    source: str = THREAD_SOURCE_WEB
 
     class Config:
         json_encoders = {

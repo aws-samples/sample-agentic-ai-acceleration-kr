@@ -25,7 +25,7 @@ log() { printf '\033[0;34m[%s]\033[0m %s\n' "$(date +%H:%M:%S)" "$*"; }
 log "Output: $out (account $acct, region $AWS_REGION, project $project)"
 
 # DynamoDB
-for t in threads users usage artifacts knowledge-bases prefs; do
+for t in threads users usage artifacts knowledge-bases prefs slack; do
   tbl="$project-$t"
   log "DynamoDB $tbl: backup + scan"
   aws dynamodb create-backup --table-name "$tbl" --backup-name "$tbl-$stamp" \

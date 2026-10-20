@@ -6,7 +6,7 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 
 from repositories.thread_repository import ThreadRepository
-from models.thread import Thread, ThreadStateUpdate, ThreadStatus
+from models.thread import THREAD_SOURCE_WEB, Thread, ThreadStateUpdate, ThreadStatus
 from models.common import ThreadStatus as ThreadStatusEnum
 from core.config import LEGACY_BASIC_CHAT_RECORD_ID, OVERRIDES_METADATA_KEY
 
@@ -147,6 +147,7 @@ class ThreadService:
         agent_name: str = "",
         agent_target: Optional[Dict[str, Optional[str]]] = None,
         adopted_model_id: Optional[str] = None,
+        source: str = THREAD_SOURCE_WEB,
     ) -> Thread:
         """Get thread or create if it doesn't exist.
 
@@ -171,6 +172,10 @@ class ThreadService:
         `adopted_model_id` matters only for a thread the retired basic-chat path
         pinned: it is the model the binding decided to carry into the thread's
         override when moving it onto `agent_record_id` (None = carry nothing).
+
+        `source` is recorded on a thread this call creates and ignored for an
+        existing one: a thread keeps the origin of its first turn, so a DM
+        thread continued on the web is still a DM thread.
         """
         thread = self.repository.get(thread_id)
         if not thread:
@@ -185,6 +190,7 @@ class ThreadService:
                 agent_record_id=agent_record_id,
                 agent_name=agent_name,
                 agent_target=agent_target if agent_record_id else None,
+                source=source or THREAD_SOURCE_WEB,
             )
             thread = self.repository.create(thread)
         else:

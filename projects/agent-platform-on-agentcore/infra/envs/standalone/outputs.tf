@@ -136,3 +136,13 @@ output "policy_engine_arn" {
 output "policy_engine_id" {
   value = var.enable_gateway_policy ? module.policy_engine[0].engine_id : ""
 }
+
+output "slack_table_name" {
+  description = "Slack DM integration table. The installer copies it into server/.env as SLACK_TABLE."
+  value       = module.dynamodb.slack_table_name
+}
+
+output "slack_secret_prefix" {
+  description = "Name prefix of the per-integration token secrets (<prefix>/<harness_id>/<integration_id>)."
+  value       = "${var.project}/slack"
+}

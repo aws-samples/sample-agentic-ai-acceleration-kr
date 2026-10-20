@@ -362,3 +362,15 @@ COLLECTOR_INTERVAL_SECONDS = int(os.getenv("COLLECTOR_INTERVAL_SECONDS", "300"))
 # Empty means session-level runtime attribution is off and the page says so.
 USAGE_LOG_GROUP = os.getenv("USAGE_LOG_GROUP", "")
 USAGE_LOG_DESTINATION_ARN = os.getenv("USAGE_LOG_DESTINATION_ARN", "")
+
+# --- Slack DM integration (server/integrations/slack) -------------------------
+# One Slack app per Harness, connected over Socket Mode (an outbound WebSocket,
+# so no public endpoint). Off by default: the connection manager does not start
+# and the web hides the Slack button. The table holds integrations, the app
+# uniqueness rows, event de-duplication markers and the shared per-thread lock;
+# tokens live only in Secrets Manager under SLACK_SECRET_PREFIX.
+SLACK_INTEGRATION_ENABLED = os.getenv("SLACK_INTEGRATION_ENABLED", "false").lower() == "true"
+SLACK_TABLE = os.getenv("SLACK_TABLE", "").strip()
+SLACK_SECRET_PREFIX = os.getenv("SLACK_SECRET_PREFIX", "").strip().rstrip("/")
+# Public web address, for the "continue on the web" link in a DM. Empty = no link.
+SLACK_WEB_ORIGIN = os.getenv("SLACK_WEB_ORIGIN", "").strip().rstrip("/")

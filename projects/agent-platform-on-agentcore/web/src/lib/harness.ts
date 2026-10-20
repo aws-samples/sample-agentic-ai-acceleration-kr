@@ -123,7 +123,10 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     const err = await response
       .json()
       .catch(() => ({ detail: response.statusText }));
-    throw new Error(err.detail || `HTTP ${response.status}`);
+    // A structured detail (e.g. a Harness delete held back by an unfinished
+    // Slack cleanup) carries its sentence in `message`.
+    const detail = typeof err.detail === "string" ? err.detail : err.detail?.message;
+    throw new Error(detail || `HTTP ${response.status}`);
   }
   return response.json();
 }

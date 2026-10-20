@@ -82,6 +82,7 @@ module "dynamodb" {
   prefs_table_name     = "${var.project}-prefs"
   users_table_name     = "${var.project}-users"
   teams_table_name     = "${var.project}-teams"
+  slack_table_name     = "${var.project}-slack"
   allow_destroy        = var.allow_destroy
 }
 
@@ -271,6 +272,8 @@ module "iam" {
   gateway_arn            = module.mcp_gateway.gateway_arn
   user_pool_arn          = module.cognito.user_pool_arn
   registry_sync_role_arn = local.registry_sync_role
+  slack_table_arn        = module.dynamodb.slack_table_arn
+  create_slack_policy    = var.slack_integration_enabled
 }
 
 module "ecs" {
@@ -355,6 +358,14 @@ module "ecs" {
     KNOWLEDGE_SOURCE_BUCKETS = join(",", local.knowledge_source_buckets)
     # The stack's own source bucket, which managed S3 knowledge bases write to.
     KNOWLEDGE_PLATFORM_SOURCE_BUCKET = module.s3_knowledge.source_bucket_name
+    # Slack DM integration (server/integrations/slack). Socket Mode needs only
+    # outbound HTTPS/WSS from the task, which the NAT already gives it. Tokens
+    # are read from Secrets Manager at run time and never enter this map.
+    SLACK_INTEGRATION_ENABLED = tostring(var.slack_integration_enabled)
+    SLACK_TABLE               = module.dynamodb.slack_table_name
+    SLACK_SECRET_PREFIX       = "${var.project}/slack"
+    # The "웹에서 이어 보기" link in a DM: the same address as the alb_url output.
+    SLACK_WEB_ORIGIN = local.https_enabled ? "https://${local.public_host}" : "http://${module.ecs.alb_dns_name}"
   }
 
   web_env = {

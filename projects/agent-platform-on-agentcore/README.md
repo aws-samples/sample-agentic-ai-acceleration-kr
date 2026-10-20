@@ -465,6 +465,17 @@ Runtime 과 Harness 는 각자의 실행 역할로 SigV4 서명해 호출하므�
   </tr>
 </table>
 
+### 10. Slack DM — Socket Mode
+
+admin 이 Harness 화면에서 Harness 하나에 Slack 앱 하나를 연결하면, 사용자는 봇에게 1:1 DM 으로
+질문합니다. DM 은 웹과 같은 실행 경로(`StreamingService`)를 타므로 승인·팀·모델 규칙과 사용량
+기록이 그대로 적용되고, 대화는 사용자의 웹 목록에 `Slack` 표시와 함께 남아 웹에서 이어갈 수 있습니다.
+
+- Socket Mode(아웃바운드 WebSocket)라 공개 엔드포인트가 필요 없고, 연동 추가·삭제는 재배포 없이 반영됩니다.
+- Slack 사용자는 프로필 이메일과 정확히 한 플랫폼 계정이 일치할 때만 매핑되고, 계정 상태·그룹은 매 턴 다시 확인합니다.
+- 토큰은 검사 후 Secrets Manager 에만 저장되고, 삭제 시 Bot Token 을 폐기합니다.
+- 켜는 방법과 운영은 [`DEPLOYMENT.md`](DEPLOYMENT.md#slack-dm-연동) 에 있습니다(`slack_integration_enabled`, 기본 off).
+
 ## 채팅 한 턴의 흐름
 
 ```mermaid

@@ -53,3 +53,11 @@ output "teams_table_name" {
 output "teams_table_arn" {
   value = aws_dynamodb_table.teams.arn
 }
+
+output "slack_table_name" {
+  value = aws_dynamodb_table.slack.name
+}
+
+output "slack_table_arn" {
+  value = aws_dynamodb_table.slack.arn
+}

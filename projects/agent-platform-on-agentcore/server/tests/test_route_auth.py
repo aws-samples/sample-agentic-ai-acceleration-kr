@@ -159,6 +159,13 @@ ROUTES = [
 # test_knowledge_routes.py). Listed so the coverage guard below sees full
 # coverage; not exercised here, which would only duplicate those files.
 GATED_ELSEWHERE = [
+    # Slack DM integration (test_slack_routes.py): every route is admin-only.
+    Route("GET", "/api/slack/integrations", True),
+    Route("GET", "/api/harnesses/{harness_id}/slack", True),
+    Route("GET", "/api/harnesses/{harness_id}/slack/manifest", True),
+    Route("POST", "/api/harnesses/{harness_id}/slack/test", True),
+    Route("POST", "/api/harnesses/{harness_id}/slack", True),
+    Route("DELETE", "/api/harnesses/{harness_id}/slack", True),
     # Sidebar menu visibility (test_settings_routes.py): anyone signed in reads
     # which menus are hidden, only an admin changes it.
     Route("GET", "/api/settings/nav", False),

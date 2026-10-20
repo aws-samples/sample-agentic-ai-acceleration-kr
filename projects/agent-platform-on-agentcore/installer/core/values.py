@@ -27,6 +27,8 @@ DERIVED_OUTPUTS = (
     # writes._RUNTIME_KEYS maps this to EXECUTION_ROLE; it was missing here, so
     # derived() never returned it and .env kept the commented-out template line.
     "agent_runtime_role_arn",
+    # Slack DM integration table and secret prefix (writes._SERVER_KEYS).
+    "slack_table_name", "slack_secret_prefix",
 )
 
 

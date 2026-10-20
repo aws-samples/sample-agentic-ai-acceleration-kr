@@ -190,3 +190,39 @@ resource "aws_dynamodb_table" "teams" {
     type = "S"
   }
 }
+
+# Slack DM integration (server/integrations/slack/repository.py). One item per
+# integration (pk = INTEGRATION, sk = <harness_id>), one per linked Slack app
+# (APP#<api_app_id>) so an app connects to at most one Harness, event
+# de-duplication markers (EVENT#…, expire via `ttl`) and the per-thread lock
+# shared by every server task (LOCK#<thread_id>, judged by `expires_at`; `ttl`
+# only tidies). No tokens: those are in Secrets Manager.
+#
+# Created whether or not the feature is on, like the other tables: turning the
+# feature off must not make Terraform try to destroy a deletion-protected table.
+resource "aws_dynamodb_table" "slack" {
+  deletion_protection_enabled = !var.allow_destroy
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  name         = var.slack_table_name
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "pk"
+  range_key    = "sk"
+
+  attribute {
+    name = "pk"
+    type = "S"
+  }
+
+  attribute {
+    name = "sk"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "ttl"
+    enabled        = true
+  }
+}

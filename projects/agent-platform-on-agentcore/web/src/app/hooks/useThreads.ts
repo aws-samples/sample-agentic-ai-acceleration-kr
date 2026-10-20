@@ -24,6 +24,8 @@ export interface ThreadItem {
    * still reads correctly for an agent that has since been deleted.
    */
   agentName: string;
+  /** Started from a Slack DM (Thread.source "slack_dm"). Continues on the web like any other. */
+  fromSlack: boolean;
 }
 
 const DEFAULT_PAGE_SIZE = 20;
@@ -130,6 +132,7 @@ export function useThreads(props: {
         title,
         description,
         agentName: thread.agent_name ?? "",
+        fromSlack: thread.source === "slack_dm",
       };
       });
     },

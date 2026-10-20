@@ -749,3 +749,73 @@ resource "aws_iam_role_policy" "task" {
   role   = aws_iam_role.task.id
   policy = data.aws_iam_policy_document.task.json
 }
+
+# Slack DM integration (server/integrations/slack). A managed policy of its own,
+# attached only with the feature on, for the same inline-size reason as
+# task_org — and so turning the feature off removes every grant it needed.
+data "aws_iam_policy_document" "task_slack" {
+  statement {
+    sid    = "SlackTable"
+    effect = "Allow"
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:UpdateItem",
+      "dynamodb:DeleteItem",
+      "dynamodb:Query",
+      # The integration and its app row are written in one TransactWriteItems,
+      # which IAM authorises per item through the actions above plus this.
+      "dynamodb:ConditionCheckItem",
+      # Required: the repository's constructor calls table.load() at startup.
+      "dynamodb:DescribeTable",
+    ]
+    resources = [var.slack_table_arn]
+  }
+
+  # One secret per integration, named <project>/slack/<harness_id>/<id>. The
+  # server creates, reads and force-deletes them; CreateSecret with Tags also
+  # needs TagResource. Nothing else in the account is reachable.
+  statement {
+    sid    = "SlackSecrets"
+    effect = "Allow"
+    actions = [
+      "secretsmanager:CreateSecret",
+      "secretsmanager:TagResource",
+      "secretsmanager:GetSecretValue",
+      "secretsmanager:DescribeSecret",
+      "secretsmanager:DeleteSecret",
+    ]
+    resources = [
+      "arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:${var.project}/slack/*",
+    ]
+  }
+
+  # A DM carries no token, so the caller is found by email and judged live on
+  # every turn: ListUsers (email filter), AdminGetUser (enabled / confirmed /
+  # verified), AdminListGroupsForUser (teams, admin). Reads only.
+  dynamic "statement" {
+    for_each = var.user_pool_arn != "" ? [var.user_pool_arn] : []
+    content {
+      sid    = "SlackCognitoIdentity"
+      effect = "Allow"
+      actions = [
+        "cognito-idp:ListUsers",
+        "cognito-idp:AdminGetUser",
+        "cognito-idp:AdminListGroupsForUser",
+      ]
+      resources = [statement.value]
+    }
+  }
+}
+
+resource "aws_iam_policy" "task_slack" {
+  count  = var.create_slack_policy ? 1 : 0
+  name   = "${var.project}-ecs-task-slack-policy"
+  policy = data.aws_iam_policy_document.task_slack.json
+}
+
+resource "aws_iam_role_policy_attachment" "task_slack" {
+  count      = length(aws_iam_policy.task_slack)
+  role       = aws_iam_role.task.name
+  policy_arn = aws_iam_policy.task_slack[0].arn
+}

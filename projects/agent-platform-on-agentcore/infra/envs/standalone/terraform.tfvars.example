@@ -36,6 +36,10 @@ web_search_backend = "agentcore"
 # pending); token-based cost estimates work regardless.
 # enable_model_cost_aip = false
 
+# Slack DM integration: link one Slack app per Harness from the Harness page
+# (admin). Socket Mode, so no public endpoint is needed. See DEPLOYMENT.md.
+# slack_integration_enabled = true
+
 # MCP servers on AgentCore Runtime to attach to the MCP gateway (target name =>
 # runtime ARN). Set after deploying mcp-apps-server; see DEPLOYMENT.md.
 # runtime_mcp_servers = { "platform-status" = "arn:aws:bedrock-agentcore:ap-northeast-1:<account>:runtime/bap_platform_status-..." }

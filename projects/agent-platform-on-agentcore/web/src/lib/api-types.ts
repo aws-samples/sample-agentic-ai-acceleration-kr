@@ -58,6 +58,8 @@ export interface Thread<T extends Record<string, any> = Record<string, any>> {
   agent_name?: string;
   /** Model pinned onto a basic-chat thread; absent on older basic threads. */
   basic_chat_model_id?: string | null;
+  /** Where the conversation started: "web", or "slack_dm" for a Slack DM. Set by the server. */
+  source?: string;
 }
 
 export interface Interrupt {

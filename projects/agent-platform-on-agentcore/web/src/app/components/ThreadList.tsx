@@ -389,12 +389,27 @@ export function ThreadList({ onMutateReady }: ThreadListProps) {
                                 threads group by time because that is how people
                                 look for a conversation, and adding an agent axis
                                 would leave a near-empty group per agent. */}
-                            {thread.agentName && (
+                            {(thread.agentName || thread.fromSlack) && (
                               <span className="mt-0.5 flex w-full items-center gap-1 text-[10px] text-muted-foreground">
-                                <Bot className="size-2.5 flex-shrink-0" />
-                                <span className="min-w-0 truncate">
-                                  {thread.agentName}
-                                </span>
+                                {thread.agentName && (
+                                  <>
+                                    <Bot className="size-2.5 flex-shrink-0" />
+                                    <span className="min-w-0 truncate">
+                                      {thread.agentName}
+                                    </span>
+                                  </>
+                                )}
+                                {/* Started as a Slack DM; the web can continue it,
+                                    but replies here are not sent back to Slack. */}
+                                {thread.fromSlack && (
+                                  <span
+                                    className="ml-auto flex flex-shrink-0 items-center gap-0.5 rounded-full bg-muted px-1.5"
+                                    title="Slack DM에서 시작한 대화입니다. 웹에서 이어간 답변은 Slack으로 보내지 않습니다."
+                                  >
+                                    <MessageSquare className="size-2.5" />
+                                    Slack
+                                  </span>
+                                )}
                               </span>
                             )}
                           </button>

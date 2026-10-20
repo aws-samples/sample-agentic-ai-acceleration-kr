@@ -12,6 +12,8 @@ export interface Capabilities {
    * this. Absent (older server) or empty = no model override is offered.
    */
   allowedModels?: string[];
+  /** The Slack DM integration (admin Harness page). Absent on an older server = off. */
+  slackEnabled?: boolean;
 }
 
 export async function getCapabilities(): Promise<Capabilities> {

@@ -29,6 +29,12 @@ _SERVER_KEYS = {
     "harness_execution_role_arn": "HARNESS_EXECUTION_ROLE_ARN",
     "mcp_gateway_url": "MCP_GATEWAY_URL",
     "usage_table_name": "USAGE_TABLE",
+    # Only where the Slack integration keeps its data. SLACK_INTEGRATION_ENABLED
+    # is deliberately not copied: a local server with it on would open Socket
+    # Mode connections to the deployed stack's Slack apps and take a share of
+    # their DMs. Test locally with a separate Slack app (DEPLOYMENT.md).
+    "slack_table_name": "SLACK_TABLE",
+    "slack_secret_prefix": "SLACK_SECRET_PREFIX",
 }
 
 # deploy.sh reads GUARDRAIL_ID / GUARDRAIL_VERSION / EXECUTION_ROLE from .env;

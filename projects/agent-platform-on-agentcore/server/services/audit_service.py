@@ -22,9 +22,10 @@ ACTIONS = (
     "member.add", "member.remove",
     "user.invite", "user.update_role", "user.update_teams", "user.disable", "user.enable",
     "user.reset_password", "user.delete",
+    "slack.integration.create", "slack.integration.delete",
 )
 # Never persisted even when a caller passes them in before/after.
-SECRET_KEYS = {"temporary_password", "password", "secret"}
+SECRET_KEYS = {"temporary_password", "password", "secret", "bot_token", "app_token", "secret_arn"}
 
 
 def _scrub(value: Any) -> Any:

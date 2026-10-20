@@ -29,6 +29,7 @@ from agents.harness_client import HarnessClient
 from agents.base import AgentClient
 from models.common import StreamRequest, StreamEvent, ThreadStatus as ThreadStatusEnum
 from models.artifact import normalize_kind
+from models.thread import THREAD_SOURCE_WEB
 
 from data.model_rates import LONG_COUNTERS, long_context_threshold
 
@@ -917,6 +918,7 @@ class StreamingService:
         owner_sub: str,
         t_request: float,
         caller: Optional[AuthUser] = None,
+        source: str = THREAD_SOURCE_WEB,
     ):
         """The pre-stream setup: approval gate, target binding, thread row.
 
@@ -1000,6 +1002,9 @@ class StreamingService:
                 # from the registry, or the model carried off a legacy thread.
                 **({"adopted_model_id": adopted_model_id} if adopting else {}),
                 **({"agent_target": learned_target} if learned_target else {}),
+                # Only a non-web origin is passed, like the two above: a web
+                # turn calls exactly as it always has.
+                **({"source": source} if source != THREAD_SOURCE_WEB else {}),
             )
         )
 
@@ -1018,8 +1023,13 @@ class StreamingService:
         actor_id: Optional[str] = None,
         owner_sub: str = "",
         caller: Optional[AuthUser] = None,
+        source: str = THREAD_SOURCE_WEB,
     ) -> StreamingResponse:
-        """Stream thread execution (Server-Sent Events)"""
+        """Stream thread execution (Server-Sent Events).
+
+        `source` is recorded on a thread this turn creates (models/thread.py);
+        the Slack DM handler passes "slack_dm", every web route the default.
+        """
         # Wall-clock origin for the startup-latency breakdown. Logged with the
         # `[timing]` tag at each phase boundary so a single grep reconstructs
         # where the pre-first-token seconds go (approval+thread setup vs. the
@@ -1048,7 +1058,7 @@ class StreamingService:
         reservation = self.run_broker.reserve(thread_id, owner_sub=owner_sub or None)
         try:
             prepared_thread, requested_config, learned_target = await self._prepare_run(
-                thread_id, request, existing, owner_sub, t_request, caller
+                thread_id, request, existing, owner_sub, t_request, caller, source
             )
         except BaseException:
             # No run will follow; free the thread for the next attempt.

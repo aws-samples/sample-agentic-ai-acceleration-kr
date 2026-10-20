@@ -8,7 +8,7 @@ from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Attr
 
 from repositories.base import DynamoDBRepository
-from models.thread import Thread
+from models.thread import THREAD_SOURCE_WEB, Thread
 from models.common import ThreadStatus
 
 
@@ -27,6 +27,7 @@ class ThreadRepository(DynamoDBRepository):
             "owner_sub": thread.owner_sub or "",
             "agent_record_id": thread.agent_record_id or "",
             "agent_name": thread.agent_name or "",
+            "source": thread.source or THREAD_SOURCE_WEB,
         }
         if thread.basic_chat_model_id:
             item["basic_chat_model_id"] = thread.basic_chat_model_id
@@ -65,6 +66,8 @@ class ThreadRepository(DynamoDBRepository):
             agent_name=item.get("agent_name", ""),
             basic_chat_model_id=item.get("basic_chat_model_id") or None,
             agent_target=item.get("agent_target") or None,
+            # Rows written before the field existed are web threads.
+            source=item.get("source") or THREAD_SOURCE_WEB,
         )
 
     def update(self, thread_id: str, thread: Thread) -> Thread:
@@ -75,7 +78,8 @@ class ThreadRepository(DynamoDBRepository):
         # silently unown the thread and every later read would 403. The agent
         # fields have the same hazard with a quieter symptom: dropping
         # agent_record_id unpins the thread, and the next turn from a different
-        # agent would be accepted into it.
+        # agent would be accepted into it. `source` likewise: a DM thread would
+        # quietly turn into a web thread on its first write.
         item = {
             "thread_id": thread.thread_id,
             "updated_at": thread.updated_at,
@@ -85,6 +89,7 @@ class ThreadRepository(DynamoDBRepository):
             "owner_sub": thread.owner_sub or "",
             "agent_record_id": thread.agent_record_id or "",
             "agent_name": thread.agent_name or "",
+            "source": thread.source or THREAD_SOURCE_WEB,
         }
         if thread.basic_chat_model_id:
             item["basic_chat_model_id"] = thread.basic_chat_model_id

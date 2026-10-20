@@ -48,6 +48,7 @@ import {
   Cpu,
   Library,
   Loader2,
+  MessageSquare,
   Pencil,
   Sparkles,
   Terminal,
@@ -81,6 +82,9 @@ import {
   type KnowledgeBaseRecord,
 } from "@/lib/knowledge";
 import { getCapabilities } from "@/lib/capabilities";
+import { listSlackIntegrations, type SlackIntegrationSummary } from "@/lib/slack";
+import { SlackDialog } from "./SlackDialog";
+import { slackBadge } from "./slackStatus.mjs";
 
 /**
  * A knowledge base that can actually be attached.
@@ -400,6 +404,11 @@ export default function HarnessPage() {
   const [registryByArn, setRegistryByArn] = useState<Record<string, DeployedTarget>>({});
   const [registering, setRegistering] = useState<string | null>(null);
   const [registryEnabled, setRegistryEnabled] = useState(true);
+  // Slack DM integration: admin-only, and only when the server has it on.
+  const [slackAvailable, setSlackAvailable] = useState(false);
+  const slackEnabled = slackAvailable && isAdmin;
+  const [slackByHarness, setSlackByHarness] = useState<Record<string, SlackIntegrationSummary>>({});
+  const [slackHarness, setSlackHarness] = useState<HarnessSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -460,6 +469,7 @@ export default function HarnessPage() {
         listKnowledgeBases("READY").catch(() => [] as KnowledgeBaseRecord[]),
       ]);
       setRegistryEnabled(caps.registryEnabled);
+      setSlackAvailable(!!caps.slackEnabled);
       setCatalog(cat);
       setHarnesses(list);
       setKnowledgeBases(
@@ -483,6 +493,19 @@ export default function HarnessPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Supplementary like the registry annotation: a failure hides the badges,
+  // not the page. Re-read after every change the dialog makes.
+  const loadSlack = useCallback(() => {
+    if (!slackEnabled) return;
+    listSlackIntegrations()
+      .then((rows) => setSlackByHarness(Object.fromEntries(rows.map((r) => [r.harness_id, r]))))
+      .catch(() => setSlackByHarness({}));
+  }, [slackEnabled]);
+
+  useEffect(() => {
+    loadSlack();
+  }, [loadSlack]);
 
   const resetForm = useCallback(() => {
     setEditing(null);
@@ -681,6 +704,7 @@ export default function HarnessPage() {
     setNotice(null);
     try {
       const { deprecated_records: deprecated } = await deleteHarness(harnessId);
+      loadSlack();
       if (deprecated.length > 0) {
         setNotice(
           `Harness를 삭제하고 연결된 Registry 레코드 ${deprecated.length}건을 DEPRECATED 처리했습니다.`
@@ -1271,6 +1295,26 @@ export default function HarnessPage() {
                               {harness.harness_name}
                             </span>
                             <span className="-mr-1 -mt-0.5 flex shrink-0 items-center">
+                              {/* Slack DM integration (admin). A linked Harness
+                                  shows the button all the time; an unlinked one
+                                  on hover, like the other row actions. The
+                                  lucide Slack logo is deprecated, hence a
+                                  generic icon with the word. */}
+                              {slackEnabled && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  aria-label={`${harness.harness_name} Slack 연동`}
+                                  className={cn(
+                                    "h-7 gap-1 px-1.5 text-xxs text-muted-foreground transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100",
+                                    slackByHarness[harness.harness_id] ? "opacity-100" : "opacity-0"
+                                  )}
+                                  onClick={() => setSlackHarness(harness)}
+                                >
+                                  <MessageSquare className="size-3.5" />
+                                  Slack
+                                </Button>
+                              )}
                               {/* Editing is open to whoever may compose (same
                                   gate as create); only READY harnesses can be
                                   updated — AWS rejects a change mid-transition. */}
@@ -1333,6 +1377,15 @@ export default function HarnessPage() {
                                   : ""}
                               </Badge>
                             )}
+                            {(() => {
+                              const slack = slackEnabled ? slackBadge(slackByHarness[harness.harness_id]) : null;
+                              return slack ? (
+                                <Badge shape="chip" variant={slack.variant} title="Slack DM 연동">
+                                  <StatusDot variant={slack.variant} />
+                                  Slack · {slack.label}
+                                </Badge>
+                              ) : null;
+                            })()}
                             {missing && (
                               <Badge
                                 shape="tag"
@@ -1386,6 +1439,17 @@ export default function HarnessPage() {
           </div>
         )}
       </PageBody>
+      {slackHarness && (
+        <SlackDialog
+          harnessId={slackHarness.harness_id}
+          harnessName={slackHarness.harness_name}
+          open={!!slackHarness}
+          onOpenChange={(open) => {
+            if (!open) setSlackHarness(null);
+          }}
+          onChanged={loadSlack}
+        />
+      )}
     </>
   );
 }

@@ -1,4 +1,5 @@
 """AgentCore Managed Agent Harness routes."""
+import asyncio
 import logging
 import traceback
 
@@ -113,10 +114,35 @@ def update_harness(
 
 
 @router.delete("/{harness_id}")
-def delete_harness(harness_id: str, _: AuthUser = Depends(require_admin)):
-    """Admin-only: harnesses carry no owner, so any caller could delete anyone's."""
+async def delete_harness(harness_id: str, user: AuthUser = Depends(require_admin)):
+    """Admin-only: harnesses carry no owner, so any caller could delete anyone's.
+
+    The Harness's Slack integration is cleaned up first. If that cannot finish,
+    the Harness stays (409): the place to retry the cleanup is that Harness's
+    Slack dialog, which would be gone with it. `async` only for that await; the
+    blocking delete itself runs in a worker thread.
+    """
+    from core.dependencies import slack_service
+    from integrations.slack.service import DeletionIncomplete
+
     try:
-        deprecated = _harness().delete_harness(harness_id)
+        await slack_service.cleanup_for_harness(harness_id, user)
+    except DeletionIncomplete as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Slack 연동 정리가 끝나지 않아 Harness를 삭제하지 않았습니다. Slack 연동 화면에서 삭제를 다시 시도해 주세요.",
+                "steps": exc.steps,
+            },
+        )
+    except Exception as exc:
+        logger.error("Slack cleanup before Harness delete failed: %s", type(exc).__name__)
+        raise HTTPException(
+            status_code=409,
+            detail="Slack 연동 정리가 끝나지 않아 Harness를 삭제하지 않았습니다. Slack 연동 화면에서 삭제를 다시 시도해 주세요.",
+        )
+    try:
+        deprecated = await asyncio.to_thread(_harness().delete_harness, harness_id)
         return {"deleted": harness_id, "deprecated_records": deprecated}
     except Exception as exc:
         _fail(exc)

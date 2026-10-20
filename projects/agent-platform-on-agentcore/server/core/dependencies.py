@@ -315,3 +315,64 @@ if collector_service is not None:
         # A harness composed from the UI gets its delivery the moment its companion
         # runtime is READY, rather than on the collector's next pass.
         usage_service.harness.on_runtime_ready = observability_service.ensure_usage_logs
+
+# ── Slack DM integration (server/integrations/slack) ─────────────────────────
+# Constructed whether or not the feature is on, so the routes can answer 503
+# rather than 404. The table is only touched (DescribeTable at construction)
+# when it is configured; the manager is only *started* by main.py's lifespan.
+from core import config as _config  # noqa: E402
+from integrations.slack.api import SlackApi  # noqa: E402
+from integrations.slack.connection import ConnectionManager  # noqa: E402
+from integrations.slack.handler import DmHandler  # noqa: E402
+from integrations.slack.identity import IdentityResolver  # noqa: E402
+from integrations.slack.repository import SlackRepository  # noqa: E402
+from integrations.slack.service import (  # noqa: E402
+    SlackIntegrationService,
+    TokenStore,
+    harness_record,
+)
+from services.harness_service import HarnessService  # noqa: E402
+
+_slack_on = bool(_config.SLACK_INTEGRATION_ENABLED and _config.SLACK_TABLE and _config.SLACK_SECRET_PREFIX)
+slack_repository = (
+    SlackRepository(table_name=_config.SLACK_TABLE, region_name=AWS_REGION) if _slack_on else None
+)
+slack_api = SlackApi()
+_slack_harness = HarnessService(registry=streaming_service.registry_service)
+slack_service = SlackIntegrationService(
+    enabled=_slack_on,
+    repository=slack_repository,
+    tokens=(
+        TokenStore(boto3.client("secretsmanager", region_name=AWS_REGION), _config.SLACK_SECRET_PREFIX, PLATFORM)
+        if _slack_on
+        else None
+    ),
+    api=slack_api,
+    harness_lookup=_slack_harness.get_harness,
+    record_lookup=lambda harness: harness_record(harness, streaming_service.registry_service),
+    audit=audit_service,
+)
+slack_manager = None
+if _slack_on:
+    slack_manager = ConnectionManager(
+        repository=slack_repository,
+        api=slack_api,
+        handler=DmHandler(
+            repository=slack_repository,
+            api=slack_api,
+            identity=IdentityResolver(
+                cognito=_cognito_client,
+                user_pool_id=COGNITO_USER_POOL_ID,
+                users=user_repository,
+                # Read per call: tests and a reloaded config see the live value.
+                providers=lambda: list(_config.OIDC_PROVIDERS),
+                auth_enforced=lambda: _config.AUTH_ENFORCED,
+            ),
+            streaming_service=streaming_service,
+            thread_service=thread_service,
+            web_origin=_config.SLACK_WEB_ORIGIN,
+        ),
+        load_tokens=slack_service.tokens.load,
+        run_broker=run_broker,
+    )
+    slack_service.manager = slack_manager
