@@ -54,7 +54,7 @@ server/
 │   ├── mcp_service.py, mcp_apps_service.py
 │   ├── usage_service.py, collector_service.py, pricing_service.py, rate_card_service.py,
 │   │   billing_service.py, telemetry_service.py, trace_service.py, observability_service.py,
-│   │   evaluation_service.py        # Insights 대시보드: 사용량 원장, 요율, Cost Explorer, CloudWatch
+│   │   evaluation_service.py        # Insights 대시보드: 사용량 원장, 가격, Cost Explorer, CloudWatch
 │   ├── directory_service.py       # Cognito sub → email
 │   ├── layout_service.py, nav_service.py   # 대시보드 레이아웃, 사용자 메뉴 노출 설정
 │

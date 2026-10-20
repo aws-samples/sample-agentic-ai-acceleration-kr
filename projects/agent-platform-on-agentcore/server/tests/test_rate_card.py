@@ -73,8 +73,8 @@ def test_validate_entry_normalises_and_names_the_broken_field():
         ({"family": "Claude5.5Opus"}, "family"),
         ({"family": "claude-opus-6-1", "routing": "eu"}, "라우팅"),
         ({"family": "claude-opus-6-1", "routing": "global", "tier": "cached"}, "tier"),
-        ({"family": "claude-opus-6-1", "routing": "global", "tier": "input", "usd_per_1m": "four"}, "요율"),
-        ({"family": "claude-opus-6-1", "routing": "global", "tier": "input", "usd_per_1m": "-1"}, "요율"),
+        ({"family": "claude-opus-6-1", "routing": "global", "tier": "input", "usd_per_1m": "four"}, "가격"),
+        ({"family": "claude-opus-6-1", "routing": "global", "tier": "input", "usd_per_1m": "-1"}, "가격"),
         ({"family": "claude-opus-6-1", "routing": "global", "tier": "input", "usd_per_1m": "4", "effective_from": "23/09/2026"}, "유효 시작일"),
         ({"family": "claude-opus-6-1", "routing": "global", "tier": "input", "usd_per_1m": "4", "effective_from": "2026-09-26"}, "오늘 이후"),
     ]
@@ -107,6 +107,30 @@ def test_overview_shows_an_unregistered_family_with_empty_tiers_and_the_day_it_w
     assert sonnet["unpriced_turns"] == 0 and sonnet["complete"] is True
     assert sonnet["tiers"]["input"] == {"usd_per_1m": "2.00", "source": f"card:{RATE_CARD_VERSION}", "effective_from": None}
     assert view["candidates"] == [] and view["entries"] == []
+
+
+def test_overview_shows_the_offered_models_before_their_first_turn():
+    repo = Repo()
+    usage = UsageService(repo)
+    svc = RateCardService(usage=usage, pricing=NoPricing(), offered_models=[
+        "global.anthropic.claude-haiku-5-5",
+        "global.anthropic.claude-opus-5-5",
+        "us.anthropic.claude-sonnet-5-5",
+        "global.openai.gpt-5.6-sol",
+    ])
+
+    view = svc.overview("2026-09-01", TODAY)
+
+    by_key = {(row["family"], row["routing"]): row for row in view["rows"]}
+    assert set(by_key) == {
+        ("claude-haiku-5-5", "global"), ("claude-opus-5-5", "global"), ("claude-sonnet-5-5", "regional"),
+    }
+    opus = by_key[("claude-opus-5-5", "global")]
+    assert opus["turns"] == 0 and opus["models"] == [] and opus["complete"] is True
+    assert opus["tiers"]["input"]["source"] == f"card:{RATE_CARD_VERSION}"
+    # A `us.` profile bills the region's standard tariff, derived from global x1.1.
+    assert Decimal(by_key[("claude-sonnet-5-5", "regional")]["tiers"]["input"]["usd_per_1m"]) == Decimal("2.20")
+    assert by_key[("claude-haiku-5-5", "global")]["tiers"]["long_input"]["usd_per_1m"] == "0.50"
 
 
 def test_overview_lists_registered_entries_with_their_source_and_shows_them_in_force():

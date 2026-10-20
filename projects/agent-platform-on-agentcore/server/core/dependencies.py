@@ -67,6 +67,8 @@ from core.config import (
     MCP_GATEWAY_ARN,
     TEAM_SHARED_ACTIONS,
     SKILLS_BUCKET,
+    ALLOWED_MODELS,
+    BEDROCK_MODEL_ID,
 )
 import boto3
 
@@ -262,7 +264,9 @@ audit_service = AuditService(repository=team_repository)
 
 # The rate card an admin can read into and fill. Shares the usage service (the
 # overlay lives in its table and it reprices) and the Price List client.
-rate_card_service = RateCardService(usage=usage_service, pricing=pricing_service)
+rate_card_service = RateCardService(
+    usage=usage_service, pricing=pricing_service, offered_models=[BEDROCK_MODEL_ID, *ALLOWED_MODELS]
+)
 
 # The collector shares the usage repository and the pricing cache. It is only
 # *constructed* here; `main.py`'s lifespan decides whether it runs, so importing

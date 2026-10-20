@@ -205,7 +205,7 @@ export function createWidgetRegistry(ctx: WidgetRegistryContext): Record<WidgetI
                 {ctx.detail.turns.some((turn) => turn.measured) && (
                   <FoldBand
                     title="최근 턴"
-                    hint="토큰이 기록된 최근 턴입니다. 표는 최신순, 오른쪽 차트는 같은 턴을 시간순으로 놓은 입력·출력 토큰과 비용입니다. 비용은 턴이 끝난 시점의 모델 요율로 계산한 값이고, 요율이 없는 턴은 비용 차트에서 빈 자리입니다."
+                    hint="토큰이 기록된 최근 턴입니다. 표는 최신순, 오른쪽 차트는 같은 턴을 시간순으로 놓은 입력·출력 토큰과 비용입니다. 비용은 턴이 끝난 시점의 모델 토큰 가격로 계산한 값이고, 가격이 없는 턴은 비용 차트에서 빈 자리입니다."
                     summary={`턴 ${ctx.detail.turns.filter((turn) => turn.measured).length}`}
                     defaultOpen={false}
                   >

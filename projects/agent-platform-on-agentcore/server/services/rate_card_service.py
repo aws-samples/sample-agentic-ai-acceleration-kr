@@ -1,7 +1,7 @@
 """The model rate card as something an admin can read, fetch into and fill.
 
 **Why this exists.** The ledger prices a turn only with a rate it can stand
-behind, so a model the committed card lacks is "요율 미등록" until the bill has
+behind, so a model the committed card lacks is "가격 미등록" until the bill has
 shown the same value on two consecutive days (`billing_service._learn_rates`).
 That rule is right and it is slow: a new model's turns sit unpriced for two
 billing days, and a model whose global routing we alone use may never reach two
@@ -33,7 +33,7 @@ import logging
 import re
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from data.model_rates import (
     LONG_CONTEXT_THRESHOLDS,
@@ -77,10 +77,10 @@ def rate_key(family: str, routing: str, tier: str, effective_from: str) -> str:
 def parse_rate_key(sort_key: str) -> Tuple[str, str, str, str]:
     """`R#family|routing|tier|day` -> its four parts, or `RateCardError`."""
     if not sort_key.startswith("R#"):
-        raise RateCardError("잘못된 요율 키입니다.")
+        raise RateCardError("잘못된 가격 항목 키입니다.")
     parts = sort_key[2:].split("|")
     if len(parts) != 4:
-        raise RateCardError("잘못된 요율 키입니다.")
+        raise RateCardError("잘못된 가격 항목 키입니다.")
     return parts[0], parts[1], parts[2], parts[3]
 
 
@@ -103,9 +103,9 @@ def validate_entry(raw: Dict[str, Any], *, today: str) -> Dict[str, Any]:
     try:
         usd = Decimal(str(raw.get("usd_per_1m", "")).strip())
     except (InvalidOperation, ValueError):
-        raise RateCardError("요율은 1M 토큰당 달러 숫자여야 합니다.") from None
+        raise RateCardError("가격은 1M 토큰당 달러 숫자여야 합니다.") from None
     if not usd.is_finite() or usd < 0 or usd > _MAX_USD_PER_1M:
-        raise RateCardError("요율은 0 이상 1,000 이하의 1M 토큰당 달러여야 합니다.")
+        raise RateCardError("가격은 0 이상 1,000 이하의 1M 토큰당 달러여야 합니다.")
     effective_from = str(raw.get("effective_from") or "").strip()
     if not _DAY.match(effective_from):
         raise RateCardError("유효 시작일은 YYYY-MM-DD 형식이어야 합니다.")
@@ -129,14 +129,19 @@ class RateCardService:
     accepts, and reprices. Holds no state of its own: the overlay lives in the
     usage table and in `data.model_rates`."""
 
-    def __init__(self, usage: Any, pricing: Any):
+    def __init__(self, usage: Any, pricing: Any, offered_models: Iterable[str] = ()):
         self.usage = usage
         self.pricing = pricing
+        # The model ids this stack lets a turn run with (ALLOWED_MODELS and the
+        # default). Each gets a row before its first turn, so an admin sees the
+        # figure a new model will be priced at instead of an empty page.
+        self.offered_models = [model for model in offered_models if model]
 
     # --- reading -----------------------------------------------------------------
 
     def overview(self, start_date: str, end_date: str) -> Dict[str, Any]:
-        """The card for the models this platform ran in the window.
+        """The card for the models this platform ran in the window, and for the
+        models it offers even if none has run yet.
 
         One row per (family, routing) we invoked, each tier with its figure and
         where the figure came from; the bill's candidates for anything missing or
@@ -170,6 +175,15 @@ class RateCardService:
                     row["unpriced_turns"] += unpriced
                     if row["unpriced_since"] is None or day < row["unpriced_since"]:
                         row["unpriced_since"] = day
+
+        for model_id in self.offered_models:
+            family = family_of(model_id) or family_name_of(model_id)
+            if family is None:
+                continue
+            rows.setdefault((family, routing_of(model_id)), {
+                "family": family, "routing": routing_of(model_id), "models": [],
+                "turns": 0, "unpriced_turns": 0, "unpriced_since": None,
+            })
 
         # Entries for the families we ran, plus anything a person (or the Price
         # List) registered for a family we have not run yet — an admin who
@@ -352,7 +366,7 @@ class RateCardService:
         """Validate, store, reload and reprice. All-or-nothing on validation: a
         batch with one bad row writes nothing, so the admin fixes it and resends."""
         if not raw_entries:
-            raise RateCardError("등록할 요율이 없습니다.")
+            raise RateCardError("등록할 가격이 없습니다.")
         entries = [validate_entry(raw, today=today) for raw in raw_entries]
         registered_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         saved: List[str] = []
@@ -376,6 +390,6 @@ class RateCardService:
         priced go back to unpriced unless another rate covers them."""
         _, _, _, effective_from = parse_rate_key(sort_key)
         if not self.usage.delete_rate_entry(sort_key):
-            raise RateCardError("그 요율 항목이 없습니다.")
+            raise RateCardError("그 가격 항목이 없습니다.")
         repriced = self.usage.reprice_events(effective_from, today)
         return {"removed": sort_key, "repriced": repriced}

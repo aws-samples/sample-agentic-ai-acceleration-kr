@@ -13,7 +13,7 @@ import { DonutShare, EmptyPlot, Plot, PlotCell, PlotGrid } from "./charts";
  * Read from the per-(agent, model) counters the ledger writes at turn time, so
  * a window spanning a redeploy shows both models with their own tokens — the
  * old read-time lookup showed one model per agent and re-priced history under
- * it. A model the rate card does not know is listed with "요율 미등록", never
+ * it. A model the rate card does not know is listed with "가격 미등록", never
  * dropped: the turns happened and the reader should see that they are unpriced.
  */
 export function ModelMixPanel({ models }: { models: ModelRow[] }) {
@@ -59,10 +59,10 @@ export function ModelMixPanel({ models }: { models: ModelRow[] }) {
               <DonutShare
                 segments={byCost}
                 format={(value) => formatMicros(Math.round(value * 1_000_000))}
-                empty="요율표에 등록된 모델의 턴이 없습니다."
+                empty="가격표에 등록된 모델의 턴이 없습니다."
               />
             ) : (
-              <EmptyPlot label="요율표에 등록된 모델의 턴이 없습니다." />
+              <EmptyPlot label="가격표에 등록된 모델의 턴이 없습니다." />
             )}
           </Plot>
         </PlotCell>
@@ -107,8 +107,8 @@ export function ModelMixPanel({ models }: { models: ModelRow[] }) {
           </div>
           {unregistered.length > 0 && (
             <p className="mt-2 text-xxs text-warning">
-              요율표에 없는 모델 {unregistered.length}개: {unregistered.map((row) => row.model_id).join(", ")}. AWS 청구서에
-              해당 모델이 이틀 연속 잡히면 요율이 자동 등록되고, Settings 의 모델 요율에서 지금 등록해도 비용이 계산됩니다.
+              가격표에 없는 모델 {unregistered.length}개: {unregistered.map((row) => row.model_id).join(", ")}. AWS 청구서에
+              해당 모델이 이틀 연속 잡히면 가격이 자동 등록되고, Settings 의 모델 토큰 가격에서 지금 등록해도 비용이 계산됩니다.
             </p>
           )}
         </PlotCell>

@@ -39,7 +39,7 @@ import type { LeaderboardRow } from "@/lib/insights";
  * published rate. The bill is not a column — it lags two days; the AgentCore
  * 청구 비용 widget shows it per agent, and its check on the Runtime figure is a
  * footnote under 비용 구성.
- * "요율 미등록" says why a cost cell has no number instead of showing $0; a dash
+ * "가격 미등록" says why a cost cell has no number instead of showing $0; a dash
  * is a figure that could not be stated.
  */
 const COLUMNS: {

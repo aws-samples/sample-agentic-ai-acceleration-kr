@@ -288,9 +288,9 @@ export default function InsightsPage() {
       id: "rate-mismatch",
       tone: "error",
       icon: AlertTriangle,
-      children: `요율표 ${summary.cost.rate_card.version} 와 AWS 청구서 요율이 ${summary.cost.rate_card.mismatches.length}건 다릅니다 (${summary.cost.rate_card.mismatches
+      children: `가격표 ${summary.cost.rate_card.version} 와 AWS 청구서 가격이 ${summary.cost.rate_card.mismatches.length}건 다릅니다 (${summary.cost.rate_card.mismatches
         .map((m) => `${m.family} ${m.routing} ${m.tier}`)
-        .join(", ")}). 같은 값이 이틀 연속 청구되면 그 날짜부터의 요율로 자동 반영되고 해당 턴의 비용이 다시 계산됩니다. Settings 의 모델 요율에서 지금 등록할 수도 있습니다.`,
+        .join(", ")}). 같은 값이 이틀 연속 청구되면 그 날짜부터의 가격으로 자동 반영되고 해당 턴의 비용이 다시 계산됩니다. Settings 의 모델 토큰 가격에서 지금 등록할 수도 있습니다.`,
     });
   }
   if (summary && summary.cost.model.unregistered_models.length > 0) {
@@ -298,7 +298,7 @@ export default function InsightsPage() {
       id: "rate-unregistered",
       tone: "warning",
       icon: AlertTriangle,
-      children: `요율표에 없는 모델의 턴 ${summary.cost.model.unpriced_turns.toLocaleString("ko-KR")}개는 모델 비용에서 빠져 있습니다: ${summary.cost.model.unregistered_models.join(", ")}. AWS 청구서에 이 모델이 이틀 연속 같은 요율로 잡히면 자동으로 요율을 등록하고 비용을 채웁니다 (첫 사용 후 2~3일). Settings 의 모델 요율에서 지금 등록할 수도 있습니다.`,
+      children: `가격표에 없는 모델의 턴 ${summary.cost.model.unpriced_turns.toLocaleString("ko-KR")}개는 모델 비용에서 빠져 있습니다: ${summary.cost.model.unregistered_models.join(", ")}. AWS 청구서에 이 모델이 이틀 연속 같은 가격으로 잡히면 자동으로 가격을 등록하고 비용을 채웁니다 (첫 사용 후 2~3일). Settings 의 모델 토큰 가격에서 지금 등록할 수도 있습니다.`,
     });
   }
   if (summary && !summary.sources.usage_logs) {

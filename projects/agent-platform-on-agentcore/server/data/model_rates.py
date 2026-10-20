@@ -21,7 +21,7 @@ a new model, or a changed price — is *learned* only when the same exact value
 was billed on two consecutive complete days; it is then stored with the first of
 those days as its effective date (`RATES#learned`) and overlaid here by
 `set_learned_rates`. Until then a turn on that model is priced at *nothing* — the
-caller records it without a cost and the dashboard says "요율 미등록", which is a
+caller records it without a cost and the dashboard says "가격 미등록", which is a
 true statement where a guess would not be — and the learned rate reprices it.
 
 Every rate therefore has an effective date, and `resolve_rate(model_id, day)`

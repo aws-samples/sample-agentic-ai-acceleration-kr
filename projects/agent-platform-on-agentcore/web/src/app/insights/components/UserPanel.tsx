@@ -345,7 +345,7 @@ export function UserPanel({ days }: { days: number }) {
                         </span>
                         {user.unpriced_turns > 0 && user.model_cost_micros !== null && (
                           <span className="text-xxs text-muted-foreground">
-                            요율 미등록 {user.unpriced_turns}턴 제외
+                            가격 미등록 {user.unpriced_turns}턴 제외
                           </span>
                         )}
                       </span>
@@ -539,7 +539,7 @@ function UserDetail({
               </Plot>
             </PlotCell>
             <PlotCell>
-              <Plot title="일별 모델 비용" hint="요율이 등록된 턴만 합한 값입니다.">
+              <Plot title="일별 모델 비용" hint="가격이 등록된 턴만 합한 값입니다.">
                 <CostColumns data={daily} name="모델 비용" />
               </Plot>
             </PlotCell>

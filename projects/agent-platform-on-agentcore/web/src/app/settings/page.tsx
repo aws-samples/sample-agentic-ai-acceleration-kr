@@ -24,7 +24,7 @@ import {
  * pages show. Three tabs, each a thing an admin does rarely and deliberately:
  *
  * - **메뉴**: which sidebar menus plain users see. Admins always see all.
- * - **모델 요율**: the rate card the ledger prices turns with. Started as an
+ * - **모델 토큰 가격**: the rate card the ledger prices turns with. Started as an
  *   Insights widget; among a page of figures a form reads as one more chart.
  * - **MCP Tools**: the MCP inspector, formerly its own top-level menu.
  *
@@ -164,7 +164,7 @@ function SettingsPageInner() {
           >
             <TabsList>
               <TabsTrigger value="menus">메뉴</TabsTrigger>
-              <TabsTrigger value="rates">모델 요율</TabsTrigger>
+              <TabsTrigger value="rates">모델 토큰 가격</TabsTrigger>
               <TabsTrigger value="mcp">MCP Tools</TabsTrigger>
             </TabsList>
             <TabsContent value="menus">
@@ -177,8 +177,8 @@ function SettingsPageInner() {
             </TabsContent>
             <TabsContent value="rates">
               <Section
-                title="모델 요율"
-                hint={`최근 ${RATE_WINDOW_DAYS}일에 실행된 모델의 1M 토큰당 요율입니다. 저장하거나 지우면 유효 시작일부터의 턴 비용이 바로 다시 계산되고, Insights 의 모델 비용이 그만큼 움직입니다.`}
+                title="모델 토큰 가격"
+                hint={`이 스택이 제공하는 모델과 최근 ${RATE_WINDOW_DAYS}일에 실행된 모델입니다.`}
               >
                 <PlotStack>
                   <RateCardPanel days={RATE_WINDOW_DAYS} />
