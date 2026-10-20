@@ -374,8 +374,18 @@ def upload_attachment(
     Plain `def` like its neighbours. It used to be `async def` to await the
     body, which put the ownership read and the S3 write on the event loop; the
     upload is already spooled, so it is read synchronously on the threadpool.
+
+    A thread that does not exist yet is accepted. A new chat uploads before its
+    first turn, under the id the browser picked, and the thread only comes into
+    being when that turn runs get_or_create_thread — which is also where
+    ownership is enforced. Refusing it made attaching on a new chat a 404.
     """
-    _owned(thread_id, user)
+    try:
+        thread_service.require_owned(thread_id, user.sub, is_admin=user.is_admin)
+    except ThreadNotFound:
+        pass
+    except ThreadForbidden as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
     body = file.file.read()
     try:
         return attachment_service.store(thread_id, file.filename or "file", body)

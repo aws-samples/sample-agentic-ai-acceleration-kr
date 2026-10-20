@@ -202,7 +202,7 @@ export function useChat({
   }, []);
 
   const sendMessage = useCallback(
-    (content: string, attachments?: AttachmentRef[]) => {
+    (content: string, attachments?: AttachmentRef[], newThreadId?: string) => {
       // With attachments the content becomes a block array: the text plus one
       // small reference per file. No bytes — the server resolves each reference
       // from S3 when it builds the runtime payload, so re-sending the whole
@@ -237,7 +237,9 @@ export function useChat({
         appModelContextRef.current = null;
       }
 
-      stream.submit({ messages: allMessages }, { config });
+      // `newThreadId`: a new chat's attachments were uploaded under an id the
+      // composer picked, so the thread this turn creates has to take that id.
+      stream.submit({ messages: allMessages }, { config, threadId: newThreadId });
       // Update thread list immediately when sending a message
       onHistoryRevalidate?.();
     },

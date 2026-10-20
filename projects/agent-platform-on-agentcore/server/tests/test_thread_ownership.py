@@ -304,7 +304,11 @@ def test_admin_may_use_anyones_thread(method, template, body, app):
     assert response.status_code not in (401, 403), response.text
 
 
-@pytest.mark.parametrize("method,template,body", THREAD_ROUTES,
+UPLOAD = ("POST", "/threads/{tid}/attachments", None)
+
+
+@pytest.mark.parametrize("method,template,body",
+                         [r for r in THREAD_ROUTES if r != UPLOAD],
                          ids=lambda v: str(v))
 def test_a_missing_thread_is_404(method, template, body, app):
     response = _request(
@@ -312,6 +316,18 @@ def test_a_missing_thread_is_404(method, template, body, app):
     )
 
     assert response.status_code == 404, response.text
+
+
+def test_an_upload_to_a_thread_not_created_yet_is_accepted(app):
+    """A new chat attaches before its first turn, under the id the browser
+    picked; that turn creates the thread (and checks the owner). A 404 here
+    made attaching on a new chat fail."""
+    method, template, body = UPLOAD
+    response = _request(
+        _client(app, OWNER), method, template.format(tid="t-nope"), body
+    )
+
+    assert response.status_code == 200, response.text
 
 
 @pytest.mark.parametrize("method,template,body", THREAD_ROUTES,

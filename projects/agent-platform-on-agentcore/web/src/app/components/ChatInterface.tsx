@@ -323,7 +323,11 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         }, 100);
 
         // sendMessage is now async, but we don't need to await it
-        sendMessage(messageText, readyRefs.length > 0 ? readyRefs : undefined);
+        sendMessage(
+          messageText,
+          readyRefs.length > 0 ? readyRefs : undefined,
+          pendingThreadIdRef.current ?? undefined
+        );
 
         attachments.forEach((item) => {
           if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);

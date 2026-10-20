@@ -590,10 +590,14 @@ class StreamingService:
 
         if agent_runtime_arn or qualifier:
             arn = agent_runtime_arn or self.agentcore_client.agent_runtime_arn
+            # The attachment service rides along: without it the client keeps
+            # only the text of a message and drops its file references, and
+            # since the default agent is a record too, that was every chat.
             return AgentCoreClient(
                 agent_runtime_arn=arn,
                 qualifier=qualifier or self.agentcore_client.qualifier,
                 region_name=_region_of(arn),
+                attachment_service=self.agentcore_client.attachment_service,
             )
         return self.agentcore_client
 

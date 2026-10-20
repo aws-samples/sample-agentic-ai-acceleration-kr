@@ -115,6 +115,7 @@ def _streaming():
         region_name="ap-northeast-1",
         agent_runtime_arn="arn:aws:bedrock-agentcore:ap-northeast-1:1:runtime/default",
         qualifier="DEFAULT",
+        attachment_service="attachments",
     )
     return svc
 
@@ -141,3 +142,13 @@ def test_same_region_and_malformed_arns_fall_back_to_the_platform_region():
     odd = svc._get_agent_client({"qualifier": "PROD"})
     assert same.region_name == "ap-northeast-1"
     assert odd.region_name == "ap-northeast-1"
+
+
+def test_a_runtime_client_built_per_turn_keeps_the_attachment_service():
+    # Without it the client keeps only a message's text and drops its file
+    # references; every record-backed chat (the default agent included) takes
+    # this branch, so attachments never reached a model.
+    client = _streaming()._get_agent_client(
+        {"agent_runtime_arn": "arn:aws:bedrock-agentcore:ap-northeast-1:1:runtime/x"}
+    )
+    assert client.attachment_service == "attachments"
