@@ -292,6 +292,10 @@ ingress:
 # ----------------------------------------------------------------------------
 externalSecrets:
   enabled: false
+  # ExternalSecret 의 apiVersion. 비우면 클러스터가 external-secrets.io/v1 을 서빙하는지로
+  # 정한다(ESO 0.17+ → v1, 0.10.x → v1beta1). `helm template` 처럼 클러스터를 모르는 렌더에서만
+  # 명시가 필요하다 — 예: "external-secrets.io/v1".
+  apiVersion: ""
   # SecretStore 또는 ClusterSecretStore 참조
   secretStoreRef:
     kind: "ClusterSecretStore"  # "SecretStore" | "ClusterSecretStore"

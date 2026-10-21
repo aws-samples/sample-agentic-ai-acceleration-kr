@@ -101,6 +101,24 @@ imagePullSecrets:
 {{- end -}}
 
 {{/* ------------------------------------------------------------------------
+  ExternalSecret apiVersion
+  ESO 0.10.x(이 레포 terraform 기본값)는 external-secrets.io/v1beta1 만, 0.17+ 는 v1 을
+  서빙하고 1.x/2.x 는 v1beta1 을 더 이상 서빙하지 않는다. 틀린 쪽을 렌더하면 pre-install/
+  pre-upgrade 훅(weight -30)에서 실패해 migration Job 까지 가지 못한다.
+  ⇒ values 로 명시하면 그 값, 아니면 클러스터가 v1 을 서빙하는지로 정한다.
+  ⚠️ `helm template` 은 클러스터를 모르므로 --api-versions 없이는 v1beta1 이 나온다.
+-------------------------------------------------------------------------- */}}
+{{- define "llm-gateway.externalSecretsApiVersion" -}}
+{{- if .Values.externalSecrets.apiVersion -}}
+{{- .Values.externalSecrets.apiVersion -}}
+{{- else if .Capabilities.APIVersions.Has "external-secrets.io/v1" -}}
+external-secrets.io/v1
+{{- else -}}
+external-secrets.io/v1beta1
+{{- end -}}
+{{- end -}}
+
+{{/* ------------------------------------------------------------------------
   ServiceAccount 이름 (서비스별)
   호출: {{ include "llm-gateway.serviceAccountName" (dict "root" . "svc" .Values.gatewayProxy "default" "gateway-proxy") }}
 -------------------------------------------------------------------------- */}}
