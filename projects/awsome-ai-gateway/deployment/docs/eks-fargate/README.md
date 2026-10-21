@@ -24,6 +24,8 @@ AWS EKS Fargate 환경에 LLM Gateway를 배포하는 전체 가이드입니다.
 | 05 | [smoke-test.md](./05-smoke-test.md) | 배포 후 E2E 검증 | 10분 |
 | 06 | [upgrade-rollback.md](./06-upgrade-rollback.md) | 버전 업데이트와 롤백 | 참고용 |
 | 07 | [cognito-onboarding.md](./07-cognito-onboarding.md) | Cognito 첫 admin 등록 + OIDC end-to-end 검증 | 30~45분 |
+| 08 | [post-deploy-tui.md](./08-post-deploy-tui.md) | 배포 후 TUI | 참고용 |
+| 09 | [upgrade-131-to-136.md](./09-upgrade-131-to-136.md) | EKS 1.31 → 1.36, LBC v3, ESO v1 업그레이드 | 참고용 |
 | — | [troubleshooting.md](./troubleshooting.md) | 공통 이슈 (OIDC 섹션 포함) | 참고용 |
 
 ## 이 가이드의 규칙

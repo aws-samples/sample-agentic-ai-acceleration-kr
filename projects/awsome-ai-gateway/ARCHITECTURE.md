@@ -68,7 +68,7 @@ Helm 이 배포하는 워크로드는 **6 long-running Deployment + 1 migration 
 
 **Helm 워크로드가 아님:** `admin-chat-agent`(agents-as-tools Strands BI 어시스턴트)는 **Bedrock AgentCore Runtime**(arm64 microVM, container→ECR→`CreateAgentRuntime`)에 배포되고, admin-api 가 `boto3 bedrock-agentcore.invoke_agent_runtime`(SigV4/IAM)로 호출한다. 차트에는 `AGENTCORE_RUNTIME_ARN` env + chat staging S3 버킷으로만 연결된다. `query_db`/`get_schema` Lambda 는 read-only `gateway_chat_reader` DB role 로 실행된다.
 
-**Infra:** EKS **Fargate**(Auto Mode 아님, Fargate Profile 기반, EKS 1.30). Aurora PostgreSQL + ElastiCache/Valkey 는 외부 관리형(`postgresql.enabled=false`, `redis.enabled=false`). ALB Ingress; External Secrets Operator(ESO)가 Secrets Manager → K8s Secret 동기(refreshInterval dev 1h / prod 30m). Terraform 모듈: VPC, EKS Fargate, Aurora, ElastiCache, Cognito, IRSA, ALB, ESO, agentcore-runtime.
+**Infra:** EKS **Fargate**(Auto Mode 아님, Fargate Profile 기반, EKS 1.36). Aurora PostgreSQL + ElastiCache/Valkey 는 외부 관리형(`postgresql.enabled=false`, `redis.enabled=false`). ALB Ingress; External Secrets Operator(ESO)가 Secrets Manager → K8s Secret 동기(refreshInterval dev 1h / prod 30m). Terraform 모듈: VPC, EKS Fargate, Aurora, ElastiCache, Cognito, IRSA, ALB, ESO, agentcore-runtime.
 
 ---
 

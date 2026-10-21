@@ -94,14 +94,14 @@ User HTTP → ALB → gateway-proxy Pod
 |------|-----------|
 | AWS CLI | v2.x |
 | Terraform | v1.9+ |
-| kubectl | v1.30 ~ v1.32 (권장 v1.31.x) |
+| kubectl | v1.35 ~ v1.37 (권장 v1.36.x) |
 | Helm | v3.14+ |
 | Docker 또는 Finch | 최신 |
 | jq | 최신 |
 
-> kubectl 은 "최신"이 정답이 아니다. 클러스터(EKS 1.31)와의 지원 skew 는 **±1 minor** 이므로
-> v1.30~v1.32 만 지원 범위이며, `dl.k8s.io/release/stable.txt` 로 받으면 지금은 v1.37 이 내려와
-> skew 를 벗어난다. 설치 명령은 `stable-1.31.txt` 채널을 쓴다
+> kubectl 은 "최신"이 정답이 아니다. 클러스터(EKS 1.36)와의 지원 skew 는 **±1 minor** 이므로
+> v1.35~v1.37 만 지원 범위이며, `dl.k8s.io/release/stable.txt` 는 전체 최신을 가리켜 언젠가
+> skew 를 벗어난다. 설치 명령은 `stable-1.36.txt` 채널을 쓴다
 > (deployment/docs/eks-fargate/01-prerequisites.md §2.3 참고).
 
 ### 2.2 AWS 계정 준비
@@ -527,7 +527,7 @@ On-Prem 배포는 지원되지 않습니다 — 필요하다면 해당 커밋에
 | 항목 | 값 |
 |---|---|
 | VPC CIDR | `10.40.0.0/16` (multi-AZ: ap-northeast-2a/c) |
-| EKS cluster | `llm-gateway-prod` (1.31) |
+| EKS cluster | `llm-gateway-prod` (1.36) |
 | Aurora | `llm-gateway-prod`, db.r7g.large, multi-AZ, RDS Proxy on |
 | ElastiCache | `llm-gateway-prod`, cache.r7g.large, **cluster mode on** |
 | Cognito User Pool | `<COGNITO_USER_POOL_ID_PROD>` |
@@ -545,7 +545,7 @@ On-Prem 배포는 지원되지 않습니다 — 필요하다면 해당 커밋에
 | 항목 | 값 |
 |---|---|
 | VPC CIDR | `10.30.0.0/16` (single AZ) |
-| EKS cluster | `llm-gateway-dev` (1.31) |
+| EKS cluster | `llm-gateway-dev` (1.36) |
 | Aurora | `llm-gateway-dev`, t-class, single-AZ, RDS Proxy on |
 | ElastiCache | `llm-gateway-dev`, single node (cluster mode off) |
 | Cognito User Pool | `<COGNITO_USER_POOL_ID_DEV>` (2026-05-18 us-east-1 → ap-northeast-2 마이그레이션 완료) |

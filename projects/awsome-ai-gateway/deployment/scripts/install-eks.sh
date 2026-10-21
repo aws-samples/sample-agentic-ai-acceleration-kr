@@ -182,7 +182,7 @@ ensure_cluster_secret_store() {
 
     info "ClusterSecretStore 생성"
     if ! kubectl apply -f - <<EOF 2>&1 | grep -v "failed calling webhook"
-apiVersion: external-secrets.io/v1beta1
+apiVersion: external-secrets.io/v1
 kind: ClusterSecretStore
 metadata:
   name: aws-secrets-manager
@@ -214,7 +214,7 @@ EOF
             fi
         done
         kubectl apply -f - <<EOF
-apiVersion: external-secrets.io/v1beta1
+apiVersion: external-secrets.io/v1
 kind: ClusterSecretStore
 metadata:
   name: aws-secrets-manager

@@ -42,7 +42,7 @@ module "eks" {
   project     = var.project
   environment = var.environment
   # 두 값은 minor 홉마다 **함께** 움직인다. 순서/기한은 variables.tf 의
-  # eks_cluster_version · eks_addon_versions 주석 참고(현재 1.31, 목표 1.36).
+  # eks_cluster_version · eks_addon_versions 주석 참고(현재 1.36 = 라이브).
   cluster_version     = var.eks_cluster_version
   addon_versions      = var.eks_addon_versions
   vpc_id              = module.vpc.vpc_id
@@ -139,6 +139,11 @@ module "alb_controller" {
   vpc_id            = module.vpc.vpc_id
   aws_region        = var.aws_region
 
+  # chart 1.8.2 가 깔린 클러스터를 모듈 기본값(3.5.0)으로 올릴 때는 v3 CRD 를 먼저 수동
+  # apply 한다(helm 은 chart 의 crds/ 를 업그레이드하지 않는다). 신규 설치는 해당 없음.
+  # 근거·절차: modules/alb-controller/variables.tf 의 chart_version 주석,
+  # docs/eks-fargate/09-upgrade-131-to-136.md
+
   tags = var.tags
 
   # Fargate 프로파일이 ACTIVE 된 뒤에 helm_release 를 시작해야 한다.
@@ -160,6 +165,10 @@ module "external_secrets" {
   environment   = var.environment
   irsa_role_arn = module.irsa.external_secrets_role_arn
   aws_region    = var.aws_region
+
+  # ESO 2.x 는 external-secrets.io/v1 만 serve 하고, 모듈이 webhook·cert-controller 를 끈다.
+  # 0.10.x 가 깔린 클러스터를 올리는 동안에만 `serve_v1beta1 = true` 를 여기에 잠시 넣는다
+  # (modules/external-secrets/variables.tf 의 serve_v1beta1 설명, 09 런북).
 
   tags = var.tags
   # ALB Controller 의 webhook (mutating) 이 ESO Service 생성 시 호출되므로

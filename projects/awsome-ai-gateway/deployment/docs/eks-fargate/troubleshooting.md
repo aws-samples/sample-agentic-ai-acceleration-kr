@@ -129,6 +129,11 @@ no matches for kind "ClusterSecretStore" in version "external-secrets.io/v1beta1
 
 우리 리포는 2026-04-23 이후 수정 완료.
 
+⚠️ **ESO 1.x/2.x 에서는 같은 메시지의 원인이 다르다** — `v1beta1` 이 아예 serve 되지 않는다
+(이 레포 기본값 2.11.0 은 `crds.unsafeServeV1Beta1=false`). 매니페스트를 `external-secrets.io/v1` 로
+쓴다. `install-eks.sh` 와 llm-gateway 차트는 이미 v1 을 쓴다(차트는 클러스터가 v1 을 serve 할 때).
+확인: `kubectl api-versions | grep external-secrets.io`.
+
 ---
 
 ### 증상: `Failed to construct REST client: no client config`
@@ -225,7 +230,7 @@ kubelet skew 가 ERROR insight 로 떠서 롤백이 막히므로, 롤백하려�
 # deployment/terraform/environments/{dev,prod}/variables.tf
 variable "eks_cluster_version" {
   type     = string
-  default  = "1.31"   # 라이브와 동일하게. 라이브보다 낮추지 말 것
+  default  = "1.36"   # 라이브와 동일하게. 라이브보다 낮추지 말 것
   nullable = false
 }
 ```
@@ -234,10 +239,13 @@ variable "eks_cluster_version" {
 ```bash
 aws eks describe-cluster --name llm-gateway-dev \
   --query 'cluster.version' --output text --region "$AWS_REGION"
-# → 1.31
+# → 1.36
 ```
 
-우리 리포의 현재 기본값은 dev·prod 모두 **`1.31`** = 라이브(2026-09-04 실측)와 일치.
+우리 리포의 현재 기본값은 dev·prod 모두 **`1.36`** = 라이브(2026-10-22 실측)와 일치.
+옛 기본값(1.31)으로 만든 클러스터는 tfvars 로 지금 버전을 고정한 뒤 한 칸씩 올린다
+([09-upgrade-131-to-136.md](./09-upgrade-131-to-136.md)) — 기본값을 그대로 apply 하면
+1.31→1.36 다중 점프라 같은 InvalidParameterException 으로 멈춘다.
 
 ⚠️ **이 사고는 재발했다.** 2026-09-04 감사에서 커밋된 브랜치의 dev·prod `eks_cluster_version`
 기본값이 `"1.30"` 인데 라이브가 `1.31` 인 상태가 발견됐다(그대로 apply 하면 prod 까지 위 에러로
@@ -619,7 +627,7 @@ done
 
 # 그 다음 ClusterSecretStore 생성 (webhook 실패 허용)
 kubectl apply -f - <<EOF
-apiVersion: external-secrets.io/v1beta1
+apiVersion: external-secrets.io/v1   # ESO 0.10.x 클러스터면 v1beta1
 kind: ClusterSecretStore
 metadata: { name: aws-secrets-manager }
 spec:
@@ -637,7 +645,8 @@ EOF
 
 **근본 해결 옵션**:
 1. ESO 재설치: `terraform apply -replace='module.external_secrets.helm_release.external_secrets'`
-2. ESO 버전 업그레이드: `chart_version` 을 최신(v0.11+)으로
+2. ESO 버전 업그레이드: 이 레포 기본값은 이제 2.11.0 이고 모듈이 webhook·cert-controller 를 끈다
+   (`modules/external-secrets/main.tf`). 0.10.x 에서 올리는 절차는 [09-upgrade-131-to-136.md](./09-upgrade-131-to-136.md)
 3. cert-manager 통합 활성화: values 에 `webhook.certManager.enabled=true`
 
 **우리 리포 대응**: `install-eks.sh` 의 `ensure_cluster_secret_store()` 가 webhook 호출 실패 시 자동으로 `failurePolicy=Ignore` 로 완화 후 재시도 (2026-04-23 이후 버전). 추가로 **`helm install` 직전**에도 ExternalSecret/SecretStore validating webhook 을 선제적으로 비활성 (2026-04-24 이후) — 아래 섹션 참조.
