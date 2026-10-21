@@ -12,7 +12,7 @@ describe('checkPagePermission', () => {
   it('allows TEAM_LEADER to access permitted pages', () => {
     expect(checkPagePermission('/', 'TEAM_LEADER')).toBe(true);
     expect(checkPagePermission('/budgets', 'TEAM_LEADER')).toBe(true);
-    expect(checkPagePermission('/analytics', 'TEAM_LEADER')).toBe(true);
+    expect(checkPagePermission('/my', 'TEAM_LEADER')).toBe(true);
   });
 
   it('blocks TEAM_LEADER from admin-only pages', () => {
@@ -23,6 +23,6 @@ describe('checkPagePermission', () => {
 
   it('blocks DEVELOPER from all pages', () => {
     expect(checkPagePermission('/', 'DEVELOPER')).toBe(false);
-    expect(checkPagePermission('/analytics', 'DEVELOPER')).toBe(false);
+    expect(checkPagePermission('/budgets', 'DEVELOPER')).toBe(false);
   });
 });

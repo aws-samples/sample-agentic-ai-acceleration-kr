@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import csv
 import datetime as _dt
-import io
 import re
 import uuid
 from decimal import Decimal
@@ -44,21 +42,7 @@ _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 #: 직접 입력 범위의 최대 길이(일, 양끝 포함). 캐시되지 않는 요청 하나가 usage_logs 전체 집계를
 #: 6~9번 돌리므로(요약·모델·팀·사용자·추이·seed), 상한이 없으면 2000-01-01~2100-12-31 같은 범위가
 #: 그대로 전 테이블 스캔이 된다. 93일 = 연속한 석 달(분기)을 담는 가장 짧은 길이.
-#: admin-ui lib/utils/analyticsQuery.ts 의 MAX_ANALYTICS_RANGE_DAYS 와 같아야 한다.
 MAX_ANALYTICS_RANGE_DAYS = 93
-
-#: CSV 셀이 이 문자로 시작하면 스프레드시트가 **수식**으로 해석한다(=HYPERLINK, +cmd, @SUM …).
-#: 표시 이름·이메일·팀 이름은 사용자가 정할 수 있는 값이라, 내보낸 파일을 연 관리자 PC 에서
-#: 수식이 실행될 수 있다(CSV/formula injection). OWASP 권고대로 앞에 작은따옴표를 붙여 텍스트로 만든다.
-_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
-
-
-def _csv_text(value: str | None) -> str | None:
-    """사용자 유래 텍스트 셀을 수식으로 해석되지 않게 만든다(숫자 셀에는 쓰지 않는다)."""
-    if isinstance(value, str) and value.startswith(_CSV_FORMULA_PREFIXES):
-        return "'" + value
-    return value
-
 
 def _validate_period_date(period: str, date: str) -> None:
     """period=YYYY-MM, date=YYYY-MM-DD, and date must be within period's month."""
@@ -137,8 +121,8 @@ class AnalyticsService:
         #    격리 불변식은 비-GLOBAL 일 때만 검사하므로 그대로 통과 → TEAM_LEADER 가 **전사**
         #    비용·사용자 이메일·팀을 받았고, export 는 그것을 CSV 로 내려줬다(실 PG 재현:
         #    다른 팀 사용자 $500 포함 $501). 'team:<uuid 아님>' 은 uuid.UUID 의 ValueError 가
-        #    잡히지 않아 500 이었다. 라우트도 같은 집합을 pattern 으로 강제하지만(422), 서비스를
-        #    직접 부르는 경로가 있으므로(export_analytics) 여기서도 스스로 닫는다.
+        #    잡히지 않아 500 이었다. 라우트도 같은 집합을 pattern 으로 강제하지만(422), 서비스는
+        #    라우트 밖에서도 불릴 수 있으므로 여기서도 스스로 닫는다.
         roi_scope: ROIScope | None = None
         scope_id: uuid.UUID | None = None
 
@@ -428,41 +412,6 @@ class AnalyticsService:
             trends=trends,
         )
 
-    async def export_analytics(
-        self,
-        session: AsyncSession,
-        *,
-        format: str,
-        period: str,
-        group_by: str,
-        scope: str = "all",
-        start_date: str | None = None,
-        end_date: str | None = None,
-        actor: CurrentUser,
-    ) -> tuple[str, str]:
-        """Returns (content, content_type).
-
-        내보내기는 **화면과 같은 질의**여야 한다. 예전에는 scope 를 ``"all"`` 로 하드코딩하고
-        (라우트는 scope/start_date/end_date 를 선언조차 하지 않았다) CSV 직렬화가 group_by 를
-        무시했다 → ``scope=team:X`` 화면이나 범위 화면에서 내보내면 전사·월 전체·모델별 CSV 가
-        내려갔다. 권한은 get_analytics 가 그대로 검사한다(TEAM_LEADER 는 scope='all' 이어도
-        자기 팀으로 좁혀지고, 다른 팀 scope 는 ForbiddenError).
-        """
-        response = await self.get_analytics(
-            session,
-            period=period,
-            group_by=group_by,
-            scope=scope,
-            start_date=start_date,
-            end_date=end_date,
-            actor=actor,
-        )
-
-        if format == "csv":
-            return self._to_csv(response, group_by), "text/csv"
-        else:
-            return response.model_dump_json(indent=2), "application/json"
-
     async def get_usage_by_user_model(
         self,
         session: AsyncSession,
@@ -748,40 +697,3 @@ class AnalyticsService:
         items.sort(key=lambda it: it.cost_usd, reverse=True)
         return UsageByUserResponse(period=period, date=date, items=items)
 
-    @staticmethod
-    def _to_csv(data: AnalyticsResponse, group_by: str = "model") -> str:
-        """group_by 축과 같은 표를 낸다 — 헤더도 축을 따른다.
-
-        예전에는 group_by 를 받지도 않고 늘 ``period,model,cost_usd`` 에 by_model 만 썼다.
-        서비스는 by_team/by_user 를 계산해 놓고 바로 여기서 버렸다 — '팀별' 화면의 CSV 가
-        모델 표였다. by_team 은 GLOBAL 스코프에서만 채워지므로(get_analytics), TEAM_LEADER 의
-        group_by=team 내보내기는 헤더만 있는 CSV 다. fail-closed 로 **의도된** 결과다.
-        """
-        output = io.StringIO()
-        writer = csv.writer(output)
-        # period 열은 실제 집계 구간을 적는다 — 범위 내보내기가 '2026-09' 로만 적히면 그 파일이
-        # 5일치인지 한 달치인지 나중에 구분할 수 없다.
-        period_label = (
-            f"{data.start_date}~{data.end_date}" if data.start_date and data.end_date else data.period
-        )
-        # 이름·이메일·팀·모델 셀은 _csv_text 로 감싼다(수식 주입 방지) — 숫자 셀은 우리가 만든 값이다.
-        if group_by == "team":
-            writer.writerow(["period", "team", "team_id", "cost_usd", "active_users"])
-            for team_item in data.by_team:
-                writer.writerow([
-                    period_label, _csv_text(team_item.team), _csv_text(team_item.team_id),
-                    str(team_item.cost_usd), team_item.active_users,
-                ])
-        elif group_by == "user":
-            writer.writerow(["period", "user", "email", "cost_usd", "requests"])
-            for user_item in data.by_user:
-                writer.writerow([
-                    period_label, _csv_text(user_item.user), _csv_text(user_item.email),
-                    str(user_item.cost_usd), user_item.requests,
-                ])
-        else:
-            # 모델 축의 헤더는 예전 그대로 둔다(기존 소비자가 이 3열을 읽는다).
-            writer.writerow(["period", "model", "cost_usd"])
-            for model_item in data.by_model:
-                writer.writerow([period_label, _csv_text(model_item.model), str(model_item.cost_usd)])
-        return output.getvalue()

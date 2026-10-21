@@ -1,7 +1,7 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 import { z } from 'zod';
-import type { GroupByType, PeriodType, RateLimitScope, UserRole } from './enums';
+import type { RateLimitScope, UserRole } from './enums';
 
 // ─── Generic Response Wrappers ────────────────────────────────────────────────
 
@@ -144,44 +144,6 @@ export const ModelDeactivateSchema = z.object({
   alias: z.string().min(1),
 });
 
-// ─── Analytics ────────────────────────────────────────────────────────────────
-
-export interface AnalyticsFilterForm {
-  period: PeriodType;
-  start_date?: string | null; // ISO 8601 date — required when period === 'custom'
-  end_date?: string | null; // ISO 8601 date — required when period === 'custom'
-  group_by: GroupByType;
-  scope?: string | null;
-}
-
-export const AnalyticsFilterSchema = z
-  .object({
-    period: z.enum(['7d', '30d', '90d', 'custom']),
-    start_date: z.string().date().nullable().optional(),
-    end_date: z.string().date().nullable().optional(),
-    group_by: z.enum(['model', 'team', 'user']),
-    scope: z.string().nullable().optional(),
-  })
-  .refine(
-    (data) => {
-      if (data.period === 'custom') {
-        return !!data.start_date && !!data.end_date;
-      }
-      return true;
-    },
-    { message: 'start_date and end_date are required for custom period', path: ['start_date'] }
-  );
-
-export interface ExportConfig {
-  format: 'csv' | 'json';
-  filters: AnalyticsFilterForm;
-}
-
-export const ExportConfigSchema = z.object({
-  format: z.enum(['csv', 'json']),
-  filters: AnalyticsFilterSchema,
-});
-
 // ─── Organisation ─────────────────────────────────────────────────────────────
 
 export interface DepartmentCreateForm {
@@ -304,8 +266,6 @@ export type AwsAccountInput = z.infer<typeof AwsAccountSchema>;
 
 export type ModelCreateInput = z.infer<typeof ModelCreateSchema>;
 export type ModelDeactivateInput = z.infer<typeof ModelDeactivateSchema>;
-export type AnalyticsFilterInput = z.infer<typeof AnalyticsFilterSchema>;
-export type ExportConfigInput = z.infer<typeof ExportConfigSchema>;
 export type DepartmentCreateInput = z.infer<typeof DepartmentCreateSchema>;
 export type TeamCreateInput = z.infer<typeof TeamCreateSchema>;
 export type UserTeamAssignInput = z.infer<typeof UserTeamAssignSchema>;

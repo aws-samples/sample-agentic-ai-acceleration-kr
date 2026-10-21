@@ -18,23 +18,6 @@ class AnalyticsQueryParams(BaseModel):
     end_date: str | None = Field(None, description="YYYY-MM-DD (KST). start_date 와 함께만 유효")
 
 
-class ExportParams(BaseModel):
-    """`/admin/analytics/export` 쿼리 — **`AnalyticsQueryParams` 의 상위집합이어야 한다.**
-
-    export 는 화면과 같은 데이터셋을 파일로 내려주는 것이다. 화면 라우트가 받는 필터를
-    하나라도 못 받으면 FastAPI 는 그 파라미터를 422 없이 버리므로, 파일은 조용히 다른
-    질문에 답한다(scope 를 못 받아 팀 범위 화면에서 전사 CSV 가 내려간 것이 실제 결함이었다).
-    tests/unit/test_analytics_query_param_parity.py 가 이 관계를 강제한다.
-    """
-
-    format: str = Field("csv", description="csv | json")
-    period: str = Field(description="YYYY-MM format")
-    group_by: str = Field("model")
-    scope: str = Field("all", description="all | team:{id}")
-    start_date: str | None = Field(None, description="YYYY-MM-DD (KST). end_date 와 함께만 유효")
-    end_date: str | None = Field(None, description="YYYY-MM-DD (KST). start_date 와 함께만 유효")
-
-
 # ── Responses ──
 
 

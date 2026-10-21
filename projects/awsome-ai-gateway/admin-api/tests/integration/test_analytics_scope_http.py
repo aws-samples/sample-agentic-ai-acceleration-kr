@@ -14,7 +14,7 @@ from urllib.parse import quote
 import pytest
 from httpx import AsyncClient
 
-ROUTES = ["/admin/analytics", "/admin/analytics/export"]
+ROUTES = ["/admin/analytics"]
 PATTERN_REJECTS = ["xyz", "ALL", " all", "team:garbage", "team:not-a-uuid", "all%"]
 
 

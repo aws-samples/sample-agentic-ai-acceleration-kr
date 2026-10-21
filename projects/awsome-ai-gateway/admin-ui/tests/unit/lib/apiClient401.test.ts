@@ -18,7 +18,7 @@
  *    403 은 반드시 예전 동작(APIError / '조회 실패' 문구)을 유지해야 한다.
  *
  * 실행 환경은 node 다(jsdom 아님) — next/server 의 라우트 핸들러를 그대로 import 해
- * 돌리기 위해서다(tests/unit/cliDownloadProxy.test.ts 와 같은 방식). window 는
+ * 돌리기 위해서다. window 는
  * 리다이렉트 검증에 필요한 만큼만 스텁한다.
  */
 
@@ -40,7 +40,6 @@ import { GET as modelShareGET } from '@/app/api/dashboard/model-share/route';
 import { GET as clientShareGET } from '@/app/api/dashboard/client-share/route';
 import { GET as teamsGET } from '@/app/api/teams-proxy/route';
 import { GET as rlUsageGET } from '@/app/api/rate-limits/usage/route';
-import { GET as exportGET } from '@/app/api/analytics-export/route';
 import { POST as chatPOST } from '@/app/api/chat-proxy/[...path]/route';
 
 // 라우트 핸들러와 api-client 둘 다 next/headers 를 쓴다(전자는 .get, 후자는 .toString).
@@ -355,29 +354,6 @@ describe('프록시 라우트 401 본문', () => {
       new NextRequest('http://admin.test/api/rate-limits/usage?scope=team&scope_id=t-1'),
     );
     expect(res.status).toBe(200);
-  });
-
-  it('analytics-export: 401 은 평문 대신 JSON error_code 를 준다', async () => {
-    stubFetch(upstream(401, {}));
-
-    const res = await exportGET(
-      new NextRequest('http://admin.test/api/analytics-export?period=2026-09&format=csv'),
-    );
-
-    expect(res.status).toBe(401);
-    expect(res.headers.get('content-type')).toContain('application/json');
-    expect(await res.json()).toMatchObject({ error_code: 'UNAUTHORIZED' });
-  });
-
-  it('⚠️ analytics-export: 다른 실패는 예전 평문 그대로', async () => {
-    stubFetch(upstream(500, {}));
-
-    const res = await exportGET(
-      new NextRequest('http://admin.test/api/analytics-export?period=2026-09&format=csv'),
-    );
-
-    expect(res.status).toBe(500);
-    expect(await res.text()).toBe('Export failed');
   });
 
   it('chat-proxy: 401 은 SSE pass-through 대신 JSON error_code 를 준다', async () => {
