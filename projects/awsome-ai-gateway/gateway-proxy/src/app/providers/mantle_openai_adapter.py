@@ -9,7 +9,7 @@ import httpx
 import structlog
 
 from app.providers.base import ProviderAdapter
-from app.providers.openai_usage import extract_responses_usage
+from app.providers.openai_usage import extract_responses_usage, is_terminal_responses_payload
 from app.schemas.domain import TokenUsage
 from app.services.account_credentials import (
     ACCOUNT_UNAVAILABLE_BODY,
@@ -174,6 +174,9 @@ class MantleOpenAIAdapter(ProviderAdapter):
             return status, _http_err(), {}, None
 
         async def _gen() -> AsyncIterator[bytes]:
+            # ⚠️ 종료 프레임 이후의 예외에는 오류 프레임을 붙이지 않는다 — 근거는
+            #    openai_usage 의 같은 섹션 주석. runtime 어댑터와 **같은** 판정을 쓴다.
+            terminal_seen = False
             try:
                 async for line in resp.aiter_lines():
                     # Responses SSE: "data: {json}" lines carry typed events
@@ -181,13 +184,22 @@ class MantleOpenAIAdapter(ProviderAdapter):
                     # JSON payload so the downstream responses SSE stream re-formats it.
                     if line.startswith("data:"):
                         payload = line[len("data:"):].strip()
+                        if is_terminal_responses_payload(payload):
+                            terminal_seen = True
                         if payload and payload != "[DONE]":
                             yield payload.encode()
             except Exception:
-                logger.exception("mantle_openai_stream_failed", model_id=model_id)
-                yield json.dumps(
-                    {"error": {"type": "provider_error", "message": "Mantle (OpenAI) stream failed"}}
-                ).encode()
+                if terminal_seen:
+                    logger.warning(
+                        "mantle_openai_stream_teardown_after_terminal",
+                        model_id=model_id, exc_info=True,
+                    )
+                else:
+                    logger.exception("mantle_openai_stream_failed", model_id=model_id)
+                    yield json.dumps(
+                        {"error": {"type": "provider_error",
+                                   "message": "Mantle (OpenAI) stream failed"}}
+                    ).encode()
             finally:
                 await cm.__aexit__(None, None, None)
 
