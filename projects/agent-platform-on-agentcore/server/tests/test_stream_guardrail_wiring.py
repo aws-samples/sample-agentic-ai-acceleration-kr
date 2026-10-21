@@ -156,3 +156,50 @@ def test_a_runtime_error_event_makes_the_turn_a_failure():
     run(RuntimeErrorClient(), usage)
     assert sum(t["turns"] for t in usage.turns) == 1
     assert any(t["failed"] for t in usage.turns)
+
+
+# ── one intervention, one event ─────────────────────────────────────────────
+# The fallbacks (redactContent, stopReason, blocked text) arrive *before* the
+# trace, which comes after messageStop. Recording on the first signal wrote a
+# label-less BLOCKED with no thread, and the trace then wrote the real one: each
+# block counted twice and the recent list carried a row that could not be opened
+# (ap-northeast-1 stack, 2026-10-21: 3 blocked turns -> 6 events).
+
+
+class RedactStopTraceClient:
+    """The order measured on a runtime input block."""
+
+    async def execute_stream(self, thread_id, values, config=None, actor_id=None):
+        yield {"event": {"messageStart": {"id": "m-1"}}}
+        yield {"event": {"redactContent": {"redactUserContentMessage": "x"}}}
+        yield {"event": {"contentBlockDelta": {"delta": {"text": "요청을 처리할 수 없습니다."}}}}
+        yield {"event": {"messageStop": {"stopReason": "guardrail_intervened"}}}
+        yield {"event": {"metadata": REAL_INPUT_BLOCKED}}
+
+
+class FallbackOnlyClient:
+    """No trace at all: only the fallbacks say the turn was blocked."""
+
+    async def execute_stream(self, thread_id, values, config=None, actor_id=None):
+        yield {"event": {"messageStart": {"id": "m-1"}}}
+        yield {"event": {"redactContent": {"redactUserContentMessage": "x"}}}
+        yield {"event": {"messageStop": {"stopReason": "guardrail_intervened"}}}
+
+
+def test_a_block_with_a_trace_is_one_event_with_the_trace_labels():
+    for client in (RedactStopTraceClient(), BlockedAfterStopClient()):
+        usage = GuardrailRecordingUsage()
+        run(client, usage)
+        assert len(usage.events) == 1, (type(client).__name__, usage.events)
+        [event] = usage.events
+        assert event["filter_types"] == ["INSULTS"] and event["policies"] == ["content"]
+        assert event["thread_id"] == "t-1" and event["turn_id"].startswith("t-1:")
+
+
+def test_a_block_without_a_trace_is_one_event_that_still_names_its_thread():
+    usage = GuardrailRecordingUsage()
+    run(FallbackOnlyClient(), usage)
+    assert len(usage.events) == 1, usage.events
+    [event] = usage.events
+    assert event["action"] == "BLOCKED" and event["stage"] == "input"
+    assert event["thread_id"] == "t-1" and event["turn_id"].startswith("t-1:")
