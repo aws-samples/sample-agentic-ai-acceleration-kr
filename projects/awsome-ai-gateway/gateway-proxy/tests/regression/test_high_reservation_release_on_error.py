@@ -43,10 +43,15 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from structlog.testing import capture_logs
 
+import app
 from app.services.fallback_loop import release_reservations
 
 _SRC = Path(__file__).resolve().parents[2] / "src" / "app"
+#: 테스트하는 패키지 자신의 Lua — ``pytest -o pythonpath=<다른 트리>/src`` 로 다른 코드를 돌리면 그
+#: 트리의 스크립트도 같이 쓴다(대조군이 정산 스크립트까지 그 트리 것이어야 한다).
+_SCRIPTS = Path(app.__file__).resolve().parent / "redis_scripts"
 REDIS_PROOF_URL = os.environ.get("REDIS_PROOF_URL")
 
 
@@ -79,6 +84,39 @@ def _cost_keys(user_id: str, team_id: str) -> list[str]:
     ]
 
 
+def _rate_limit_state(keys: list[str], reserved: Decimal) -> dict:
+    """``enforce_rate_limits`` 가 라우터에 넘기는 모양 — 예약한 스코프마다 (cpm 키, cph 키).
+
+    정산은 이 키만 조정한다(``RateLimitService.settle_cost``). ``keys`` 는 :func:`_cost_keys` 순서
+    (user cpm, user cph, team cpm, team cph). 정산 스크립트(cost_settle_scope.lua)도 여기서 올린다.
+    """
+    from app.services.lua_loader import LuaScriptLoader
+
+    LuaScriptLoader.load_all(_SCRIPTS)
+    return {
+        "tpm_descriptors": [],
+        "tpm_reserved": 0,
+        "cost_reserved": reserved,
+        "cost_reserved_keys": ((keys[0], keys[1]), (keys[2], keys[3])),
+        "reservation_id": uuid.uuid4().hex,
+    }
+
+
+_SECOND_SETTLEMENT = ("cost_settle_duplicate", "tpm_settle_duplicate")
+_CLAMPED = ("cost_settle_clamped", "tpm_settle_clamped")
+
+
+def _assert_settled_once(logs: list[dict]) -> None:
+    """⚠️ 같은 예약을 두 번 정산하려는 호출이 **없어야** 한다 — 카운터 값이 맞아도.
+
+    정산 스크립트의 표지(SET NX)는 두 번째 정산을 무시하므로, 카운터만 보면 이중 정산 결함이
+    다시 생겨도 값은 맞는다. 예전의 0 하한도 같은 일을 했다(이중 환불이 0 에서 멈춰 테스트가
+    통과했다). 그래서 스크립트가 알려 주는 duplicate 와 clamped 를 함께 본다.
+    """
+    bad = [e for e in logs if e.get("event") in _SECOND_SETTLEMENT + _CLAMPED]
+    assert not bad, f"같은 예약을 두 번 정산하려 했거나 0 하한에 걸렸다: {bad}"
+
+
 async def _read_floats(redis, keys: list[str]) -> list[float]:
     out = []
     for k in keys:
@@ -106,13 +144,7 @@ async def test_release_refunds_the_cost_reservation_on_real_redis():
         before = await _read_floats(r, keys)
         assert all(abs(v - 2.50) < 1e-9 for v in before), f"예약 셋업 실패: {before}"
 
-        state = {
-            "rate_limit_state": {
-                "tpm_descriptors": [],
-                "tpm_reserved": 0,
-                "cost_reserved": reserved,
-            }
-        }
+        state = {"rate_limit_state": _rate_limit_state(keys, reserved)}
         await release_reservations(redis=r, state=state, auth_context=_Auth(user_id, team_id))
 
         after = await _read_floats(r, keys)
@@ -140,20 +172,18 @@ async def test_release_is_idempotent_and_does_not_over_refund():
     user_id, team_id = str(uuid.uuid4()), str(uuid.uuid4())
     keys = _cost_keys(user_id, team_id)
     try:
+        # 같은 창 키에 다른 요청의 예약 0.25 가 함께 있다 — 이중 환불은 그것을 깎는다
+        # (0 하한에 가려지지 않게). 이 요청의 예약은 1.0.
         for k in keys:
-            await r.incrbyfloat(k, 1.0)
-        state = {
-            "rate_limit_state": {
-                "tpm_descriptors": [],
-                "tpm_reserved": 0,
-                "cost_reserved": Decimal("1.0"),
-            }
-        }
+            await r.incrbyfloat(k, 1.25)
+        state = {"rate_limit_state": _rate_limit_state(keys, Decimal("1.0"))}
         auth = _Auth(user_id, team_id)
-        await release_reservations(redis=r, state=state, auth_context=auth)
-        await release_reservations(redis=r, state=state, auth_context=auth)
-        after = await _read_floats(r, keys)
-        assert all(abs(v) < 1e-9 for v in after), f"이중 환불로 음수가 됐다: {after}"
+        with capture_logs() as logs:
+            await release_reservations(redis=r, state=state, auth_context=auth)
+            await release_reservations(redis=r, state=state, auth_context=auth)
+        after = [await r.get(k) for k in keys]
+        assert after == ["0.25"] * 4, f"이 요청의 예약만 정확히 한 번 빠져야 한다: {after}"
+        _assert_settled_once(logs)
     finally:
         for k in keys:
             await r.delete(k)
@@ -188,11 +218,7 @@ async def test_finalize_zero_usage_releases_cost_not_just_tpm():
             "req-zero",
             True,
             123,
-            rate_limit_state={
-                "tpm_descriptors": [],
-                "tpm_reserved": 0,
-                "cost_reserved": Decimal("0.75"),
-            },
+            rate_limit_state=_rate_limit_state(keys, Decimal("0.75")),
         )
         after = await _read_floats(r, keys)
         assert all(abs(v) < 1e-9 for v in after), (
@@ -246,23 +272,22 @@ async def test_release_then_finalize_with_a_captured_state_refunds_once():
     user_id, team_id = str(uuid.uuid4()), str(uuid.uuid4())
     keys = _cost_keys(user_id, team_id)
     try:
+        # 같은 창 키에 다른 요청의 예약 0.25 가 함께 있다. 이중 환불이면 그것이 깎인다 — 예전
+        # 0 하한은 바로 이 경우를 가렸다(0.25 − 0.5 → 0, 음수도 로그도 없이). 이 요청의 예약은 0.5.
         for k in keys:
-            await r.incrbyfloat(k, 0.5)
-        state = {
-            "rate_limit_state": {
-                "tpm_descriptors": [],
-                "tpm_reserved": 0,
-                "cost_reserved": Decimal("0.5"),
-            }
-        }
+            await r.incrbyfloat(k, 0.75)
+        state = {"rate_limit_state": _rate_limit_state(keys, Decimal("0.5"))}
         captured = state["rate_limit_state"]  # openai_compat 가 하는 것: release 전에 잡는다
         auth = _Auth(user_id, team_id)
-        await release_reservations(redis=r, state=state, auth_context=auth)
-        await CostRecorder().finalize(
-            r, auth, _model_config(), TokenUsage(), "req-x", True, 1, rate_limit_state=captured
-        )
-        after = await _read_floats(r, keys)
-        assert all(abs(v) < 1e-9 for v in after), f"이중 환불로 음수가 됐다: {after}"
+        with capture_logs() as logs:
+            await release_reservations(redis=r, state=state, auth_context=auth)
+            await CostRecorder().finalize(
+                r, auth, _model_config(), TokenUsage(), "req-x", True, 1,
+                rate_limit_state=captured,
+            )
+        after = [await r.get(k) for k in keys]
+        assert after == ["0.25"] * 4, f"이 요청의 예약만 정확히 한 번 빠져야 한다: {after}"
+        _assert_settled_once(logs)
     finally:
         for k in keys:
             await r.delete(k)
@@ -326,14 +351,35 @@ def _counter_keys(user_id: str, alias: str) -> list[str]:
     ]
 
 
+async def _bystander(r, auth, cfg, body, keys) -> list[str | None]:
+    """같은 사용자·모델의 **다른 요청**이 예약만 해 둔 상태(정산 전)를 만든다.
+
+    그 값의 문자열을 돌려준다.
+
+    이 요청의 예약이 정확히 한 번 빠지면 카운터는 이 값으로 돌아온다. 이중 환불이면 이것이 깎인다.
+    """
+    from app.services.rate_limit_enforcement import enforce_rate_limits
+
+    rejected = await enforce_rate_limits(
+        redis=r, auth_context=auth, model_config=cfg, body=body, state={},
+        request_id="req-bystander",
+    )
+    assert rejected is None
+    return [await r.get(k) for k in keys]
+
+
 async def _drive_non_2xx_stream(monkeypatch, r, route: str, *, release_mod: str):
-    """라우트 하나를 실제로 호출해 비-2xx 스트림을 끝까지 소비하고, (release 직전 값, 최종 값)."""
+    """라우트 하나를 실제로 호출해 비-2xx 스트림을 끝까지 소비한다.
+
+    돌려주는 것: release 직전 값(실수), 최종 값의 문자열, 다른 요청(bystander)의 예약 값,
+    그동안의 로그.
+    """
     from app.schemas.domain import AuthContext, AuthType, ProviderType, Role
     from app.services import fallback_loop as fl
     from app.services.cost_recorder import CostRecorder
     from app.services.lua_loader import LuaScriptLoader
 
-    LuaScriptLoader.load_all(_SRC / "redis_scripts")
+    LuaScriptLoader.load_all(_SCRIPTS)
     user_id = str(uuid.uuid4())
     auth = AuthContext(
         user_id=user_id,
@@ -399,11 +445,15 @@ async def _drive_non_2xx_stream(monkeypatch, r, route: str, *, release_mod: str)
             err = b'{"type":"error","error":{"type":"invalid_request_error","message":"bad"}}'
             body = {"model": cfg.alias, "stream": True, "max_output_tokens": 1000, "input": "hi"}
         adapter.invoke_stream = _async_return((400, _one(err), {}, "rid-1"))
+        bystander = await _bystander(r, auth, cfg, body, keys)
         req = _RouteRequest(body, state, app_state)
-        if route == "chat":
-            resp = await openai_compat._handle_openai(req, "/v1/chat/completions")
-        else:
-            resp = await openai_compat._handle_responses(req)
+        with capture_logs() as logs:
+            if route == "chat":
+                resp = await openai_compat._handle_openai(req, "/v1/chat/completions")
+            else:
+                resp = await openai_compat._handle_responses(req)
+            async for _ in resp.body_iterator:
+                pass
     else:  # /v1/messages — 폴백 루프 경로
         from datetime import datetime
 
@@ -447,14 +497,16 @@ async def _drive_non_2xx_stream(monkeypatch, r, route: str, *, release_mod: str)
         state["client"] = "claude-code"
         body = {"model": cfg.alias, "stream": True, "max_tokens": 1000,
                 "messages": [{"role": "user", "content": "hi"}]}
-        resp = await messages_mod.messages(_RouteRequest(body, state, app_state))
+        bystander = await _bystander(r, auth, cfg, body, keys)
+        with capture_logs() as logs:
+            resp = await messages_mod.messages(_RouteRequest(body, state, app_state))
+            async for _ in resp.body_iterator:
+                pass
 
-    async for _ in resp.body_iterator:
-        pass
-    after = await _read_floats(r, keys)
+    after = [await r.get(k) for k in keys]
     for k in keys:
         await r.delete(k)
-    return before_release, after
+    return {"before": before_release, "after": after, "bystander": bystander, "logs": logs}
 
 
 def _async_return(value):
@@ -490,15 +542,19 @@ async def test_openai_streaming_non_2xx_releases_the_reservation_exactly_once(
 
     r = aioredis.from_url(REDIS_PROOF_URL, decode_responses=True)
     try:
-        before, after = await _drive_non_2xx_stream(monkeypatch, r, route, release_mod=release_mod)
+        out = await _drive_non_2xx_stream(monkeypatch, r, route, release_mod=release_mod)
     finally:
         await r.aclose()
-    assert before and all(v > 0 for v in before[0]), (
-        f"전제: release 직전에 실제 예약(비용·TPM)이 있어야 한다 — {before}"
+    before, bystander = out["before"], [float(v) for v in out["bystander"]]
+    assert before and all(b > v > 0 for b, v in zip(before[0], bystander)), (
+        f"전제: release 직전에 다른 요청의 예약 위에 이 요청의 예약(비용·TPM)이 있어야 한다 — "
+        f"{before} / {bystander}"
     )
-    assert all(abs(v) < 1e-9 for v in after), (
-        f"{route}: 예약이 정확히 한 번 환불되지 않았다(음수=이중 환불): {after}"
+    assert out["after"] == out["bystander"], (
+        f"{route}: 이 요청의 예약만 정확히 한 번 빠져야 한다 — {out['after']} "
+        f"(다른 요청의 예약 {out['bystander']})"
     )
+    _assert_settled_once(out["logs"])
 
 
 @_redis_required
@@ -513,7 +569,7 @@ async def test_messages_streaming_non_2xx_releases_exactly_once_too(monkeypatch)
 
     r = aioredis.from_url(REDIS_PROOF_URL, decode_responses=True)
     try:
-        before, after = await _drive_non_2xx_stream(
+        out = await _drive_non_2xx_stream(
             monkeypatch,
             r,
             "messages",
@@ -521,8 +577,9 @@ async def test_messages_streaming_non_2xx_releases_exactly_once_too(monkeypatch)
         )
     finally:
         await r.aclose()
-    assert before and all(v > 0 for v in before[0]), before
-    assert all(abs(v) < 1e-9 for v in after), after
+    assert out["before"] and all(v > 0 for v in out["before"][0]), out["before"]
+    assert out["after"] == out["bystander"], out
+    _assert_settled_once(out["logs"])
 
 
 async def test_release_is_a_noop_without_a_reservation():

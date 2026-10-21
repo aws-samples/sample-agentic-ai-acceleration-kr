@@ -40,14 +40,14 @@ from app.schemas.domain import ProviderType
 from app.security.event_detector import SecurityEventDetector
 from app.services import bg_tasks
 from app.services.agentcore_mcp_client import AgentCoreMcpClient
-from app.services.bedrock_account_client import BedrockAccountClientProvider
+from app.services.bedrock_account_client import BedrockAccountClientProvider, create_sts_client
 from app.services.circuit_breaker import CircuitBreakerService
 from app.services.cost_recorder import CostRecorder
 from app.services.fallback_resolver import FallbackResolver
 from app.services.health_checker import HealthChecker
 from app.services.lua_loader import LuaScriptLoader
 from app.services.mantle_credentials import MantleCredentialBroker
-from app.services.rate_limit_service import set_fail_open_metric
+from app.services.rate_limit_service import set_fail_open_metric, set_settle_metrics
 from app.services.routing_profile_loader import RoutingProfileLoader
 from app.services.sigv4_signer import SigV4Signer
 from app.services.tokenizer import TokenizerService
@@ -186,6 +186,11 @@ async def lifespan(app: FastAPI):
     cost_stream_spool.set_metrics(gateway_metrics.usage_records_dropped_total)
     # rate-limit fail-open 관측성(deepdive Q50 Phase 3) — eval 예외로 집행 못한 횟수.
     set_fail_open_metric(gateway_metrics.rl_fail_open_total)
+    # 정산 이상 관측 — 0 하한(clamped)과 이미 정산된 예약의 재정산(duplicate).
+    set_settle_metrics(
+        clamped=gateway_metrics.rl_settle_clamped_total,
+        duplicate=gateway_metrics.rl_settle_duplicate_total,
+    )
 
     # 12. Provider Registry
     provider_registry = ProviderRegistry()
@@ -195,9 +200,13 @@ async def lifespan(app: FastAPI):
     # routing-profile cross-account on Bedrock NATIVE. Since migration 0043 it is also the
     # ONE credential cache for per-alias target accounts on every plane (native boto3
     # clients, runtime SigV4, Mantle bearers), keyed (role, ExternalId, session name), so an
-    # alias account is assumed once and never carries two expiries. Reuses the same STS
-    # assume region + BotoConfig as the in-account client (streaming timeout parity).
-    sts_client = boto3.client("sts", region_name=settings.mantle_assume_region)
+    # alias account is assumed once and never carries two expiries. The account clients it
+    # builds reuse the in-account client's BotoConfig (streaming timeout parity).
+    # The STS client itself has its own short timeouts (connect 3 s, read 5 s, standard
+    # retries, 3 attempts — bedrock_account_client.STS_BOTO_CONFIG). With botocore's
+    # defaults (60 s + 60 s, legacy retries, 5 attempts) one AssumeRole against an STS that never
+    # answers took ~315 s, and every request queued behind it waited that long first.
+    sts_client = create_sts_client(settings.mantle_assume_region)
     bedrock_account_client_provider = BedrockAccountClientProvider(
         sts_client=sts_client,  # same STS(mantle_assume_region); creds are account-global
         boto_config=BotoConfig(

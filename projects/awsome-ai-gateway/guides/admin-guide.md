@@ -390,6 +390,80 @@ Admin UI → Rate Limits 페이지
   - `X-RateLimit-Limit`: 한도값
   - `X-RateLimit-Reset`: 리셋 시각
 
+### 6.5 업그레이드 노트 — 이전 버전이 남긴 TTL 없는 키 정리
+
+비용(CPM/CPH)이나 TPM 한도를 이 수정 이전 버전에서 쓴 환경에는 **TTL 이 없는**(`TTL` 이 −1 인) rate-limit 키가 남아 있을 수 있습니다. 이전 정산은 예약하지 않은 스코프나 다음 분·시 창에 키를 TTL 없이 만들었고, TPM 검사는 `prev` 키에 TTL 을 걸지 않았습니다. 이런 키는 만료되지 않고 `volatile-lru` 도 축출하지 못해 메모리에 계속 쌓이며, 메모리가 차면 TTL 이 있는 키(rate-limit 카운터, 모델 캐시, 예산 설정)가 먼저 밀려납니다.
+
+| 키 | 모양 |
+|---|---|
+| 비용 | `rl:cost:{user\|team}:{<id>}:{cpm\|cph}:<창 시작 epoch>` |
+| TPM | `{USER\|TEAM\|GLOBAL:<id>:<모델>}:tpm:{cur\|prev\|window}` |
+
+새 버전은 이런 키를 만들지 않습니다. TPM 의 경우 쓰이고 있는 스코프의 키는 다음 버킷 회전이나 정산 때 TTL 을 다시 받지만, 더 이상 쓰이지 않는 스코프와 지난 창의 비용 키는 그대로 남습니다. 그래서 한 번 TTL 을 걸어 줍니다.
+
+- **새 이미지가 모든 파드에 배포된 뒤에** 실행합니다(이전 파드가 남아 있으면 그 사이 다시 생깁니다).
+- 클러스터 모드에서는 키가 primary 마다 나뉘어 있으므로 **primary 마다** SCAN 합니다. 아래 스크립트는 gateway-proxy 파드 안에서 그 파드의 `REDIS_URL` 로 접속하고, `REDIS_CLUSTER_MODE=true` 이면 클러스터의 primary 를 하나씩 훑습니다(standalone 이면 그 노드 하나).
+- 먼저 **세기만** 하고(인자 없음), 숫자를 확인한 뒤 `--expire` 로 TTL 을 겁니다. **지우지 않습니다.** TTL 이 없는 키 중에는 지금 창에서 집행에 쓰이는 카운터가 있습니다. 예를 들어 이전 버전의 TPM 회전은 직전 분의 토큰 합을 이번 분의 `prev` 로 옮기면서 TTL 을 지웠고, 이 값은 이번 분 동안 가중 추정에 들어갑니다. 지우면 그 분 동안 덜 막힙니다 — 10,000 TPM 스코프에 직전 분 9,000 토큰이 남아 있을 때, 지우면 9,000 토큰 요청이 통과하고 TTL 만 걸면 거부됩니다. 이전 정산이 지금 창에 만든 비용 키도 마찬가지입니다.
+- 거는 TTL 은 새 버전이 같은 키에 거는 값과 같습니다: TPM 키(`cur`·`prev`·`window`) 180초, CPM 120초, CPH 7200초. 지금 창이 끝날 때까지 값은 그대로 남아 집행에 쓰이고, 더 쓰이지 않는 키는 그 뒤 만료됩니다. 쓰이고 있는 TPM 스코프의 키는 다음 회전 때 TTL 을 다시 받습니다.
+- 키마다 "TTL 이 아직 −1 일 때만 EXPIRE" 를 한 번의 EVAL 로 해서, 그 사이 TTL 이 걸린 키(새 버전이 이미 다시 건 키)는 그대로 둡니다. 여러 번 실행해도 안전합니다. 모양이 예상과 다른 키는 세기만 하고(`other`) 건드리지 않습니다.
+
+`cleanup_ttl_less_rl_keys.py`:
+
+```python
+import os
+import sys
+
+import redis
+from redis.cluster import RedisCluster
+
+APPLY = "--expire" in sys.argv
+PATTERNS = ("rl:cost:*", "{*}:tpm:*")
+# 새 버전이 같은 키에 거는 TTL(초). 지우지 않는다 — TTL 없는 키 중에 지금 창의 카운터가 있다.
+TTLS = {"tpm": 180, "cpm": 120, "cph": 7200}
+# TTL 이 아직 -1 일 때만 건다 — 확인과 EXPIRE 를 한 번에(원자적으로).
+EXPIRE_IF_NO_TTL = (
+    "if redis.call('TTL', KEYS[1]) == -1 then "
+    "return redis.call('EXPIRE', KEYS[1], ARGV[1]) end return 0"
+)
+
+url = os.environ["REDIS_URL"]  # 비밀번호가 들어 있다 — 출력하지 않는다
+if os.environ.get("REDIS_CLUSTER_MODE", "").lower() == "true":
+    rc = RedisCluster.from_url(url)
+    nodes = [(n.name, n.redis_connection) for n in rc.get_primaries()]
+else:
+    nodes = [("standalone", redis.Redis.from_url(url))]
+
+for name, node in nodes:
+    for pattern in PATTERNS:
+        found = other = expired = 0
+        for key in node.scan_iter(match=pattern, count=1000):
+            if node.ttl(key) != -1:
+                continue
+            # rl:cost:<scope>:{<id>}:cpm:<ts> → "cpm",  {SCOPE:<id>:<model>}:tpm:prev → "tpm"
+            ttl = TTLS.get(key.decode().rsplit(":", 2)[-2])
+            if ttl is None:
+                other += 1
+                continue
+            found += 1
+            if APPLY:
+                expired += node.eval(EXPIRE_IF_NO_TTL, 1, key, ttl)
+        line = f"{name} {pattern}: ttl=-1 {found}, other {other}"
+        print(line + (f", expired {expired}" if APPLY else ""))
+```
+
+```bash
+NS=llm-gateway
+DEPLOY=deploy/llm-gateway-gateway-proxy   # 릴리스 이름에 맞게
+# 1) 세기만 한다
+kubectl exec -i -n "$NS" "$DEPLOY" -- /app/.venv/bin/python - < cleanup_ttl_less_rl_keys.py
+# 2) 숫자를 확인한 뒤 TTL 을 건다(지우지 않는다)
+kubectl exec -i -n "$NS" "$DEPLOY" -- /app/.venv/bin/python - --expire < cleanup_ttl_less_rl_keys.py
+# 3) 다시 세어 0 인지 확인한다
+kubectl exec -i -n "$NS" "$DEPLOY" -- /app/.venv/bin/python - < cleanup_ttl_less_rl_keys.py
+```
+
+> 참고: 비용 한도를 하나도 설정하지 않은 환경에서는 이전 버전도 비용 정산을 하지 않았으므로 `rl:cost:*` 에 남은 키가 없습니다. 한 운영 환경의 2026-10-14 읽기 전용 조사에서도 `rl:cost:*` 키는 0 개였습니다. TPM 한도를 쓴 환경이라면 `{*}:tpm:*` 쪽에 `prev` 키가 남아 있을 수 있습니다.
+
 ---
 
 ## 7. API Key (Virtual Key) 관리

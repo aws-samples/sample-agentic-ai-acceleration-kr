@@ -73,7 +73,7 @@ WebSearch(MCP over httpx, SigV4/IRSA, us-east-1 전용) 호출 → 결과 재투
 | cowork | `222233334444` | ap-northeast-1 | Bedrock Mantle Opus 4.8 | Anthropic Messages | STS AssumeRole(ExternalId=`cowork-bedrock`) |
 
 - cross-account는 `STS AssumeRole(DurationSeconds=3600)` + 선택적 `ExternalId`. claude-code(374 native)의 클라이언트는 `BedrockAccountClientProvider`가 `(role_arn, region, external_id)` 키로 vend/캐시합니다. assume 실패 시 게이트웨이는 859 in-account 클라이언트로 투명 폴백하므로 claude-code 요청은 죽지 않습니다.
-- codex/cowork Mantle bearer는 `MantleCredentialBroker`가 assumed creds에서 `BedrockTokenGenerator`로 발급해 `(role, region)`으로 캐시합니다.
+- codex/cowork Mantle bearer는 `MantleCredentialBroker`가 assumed creds에서 `BedrockTokenGenerator`로 발급해 `((role, ExternalId, 세션 이름), region)`으로 캐시합니다(assume 한 자격증명도 `(role, ExternalId, 세션 이름)` — 같은 역할을 다른 ExternalId로 지목한 프로필끼리 자격증명을 공유하지 않습니다).
 - provider registry는 4개 어댑터: `BEDROCK`(boto3), `OPENMODEL`(httpx vLLM), `BEDROCK_MANTLE`(cowork), `BEDROCK_MANTLE_OPENAI`(codex).
 
 > 컴포넌트·계정·데이터플레인 전체 상세는 레포 루트 [`ARCHITECTURE.md`](ARCHITECTURE.md) 참조.

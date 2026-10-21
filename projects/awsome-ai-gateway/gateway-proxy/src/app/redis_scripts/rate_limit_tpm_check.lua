@@ -20,6 +20,14 @@
 -- ARGV[5..(4+N)]          = tpm_limit per scope (nil/0 이면 체크 스킵)
 -- ARGV[(5+N)..(4+2N)]     = scope names
 --
+-- 예약 표지(선택, rate_limit_service.check_multi_scope_tpm 은 늘 준다):
+--   KEYS[3N+1]            = {scope:id:model}:tpm-reserved:<예약 id>  (같은 hash tag)
+--   ARGV[5+2N]            = 표지 TTL (초)
+-- 같은 예약(같은 id)의 EVAL 이 다시 오면 — 응답이 늦어 클라이언트(redis-py, redis_retries)가
+-- 다시 보낸 것 — 아무것도 쓰지 않고 처음 결과를 그대로 돌려준다. 처음 결과는 표지에 담아 둔다
+-- (통과든 거부든). 예전에는 두 번 실행돼 cur 에 예약이 두 번 들어갔고, 정산은 한 번만 되돌리므로
+-- 남은 한 번이 버킷이 지날 때까지 한도를 먹었다.
+--
 -- Returns JSON (rate_limit_check.lua와 동일 shape):
 --   통과:  {allowed=true, scope=null, ...}
 --   거부:  {allowed=false, scope='USER'|'TEAM'|'GLOBAL', limit_type='tpm',
@@ -32,6 +40,21 @@ local num_scopes     = tonumber(ARGV[4])
 local current_bucket = math.floor(now / window_sec)
 local elapsed_ratio  = (now % window_sec) / window_sec
 local ttl_sec        = window_sec * 2 + 60
+
+local marker = KEYS[3 * num_scopes + 1]
+if marker then
+    local first = redis.call('GET', marker)
+    if first then
+        return first
+    end
+end
+
+local function finish(result)
+    if marker then
+        redis.call('SET', marker, result, 'EX', tonumber(ARGV[5 + 2 * num_scopes]))
+    end
+    return result
+end
 
 -- Phase 1: 각 스코프 버킷 회전 + 가중 추정치 체크
 for i = 1, num_scopes do
@@ -53,6 +76,12 @@ for i = 1, num_scopes do
             end
             redis.call('SET', cur_key, 0)
             redis.call('SET', win_key, current_bucket)
+            -- ⚠️ SET 은 TTL 을 지운다. 세 키 모두 여기서 다시 건다 — 예전에는 아래 Phase 2 에서 cur 와
+            --    window 만, 그것도 통과할 때만 걸어서 prev 는 처음 만들어질 때부터 TTL 이 없었고, 회전
+            --    직후 거부되면 세 키가 모두 TTL 없이 남았다(volatile-lru 가 축출하지 못한다).
+            redis.call('EXPIRE', cur_key, ttl_sec)
+            redis.call('EXPIRE', prev_key, ttl_sec)
+            redis.call('EXPIRE', win_key, ttl_sec)
         end
 
         local cur_tokens  = tonumber(redis.call('GET', cur_key) or '0')
@@ -66,7 +95,7 @@ for i = 1, num_scopes do
             local retry_after = math.ceil(window_sec - (now % window_sec))
             if retry_after < 1 then retry_after = 1 end
 
-            return cjson.encode({
+            return finish(cjson.encode({
                 allowed      = false,
                 scope        = scope_name,
                 limit_type   = 'tpm',
@@ -74,7 +103,7 @@ for i = 1, num_scopes do
                 remaining    = math.max(0, limit - math.ceil(estimated)),
                 retry_after  = retry_after,
                 window_reset = (current_bucket + 1) * window_sec
-            })
+            }))
         end
     end
 end
@@ -97,7 +126,7 @@ for i = 1, num_scopes do
     end
 end
 
-return cjson.encode({
+return finish(cjson.encode({
     allowed      = true,
     scope        = cjson.null,
     limit_type   = cjson.null,
@@ -105,4 +134,4 @@ return cjson.encode({
     remaining    = -1,
     retry_after  = cjson.null,
     window_reset = cjson.null
-})
+}))

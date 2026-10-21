@@ -16,6 +16,7 @@ from app.schemas.domain import TokenUsage
 from app.services.account_credentials import (
     ACCOUNT_UNAVAILABLE_BODY,
     ACCOUNT_UNAVAILABLE_STATUS,
+    CREDENTIAL_FAILURE_MARKER,
     AccountCredentialsUnavailable,
     redact_account_identifiers,
 )
@@ -195,9 +196,21 @@ class BedrockAdapter(ProviderAdapter):
                 client = await self._client_for(account)
             except AccountCredentialsUnavailable:
                 return ACCOUNT_UNAVAILABLE_STATUS, ACCOUNT_UNAVAILABLE_BODY, {}, TokenUsage()
-        try:
-            if account is None:
+        else:
+            try:
                 client = await self._get_client()
+            except Exception:
+                # 프로필 계정 클라이언트를 얻지 못했고 파드 계정 폴백도 없다 — 상류를 부르지
+                # 않았다. 오늘과 같은 502 지만 서킷 브레이커에는 세지 않는다
+                # (CREDENTIAL_FAILURE_MARKER).
+                logger.exception("bedrock_invoke_failed", model_id=model_id)
+                return (
+                    502,
+                    b'{"error":{"type":"provider_error","message":"Bedrock call failed"}}',
+                    {CREDENTIAL_FAILURE_MARKER: "1"},
+                    TokenUsage(),
+                )
+        try:
             if path_suffix in ("invoke", ""):
                 response = await loop.run_in_executor(
                     _bedrock_executor,
@@ -312,9 +325,21 @@ class BedrockAdapter(ProviderAdapter):
                     yield ACCOUNT_UNAVAILABLE_BODY
 
                 return ACCOUNT_UNAVAILABLE_STATUS, _account_err(), {}, None
-        try:
-            if account is None:
+        else:
+            try:
                 client = await self._get_client()
+            except Exception as exc:
+                # invoke 의 같은 주석 — 상류를 부르지 않았으니 서킷 브레이커에 세지 않는다.
+                client_error = redact_account_identifiers(str(exc))
+                logger.exception("bedrock_stream_failed", model_id=model_id)
+
+                async def _client_err():
+                    yield json.dumps(
+                        {"error": {"type": "provider_error", "message": client_error}}
+                    ).encode()
+
+                return 502, _client_err(), {CREDENTIAL_FAILURE_MARKER: "1"}, None
+        try:
             if path_suffix == "invoke-with-response-stream":
                 response = await loop.run_in_executor(
                     _bedrock_executor,

@@ -7,8 +7,9 @@
 -- 슬롯이 다르므로 한 eval 에 묶을 수 없다. 이 스크립트는 **한 스코프의 2키만**
 -- 받는다(cpm/cph, 동일 {scope_id} hash tag = 단일 슬롯). 호출자가 scope 별로
 -- 1회씩 호출하고 결과를 합친다(rate_limit_service.reserve_cost). 과거의
--- 4키(user+team) 단일 eval(cost_rate_limit.lua)은 cluster 에서 CROSSSLOT →
--- fail-open 으로 CPM/CPH 무음 미집행됐다.
+-- 4키(user+team) 단일 eval 스크립트는 cluster 에서 CROSSSLOT → fail-open 으로
+-- CPM/CPH 무음 미집행됐다. 그 스크립트는 이 스크립트로 바뀐 뒤 로드만 되고 불리지
+-- 않다가 삭제됐다(git 기록 참조).
 --
 -- KEYS[1] = rl:cost:<scope>:{<scope_id>}:cpm:<window_ts>
 -- KEYS[2] = rl:cost:<scope>:{<scope_id>}:cph:<window_ts>
@@ -18,6 +19,14 @@
 -- ARGV[3] = cph_limit
 -- ARGV[4] = scope_label ('USER' | 'TEAM')
 --
+-- 예약 표지(선택, rate_limit_service.reserve_cost 는 늘 준다):
+--   KEYS[3] = rl:cost-reserved:<scope>:{<scope_id>}:<예약 id>  (같은 hash tag)
+--   ARGV[5] = 표지 TTL (초)
+-- 같은 예약(같은 id)의 EVAL 이 다시 오면 — 응답이 늦어 클라이언트(redis-py, redis_retries)가 다시
+-- 보낸 것 — 아무것도 쓰지 않고 처음 결과를 그대로 돌려준다(처음 결과는 표지에 담아 둔다). 예전에는
+-- 두 번 실행돼 예약이 두 번 들어갔고, 정산은 한 번만 되돌리므로 남은 한 번이 창 끝까지(cph 는 최대
+-- 한 시간) 한도를 먹었다.
+--
 -- Returns: JSON {allowed, scope, limit_type, limit, remaining, retry_after, reserved_cost}
 --   통과 시 카운터(INCRBYFLOAT)까지 커밋하고 reserved_cost 반환.
 
@@ -26,6 +35,21 @@ local cpm_limit   = tonumber(ARGV[2])
 local cph_limit   = tonumber(ARGV[3])
 local scope_label = ARGV[4]
 
+local marker = KEYS[3]
+if marker then
+    local first = redis.call('GET', marker)
+    if first then
+        return first
+    end
+end
+
+local function finish(result)
+    if marker then
+        redis.call('SET', marker, result, 'EX', tonumber(ARGV[5]))
+    end
+    return result
+end
+
 local cpm_used = tonumber(redis.call('GET', KEYS[1]) or '0')
 local cph_used = tonumber(redis.call('GET', KEYS[2]) or '0')
 
@@ -33,7 +57,7 @@ local cpm_after = cpm_used + cost
 local cph_after = cph_used + cost
 
 if cpm_limit and cpm_limit > 0 and cpm_after > cpm_limit then
-    return cjson.encode({
+    return finish(cjson.encode({
         allowed = false,
         scope = scope_label,
         limit_type = "cpm",
@@ -41,10 +65,10 @@ if cpm_limit and cpm_limit > 0 and cpm_after > cpm_limit then
         remaining = math.max(0, cpm_limit - cpm_used),
         retry_after = 60,
         reserved_cost = 0,
-    })
+    }))
 end
 if cph_limit and cph_limit > 0 and cph_after > cph_limit then
-    return cjson.encode({
+    return finish(cjson.encode({
         allowed = false,
         scope = scope_label,
         limit_type = "cph",
@@ -52,7 +76,7 @@ if cph_limit and cph_limit > 0 and cph_after > cph_limit then
         remaining = math.max(0, cph_limit - cph_used),
         retry_after = 3600,
         reserved_cost = 0,
-    })
+    }))
 end
 
 -- 통과 — 예약 커밋 (INCRBYFLOAT + EXPIRE)
@@ -63,7 +87,7 @@ if cost > 0 then
     redis.call('EXPIRE', KEYS[2], 7200)
 end
 
-return cjson.encode({
+return finish(cjson.encode({
     allowed = true,
     reserved_cost = cost,
-})
+}))

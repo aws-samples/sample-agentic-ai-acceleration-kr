@@ -37,7 +37,7 @@ from app.observability.provider_metrics import (
     record_provider_request,
 )
 from app.schemas.domain import ModelConfigSchema, TokenUsage
-from app.services.account_credentials import account_id_of
+from app.services.account_credentials import CREDENTIAL_FAILURE_MARKER, account_id_of
 from app.services.circuit_breaker import CircuitBreakerService
 from app.services.rate_limit_enforcement import enforce_rate_limits
 from app.services.rate_limit_service import RateLimitService
@@ -229,7 +229,14 @@ async def release_reservations(
     tpm_reserved = rls.get("tpm_reserved", 0)
     if tpm_descriptors and tpm_reserved > 0:
         try:
-            await svc.settle_tpm(redis, tpm_descriptors, tpm_reserved, 0)
+            await svc.settle_tpm(
+                redis,
+                tpm_descriptors,
+                tpm_reserved,
+                0,
+                reserved_keys=rls.get("tpm_reserved_keys"),
+                reservation_id=rls.get("reservation_id"),
+            )
         except Exception:
             logger.warning("fallback_unwind_tpm_failed")
 
@@ -242,6 +249,8 @@ async def release_reservations(
                 actual_cost=Decimal("0"),
                 reserved_cost=cost_reserved,
                 team_id=str(auth_context.team_id) if auth_context.team_id else None,
+                reserved_keys=rls.get("cost_reserved_keys"),
+                reservation_id=rls.get("reservation_id"),
             )
         except Exception:
             logger.warning("fallback_unwind_cost_failed")
@@ -250,7 +259,9 @@ async def release_reservations(
     # (docstring 참조: 미리 잡아 둔 사본이 있으면 pop 만으로는 그 사본이 예약을 계속 들고 있다.)
     rls["tpm_descriptors"] = []
     rls["tpm_reserved"] = 0
+    rls["tpm_reserved_keys"] = ()
     rls["cost_reserved"] = Decimal("0")
+    rls["cost_reserved_keys"] = ()
     state.pop("rate_limit_state", None)
 
 
@@ -420,8 +431,15 @@ async def run_fallback_loop(
             # ⚠️ 연결 오류는 위 except 에서 이미 셌다 — 여기서 또 세면 2배가 된다.
             if not caught_connection_error:
                 record_provider_error(metrics, _pm_labels, status=status)
-            # CB: record failure only for {502,503} and connection errors, NOT 504
-            if status in _CB_FAILURE_STATUSES or caught_connection_error:
+            # CB: record failure only for {502,503} and connection errors, NOT 504.
+            # ⚠️ 자격증명 단계의 실패(어댑터가 상류를 부르지도 않았다 — CREDENTIAL_FAILURE_MARKER)도
+            #    세지 않는다. 모델의 건강이 아니라 그 요청이 쓰는 계정(라우팅 프로필)의 문제이고,
+            #    브레이커 키는 프로필을 모른다 — 세면 프로필 X 의 STS 장애 몇 번에 같은 모델을 쓰는
+            #    프로필 Y 의 요청까지 브레이커가 열려 있는 동안(30초) 503 이 된다.
+            credential_failure = CREDENTIAL_FAILURE_MARKER in (headers or {})
+            if (
+                status in _CB_FAILURE_STATUSES or caught_connection_error
+            ) and not credential_failure:
                 await cb.record_failure(redis, cb_key)
 
             error_bytes = response_body if not is_stream else json.dumps(
@@ -434,6 +452,7 @@ async def run_fallback_loop(
                 alias=alias,
                 status=status,
                 is_original=is_original,
+                credential_failure=credential_failure,
             )
             continue
 

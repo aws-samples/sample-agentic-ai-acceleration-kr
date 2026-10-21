@@ -2,6 +2,8 @@
 
 -- Record one call outcome into a per-second sliding window and decide whether to OPEN.
 -- KEYS[1]=fail base (cb:{pmid}:fail) KEYS[2]=total base (cb:{pmid}:total) KEYS[3]=open flag (cb:{pmid}:open)
+-- All three share the hash tag {pmid}, and so do the per-second bucket keys built below
+-- (KEYS[i] .. ':' .. second), so on Redis Cluster the whole script stays in one slot.
 -- ARGV[1]=window_sec ARGV[2]=min_calls ARGV[3]=error_rate ARGV[4]=open_ms ARGV[5]=is_failure(1/0) ARGV[6]=now_ms
 -- Returns 1 if circuit is (now) OPEN, else 0.
 local window_sec = tonumber(ARGV[1])

@@ -11,7 +11,13 @@ keeps using ``providers/bedrock_adapter.py`` + boto3.
 Two credential paths, mirroring :class:`~app.services.mantle_credentials.MantleCredentialBroker`:
 
 * in-account (``role_arn`` is None) — the pod's own IRSA credentials.
-* cross-account (``role_arn`` set) — STS AssumeRole, creds cached ~1h.
+* cross-account (``role_arn`` set) — STS AssumeRole, creds cached ~1h. A failed AssumeRole is
+  remembered for ``PROFILE_FAILURE_BACKOFF`` seconds per (role, ExternalId, session name): until
+  then requests for that key fail at once (the adapter's usual 502) instead of each calling STS
+  again behind the lock and waiting out its timeout. Cached credentials with more than
+  ``STALE_SERVE_MIN`` seconds left keep signing while a refresh is in flight, after a refresh
+  fails, and during that memory; a retry in flight after the memory is waited for at most
+  ``PROFILE_RETRY_WAIT`` seconds.
 
 It vends SIGNATURES where the Mantle broker vends BEARER TOKENS; the duplication of the
 assume+cache block is deliberate. Folding both into one broker would mean editing the
@@ -39,7 +45,13 @@ from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
 
-from app.services.account_credentials import SESSION_NAME_RUNTIME, AccountCredentialsUnavailable
+from app.services.account_credentials import (
+    SESSION_NAME_RUNTIME,
+    STALE_SERVE_MIN,
+    AccountCredentialsUnavailable,
+    ProfileAssumeBackoff,
+    ProfileFailureMemory,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -71,8 +83,14 @@ class SigV4Signer:
         self._sts = sts_client
         self._service = service_name
         self._now = now
-        self._creds: dict[str, _CachedCreds] = {}
+        # 프로필 역할의 자격증명 — 키 (역할, ExternalId, gw-bedrock-openai). alias 경로(공유
+        # provider)와 같은 키다. 역할만으로 키를 잡으면 같은 역할을 다른 ExternalId 로 지목한
+        # 프로필이 앞 프로필의 ExternalId 로 assume 한 자격증명을 캐시 적중으로 받는다 —
+        # confused-deputy 검사(신뢰 정책의 ExternalId 조건)가 매 적중마다 건너뛰어진다.
+        self._creds: dict[tuple[str, str, str], _CachedCreds] = {}
         self._lock = asyncio.Lock()
+        # 프로필 경로의 짧은 AssumeRole 실패 기억 — 키 (역할, ExternalId, gw-bedrock-openai).
+        self._profile_failures = ProfileFailureMemory(now)
         # BedrockAccountClientProvider (0043). alias 계정 서명에만 쓴다. None 이면 account 가 온
         # 서명은 파드 자격증명으로 대신하지 않고 거부한다.
         self._account_provider = account_provider
@@ -137,9 +155,31 @@ class SigV4Signer:
             return await asyncio.get_running_loop().run_in_executor(
                 None, self._in_account_creds
             )
+        # lock 밖에서 먼저 본다. lock 은 모든 역할이 하나를 쓰므로, 캐시가 신선한 요청까지 다른
+        # 역할의 느린 STS 호출 뒤에 줄 서지 않게 한다. 그 키의 AssumeRole 이 방금 실패했거나
+        # 재시도가 진행 중이면 STS 를 기다리지 않고 실패한다 — 어댑터가 오늘처럼 502 로 답한다
+        # (ProfileFailureMemory).
+        key = (role_arn, external_id or "", SESSION_NAME_RUNTIME)
+        cached = self._creds.get(key)
+        if cached and cached.expires_at - _CRED_REFRESH_SKEW > self._now():
+            return cached.creds
+        # 갱신(또는 첫 assume) 차례다. 그 키의 AssumeRole 이 방금 실패했거나(기억 5초) 그 키의 STS
+        # 호출이 진행 중이면 STS 도 lock 도 기다리지 않는다 — native 와 같은 규칙
+        # (BedrockAccountClientProvider.credentials): 1분 넘게 남은 캐시 자격증명이면 그것으로
+        # 서명하고, 없으면 기억이 끝난 뒤의 재시도를 잠깐(PROFILE_RETRY_WAIT) 기다린 뒤 실패한다.
+        blocked = self._profile_failures.blocked(key)
+        if blocked or self._profile_failures.in_flight(key):
+            usable = self._usable(key)
+            if usable is None and blocked:
+                await self._profile_failures.wait_for_retry(key)
+                usable = self._usable(key)
+                if usable is None:
+                    raise ProfileAssumeBackoff(role_arn)
+            if usable is not None:
+                return usable.creds
         async with self._lock:
             now = self._now()
-            cached = self._creds.get(role_arn)
+            cached = self._creds.get(key)
             if cached and cached.expires_at - _CRED_REFRESH_SKEW > now:
                 return cached.creds
             if self._sts is None:
@@ -147,12 +187,40 @@ class SigV4Signer:
                     "SigV4Signer has no STS client; cannot assume "
                     f"{role_arn} for the cross-account runtime path"
                 )
-            creds, expires_at = await asyncio.get_running_loop().run_in_executor(
-                None, lambda: self._assume(role_arn, external_id)
-            )
-            self._creds[role_arn] = _CachedCreds(creds=creds, expires_at=expires_at)
+            if self._profile_failures.blocked(key):  # lock 을 기다리는 사이 앞 요청이 실패했다
+                usable = self._usable(key)
+                if usable is None:
+                    raise ProfileAssumeBackoff(role_arn)
+                return usable.creds
+            try:
+                with self._profile_failures.attempt(key):
+                    creds, expires_at = await asyncio.get_running_loop().run_in_executor(
+                        None, lambda: self._assume(role_arn, external_id)
+                    )
+            except Exception:
+                # 갱신 실패 — 쓸 수 있는지는 실패한 **지금** 다시 본다(native 와 같다).
+                usable = self._usable(key)
+                if usable is None:
+                    raise
+                logger.warning(
+                    "sigv4_xacct_refresh_failed_serving_cached",
+                    role_arn=role_arn,
+                    seconds_left=int(usable.expires_at - self._now()),
+                )
+                return usable.creds
+            self._creds[key] = _CachedCreds(creds=creds, expires_at=expires_at)
             logger.info("sigv4_xacct_creds_assumed", role_arn=role_arn)
             return creds
+
+    def _usable(self, key: tuple) -> _CachedCreds | None:
+        """1분 넘게 남은 캐시 자격증명(STALE_SERVE_MIN) — STS 를 건너뛰거나 갱신이 실패했을 때 쓴다.
+
+        만료됐거나 곧 만료될 자격증명은 돌려주지 않는다.
+        """
+        cached = self._creds.get(key)
+        if cached and cached.expires_at - STALE_SERVE_MIN > self._now():
+            return cached
+        return None
 
     def _assume(self, role_arn: str, external_id: Optional[str]) -> tuple[Credentials, float]:
         kwargs: dict = {

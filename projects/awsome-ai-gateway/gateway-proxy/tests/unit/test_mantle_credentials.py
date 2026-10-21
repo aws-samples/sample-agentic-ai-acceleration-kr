@@ -93,7 +93,8 @@ async def test_bearer_expiry_never_outlives_assumed_creds():
         broker = MantleCredentialBroker(sts_client=sts, now=clock.now)
         await broker.bearer_token(_profile())
 
-    cached = broker._bearers[(_profile().account_role_arn, "ap-northeast-1")]
+    key = (_profile().account_role_arn, _profile().external_id, "gw-mantle")
+    cached = broker._bearers[(key, "ap-northeast-1")]
     # bearer expiry capped to creds_expiry - 60, which is < now+1800
     assert cached.expires_at == creds_expiry_epoch - 60
     assert cached.expires_at < clock.now() + 1800

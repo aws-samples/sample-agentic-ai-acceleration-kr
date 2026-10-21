@@ -33,10 +33,10 @@ alias 하나에 클라이언트 재시도가 겹치면 그 사용자의 **다른
   (b) 1턴 성공(usage) 뒤 2턴 실패 → 한 번만 정산, 원장에 1턴 usage, 음수 없음.
   (c) 성공 경로 → 한 번 정산, 카운터 = 실제 비용·토큰, 원장 한 행.
 
-팀 한도도 건다. 팀 비용 한도가 없으면 비용 예약은 사용자 스코프에만 잡히는데 정산
-(``settle_cost``)은 팀 CPM/CPH 카운터도 함께 움직인다 — 그러면 이 결함과 무관하게 팀 비용
-카운터가 (실제 비용 − 예약액)만큼 음수가 된다(실측: 환불 −0.013237, 성공 −0.012027). 두
-스코프를 모두 예약하게 해야 "정확히 한 번" 을 두 스코프에서 볼 수 있다.
+팀 한도도 건다. 두 스코프를 모두 예약하게 해야 "정확히 한 번" 을 두 스코프에서 볼 수 있다.
+(정산은 예약한 스코프만 조정한다. 예전 정산은 팀 비용 한도가 없어 예약하지 않은 팀 CPM/CPH
+카운터도 움직여 (실제 비용 − 예약액)만큼 음수·TTL 없는 키를 남겼다(실측: 환불 −0.013237, 성공
+−0.012027) — ``test_medium_cost_settle_reserved_scope.py``.)
 
 ⚠️ 실 Redis 가 필요하다(``REDIS_PROOF_URL``). 정산은 incrbyfloat 로 카운터를 움직이는 것이라
    호출 여부만 보는 가짜로는 부호가 반대인 환불도 통과한다.
@@ -65,6 +65,7 @@ from botocore.credentials import Credentials
 from botocore.exceptions import ClientError
 from starlette.datastructures import Headers
 
+import app
 from app.schemas.domain import (
     ApiFormat,
     AuthContext,
@@ -79,6 +80,8 @@ from app.services.account_credentials import ACCOUNT_UNAVAILABLE_MESSAGE
 from app.services.cost_recorder import CostRecorder
 
 _SRC = Path(__file__).resolve().parents[2] / "src" / "app"
+#: 테스트하는 패키지 자신의 Lua(대조군을 다른 트리로 돌리면 그 트리의 스크립트를 쓴다).
+_SCRIPTS = Path(app.__file__).resolve().parent / "redis_scripts"
 REDIS_PROOF_URL = os.environ.get("REDIS_PROOF_URL")
 
 _redis_required = pytest.mark.skipif(
@@ -328,7 +331,7 @@ async def _drive(monkeypatch, r, *, route: str, exit_: str, scenario: str, strea
     from app.services.router_service import RouterService
     from app.services.sigv4_signer import SigV4Signer
 
-    LuaScriptLoader.load_all(_SRC / "redis_scripts")
+    LuaScriptLoader.load_all(_SCRIPTS)
     monkeypatch.setattr("app.services.rate_limit_enforcement.load_all_scope_limits", _limits)
     await _clear_of_window_edge()
 
