@@ -4,7 +4,7 @@
 
 [한국어 README](README.md)
 
-A unified LLM Gateway for coding agents (Claude Code / Codex / Cowork). Authenticates via OIDC, auto-issues Virtual Keys, and routes each client to the appropriate backend (AWS Bedrock native / Bedrock Mantle). Provides per-team/user/app budget management, rate limiting, model access control, usage tracking (ROI), server-side web search, and a natural-language **AI BI Assistant** for querying operational data.
+A unified LLM Gateway for coding agents (Claude Code / Codex / Cowork). Authenticates via OIDC, auto-issues Virtual Keys, and routes each client and model to the right backend (Bedrock native / Bedrock Mantle / the OpenAI-compatible bedrock-runtime endpoint) and AWS account. Provides per-team/user/app budget management, rate limiting, model access control, usage tracking (ROI), server-side web search, and a natural-language **AI BI Assistant** for querying operational data.
 
 ---
 
@@ -13,6 +13,14 @@ A unified LLM Gateway for coding agents (Claude Code / Codex / Cowork). Authenti
 ![AWSome AI Gateway Architecture](docs/img/architecture-overview.png)
 
 Authentication, billing, and governance happen at a single gateway. Requests are then routed to different AWS accounts/backends based on the client type. Routing is **data-driven** — determined by `routing_profiles` table rows (Redis-cached, TTL 300s), not code.
+
+> The diagram: every gateway service runs on EKS Fargate in the Seoul region, and requests fan out to Bedrock in
+> the AWS account chosen for the app (or the model): Claude Code / Cowork / Codex. Per-request usage (tokens, cost) is
+> written to Aurora by the Cost Management worker. Bedrock model invocation logs (prompt and response bodies) are
+> an **optional** feature: when enabled, Bedrock writes them to CloudWatch Logs, with bodies too large for CloudWatch
+> going to S3, and the Admin API audit endpoints (`/admin/audit/invocation-log/*`) query and reconcile them.
+> AgentCore (Runtime + WebSearch Gateway), IAM Identity Center/Cognito (SSO) and CloudWatch/CloudTrail/KMS complete
+> the picture. Data-plane detail:
 
 ```
 [Claude Code]  [Codex]  [Cowork]
@@ -27,10 +35,12 @@ Client ──Bearer VK──→ [Gateway Proxy] ── Auth · Client ID · Budg
           ┌───────────────────┼───────────────────────────────┐
           ▼                    ▼                               ▼
    claude-code               codex                          cowork
-   Bedrock NATIVE            Bedrock Mantle                 Bedrock Mantle
-   (boto3 invoke_model)      (OpenAI Responses API)         (Anthropic Messages)
+   Bedrock NATIVE            Bedrock Mantle (default) /     Bedrock Mantle
+   (boto3 invoke_model)      bedrock-runtime OpenAI-compat  (Anthropic Messages)
+                             (OpenAI Responses / Chat)
    Cross-account STS         In-account IRSA                Cross-account STS
-   Transparent fallback      httpx AsyncClient              httpx AsyncClient
+   Transparent fallback      GPT-5.6 Terra default (0028)   Opus 4.8 (cowork-opus)
+                             Mantle bearer / runtime SigV4  httpx AsyncClient
           │
           ▼
    [Redis] + [Aurora PostgreSQL]   ← Budget / RateLimit / cost stream / aggregation
@@ -52,6 +62,19 @@ Zero client-side configuration.
                                                       │  └ L3 self-consistency
                                                       ▼ Real-time streaming (SSE) + heartbeat
 ```
+
+**Multi-account summary**
+
+| Item | Account | Region | Backend | API | Cross-account |
+|------|---------|--------|---------|-----|---------------|
+| Main deployment (all gateway services + Aurora + AgentCore Runtime/web-search GW + ECR) | `123456789012` | ap-northeast-2 | — | — | gateway-proxy IRSA lives here |
+| claude-code | `333344445555` | ap-northeast-2 | Bedrock NATIVE (invoke_model) | Anthropic Messages | STS AssumeRole (ExternalId=`claude-code-bedrock`), transparent in-account fallback on failure |
+| codex | `123456789012` (in-account) | us-east-2 | Bedrock Mantle GPT-5.6 (default `codex-gpt-5.6-terra`) or bedrock-runtime (`gpt-5.6-*`, `gpt-6*`) | OpenAI Responses (`/v1/responses`), Chat (`/v1/chat/completions`, runtime) | none — pod IRSA credentials |
+| cowork | `222233334444` | ap-northeast-1 | Bedrock Mantle Opus 4.8 | Anthropic Messages | STS AssumeRole (ExternalId=`cowork-bedrock`) |
+
+- Cross-account uses `STS AssumeRole(DurationSeconds=3600)` + an optional `ExternalId`. For claude-code (native), `BedrockAccountClientProvider` vends and caches clients keyed by `(role_arn, region, external_id)`; if the app-profile assume fails, the gateway falls back transparently to its own account, so claude-code requests do not fail.
+- **Per-model target account** (migrations `0043`–`0045`): register a role in the admin console's AWS account registry and pick an account per model; all three paths (native / Mantle / bedrock-runtime) then sign as that account. Precedence is alias account → app-profile account → gateway IRSA; if the alias account cannot be assumed, the request ends with HTTP 500 instead of being sent from another account. The serving account of each request is recorded in `usage.usage_logs.aws_account_id`. Setup: [`docs/guides/multi-account-bedrock-setup.md`](docs/guides/multi-account-bedrock-setup.md) (Korean).
+- The provider registry has 5 adapters: `BEDROCK` (boto3), `OPENMODEL` (httpx vLLM), `BEDROCK_MANTLE` (cowork), `BEDROCK_MANTLE_OPENAI` (codex, Mantle), `BEDROCK_RUNTIME_OPENAI` (GPT-5.6/6, bedrock-runtime SigV4).
 
 > Full component / account / data-plane details: [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
@@ -131,16 +154,16 @@ AWSome AI Gateway uses **re-origination**. Inbound requests are deconstructed; o
 | Aspect | Other Open-Source | AWSome AI Gateway |
 |--------|------------------|-------------------|
 | Primary accounting | Provider usage field (same) | Provider usage field (same) |
-| When usage field is incomplete/missing | Local tiktoken approximation (significant error on Claude models) | **Bedrock invocationMetrics** as billable ground truth + **Bedrock CountTokens API** for estimation → aligns with AWS billing |
+| When usage field is incomplete/missing | Local tiktoken approximation (significant error on Claude models) | **Bedrock invocationMetrics** as billable ground truth + **Bedrock CountTokens API** for estimation on the models Bedrock can count (Haiku 4.5, Sonnet 4.5/4.6, Opus 4.5/4.6). Opus 4.7 and later and the 5 family are not supported by Bedrock CountTokens, so they fall back to a tiktoken approximation |
 
 ### Cost Preservation on Stream Interruption
 
 | Aspect | Other Open-Source | AWSome AI Gateway |
 |--------|------------------|-------------------|
 | When cost is recorded | Only on natural stream completion (all-or-nothing) | Text accumulated during stream + partial cost recorded on interruption |
-| Result of mid-stream disconnect | Tokens already consumed are recorded as **$0** (cost logic is skipped entirely) | Text up to the break point is measured via CountTokens API → **partial cost preserved** |
+| Result of mid-stream disconnect | Tokens already consumed are recorded as **$0** (cost logic is skipped entirely) | Text up to the break point is measured (CountTokens API on supported models, an approximation otherwise) → **partial cost preserved** |
 
-→ "Inaccuracy" and "loss" are different problems. Other proxies may inaccurately record completed streams, but mid-stream interruptions record nothing at all. We handle both cases with precise Bedrock token counts.
+→ "Inaccuracy" and "loss" are different problems. Other proxies may inaccurately record completed streams, but mid-stream interruptions record nothing at all. We record an interrupted stream as the usage up to the break, never as zero.
 
 ### Cost Recording Worker Fault Tolerance
 
@@ -163,6 +186,8 @@ AWSome AI Gateway uses **re-origination**. Inbound requests are deconstructed; o
 
 - **Gateway Core** — OIDC → Virtual Key auto-issuance, 3-client × 2 API formats (Anthropic Messages / OpenAI Responses) routing, per-client backend dispatch (Bedrock native / Mantle). Per-team/user/app budgets (HARD_BLOCK / SOFT_WARNING / THROTTLE), rate limits (USER / TEAM / GLOBAL scopes), model ACL, auto-downgrade, usage/ROI aggregation.
 - **Multi-app Governance (Phase 2)** — Per-user model allow-list (overrides team policy), per-user client ACL (restrict which apps a user can access), per-app budget/rate-limit separation. Data-driven routing profiles underpin all governance.
+- **Per-model AWS accounts** — Choose which AWS account calls and pays for each model (migrations `0043`–`0045`, the AWS account panel on the admin console's Models page). Quota, billing and model access follow that account, and each request's serving account is recorded with its usage.
+- **Bedrock model invocation log audit (optional)** — Enabling the Terraform module `bedrock-invocation-logging` (off by default) makes Bedrock write prompt and response bodies to CloudWatch Logs, with bodies too large for CloudWatch going to S3 (full delivery to S3 is deliberately off). admin-api `GET /admin/audit/invocation-log/{config,reconcile,{bedrock_request_id}}` reconciles them with the gateway's usage records through Logs Insights.
 - **Service Tokens** — Long-lived bearer tokens for external (non-OIDC) systems. Issue / rotate / revoke via admin-api. Only the prefix is stored; full token returned once at issuance.
 - **Resilience** — Readiness gate (`/health/ready`, 503 on degradation), invalid-VK fast rejection (no DB session opened), DB pool tuning (10s `pool_timeout` fast-fail), Redis circuit breaker with in-memory rate-limit fallback, response header leak prevention, security event detector with LRU OOM defense, cost stream spooling on Redis blip.
 - **Server-side Web Search (Architecture C)** — Gateway injects `web_search` tool, intercepts model `tool_use`, calls AgentCore managed WebSearch (MCP/SigV4). Zero client configuration — just ask and get searched answers. Supports both Anthropic/Responses formats.
@@ -196,6 +221,7 @@ This is **re-origination**, not relay. There is no path for headers to leak.
 | Admin (Operator) | [`guides/admin-guide.md`](guides/admin-guide.md) | User/team management, budgets, rate limits, models, incident response |
 | End User (Developer) | [`guides/user-guide.md`](guides/user-guide.md) | CLI install, login, Claude Code integration, troubleshooting |
 | 3-client Onboarding (all OS) | [`guides/QUICKSTART.md`](guides/QUICKSTART.md) | Claude Code / Codex / Cowork × macOS · Linux · Windows |
+| Deployer / Admin | [`docs/guides/multi-account-bedrock-setup.md`](docs/guides/multi-account-bedrock-setup.md) | Per-model target AWS account: roles, IAM, migrations, console, rollback (Korean) |
 
 Step-by-step deployment: [`deployment/docs/eks-fargate/`](deployment/docs/eks-fargate/). Secrets contract: [`deployment/docs/secrets-contract.md`](deployment/docs/secrets-contract.md).
 
@@ -213,7 +239,7 @@ Helm deploys 6 Deployments + 1 Job. The admin-chat-agent is hosted separately on
 | **scheduler** | ROI aggregation + VK expiration cleanup (singleton, reuses admin-api image) |
 | **notification-worker** | Budget threshold alerts (default: mock provider) |
 | **cost-recorder-worker** | Redis Stream → Aurora cost recording + daily aggregation |
-| **migration** | Alembic DB migration (helm pre-install/pre-upgrade Job, head=`0028`) |
+| **migration** | Alembic DB migration (helm pre-install/pre-upgrade Job, head=`0045`) |
 | **admin-chat-agent** | BI assistant on Bedrock AgentCore Runtime (not in EKS). Connected via `AGENTCORE_RUNTIME_ARN` env |
 
 ---
@@ -268,12 +294,12 @@ Examples:
 | `admin-chat-agent/` | BI assistant — Strands agents-as-tools + AgentCore Runtime |
 | `cost-recorder-worker/` | Redis Stream → Aurora cost recorder |
 | `notification-worker/` | Budget threshold alert worker |
-| `db/` | Alembic migration source (head=`0028`) |
+| `db/` | Alembic migration source (head=`0045`) |
 | `gateway-cli/` | User CLI (`gateway-cli`, `api-key-helper`, `statusline`) |
 | `gateway-clients/` | Claude-code/Codex container isolation utilities (`claude-box`/`codex-box` + `gw.sh`) |
 | `scripts/` | Onboarding scripts (macOS/Linux/Windows) + IAM scripts |
-| `deployment/charts/` | Helm chart + values: `values.yaml` (base) + EKS Fargate `{dev,prod,prod-loadtest}` (4 total). On-prem artifacts were removed in `83b4ffe` — EKS only |
-| `deployment/terraform/` | Terraform modules (VPC, EKS, Aurora, ElastiCache, Cognito, IRSA, ALB, ESO) |
+| `deployment/charts/` | Helm chart + values: `values.yaml` (base) + EKS Fargate `{dev,prod,prod-loadtest}` (4 total). EKS only |
+| `deployment/terraform/` | Terraform modules (VPC, EKS, Aurora, ElastiCache, Cognito, IRSA, ALB, ESO, Bedrock invocation logging) |
 | `guides/` | Final guides (deployer/admin/user/quickstart) |
 
 ---
@@ -284,15 +310,15 @@ Examples:
 |------|------|---------|
 | **Kyutae Park, Ph.D.** | AWS AI Specialist Solutions Architect | [Email](mailto:kyutae@amazon.com) |
 | **Minjae An** | AWS Forward Deployed DL Architect | [Email](mailto:aminjae@amazon.com) |
-| **Sue Cha** | AWS Deep Learning Architect | [Email](mailto:suecha@amazon.com) |
-| **Gonsoo Moon** | AWS Sr. AI Specialist Solutions Architect | [Email](mailto:moongons@amazon.com) |
-| **Debasish Mishra** | AWS Sr. Data Scientist | [Email](mailto:misdebas@amazon.com) |
 
 ## Contributors
 
 | Name | Role | Contact |
 |------|------|---------|
 | **Charlie Chang** | AWS Sr. Generative AI Strategist | [Email](mailto:subchang@amazon.com) |
+| **Debasish Mishra** | AWS Sr. Data Scientist | [Email](mailto:misdebas@amazon.com) |
+| **Gonsoo Moon** | AWS Sr. AI Specialist Solutions Architect | [Email](mailto:moongons@amazon.com) |
+| **Sue Cha** | AWS Deep Learning Architect | [Email](mailto:suecha@amazon.com) |
 | **Yash Shah** | AWS Data Science Manager | [Email](mailto:syash@amazon.com) |
 | **Youngjoon Choi** | AWS Sr. AI Specialist Solutions Architect Manager | [Email](mailto:choijoon@amazon.com) |
 
