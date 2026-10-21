@@ -272,7 +272,7 @@ jobs:
           # ⚠️ 하한만 본다. 정확한 통과 수는 DB 에 쌓인 데이터에 따라 달라진다 — 일부
           #    테스트는 대상 테이블이 비어 있으면 스스로 skip 한다(플랜 어서션 2건 — 빈 usage_logs
           #    에서 스스로 skip 하는 nonsargable 플랜 어서션). 로컬 실측(fresh init SQL + alembic
-          #    head, 실 Redis — 이 잡과 같은 레시피): 291 passed / 2 skipped (17 files). 여기에는
+          #    head, 실 Redis — 이 잡과 같은 레시피): 290 passed / 2 skipped (17 files). 여기에는
           #    AWS 자동연동 real-PG, 0044 계정 레지스트리 트리거·동시성, 계정 API, init SQL 재실행 락,
           #    커밋 뒤 무효화·실시간 사용량·내 예산 게이트웨이 대조·seed_spent 총액이 들어 있다.
           #    REDIS_PROOF_URL 만 빠지면 266 passed / 10 skipped / 17 errors 다 — Redis 를 쓰는

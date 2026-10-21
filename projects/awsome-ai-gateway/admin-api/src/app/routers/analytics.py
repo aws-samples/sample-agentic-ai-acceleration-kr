@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/admin/analytics", tags=["Analytics"])
 
-#: scope 의 허용 형태 — 화면 라우트와 export 가 **같은** 집합을 쓴다.
+#: scope 의 허용 형태.
 _SCOPE_PATTERN = r"^(all|team:[0-9a-fA-F-]{36})$"
 
 #: /admin/analytics 응답 캐시 TTL(초). dashboard 와 같은 값이지만 정책이 달라 별도로 둔다
@@ -73,7 +73,7 @@ async def _cache_set(request: Request, key: str, value: object) -> None:
     ⚠️ ``json.dumps(value, default=str)`` 로 넣으면 안 된다. value 는 Pydantic 모델
     (AnalyticsResponse)이라 JSON 직렬화가 안 되고, ``default=str`` 가 모델의 ``str()``
     (``"period='2026-09' ... cost_summary=CostSummary(...)"``)을 문자열 하나로 넣는다. 그러면
-    적중 응답 본문이 객체가 아니라 그 문자열이 되어, admin-ui 분석 화면이 ``cost_summary`` 를
+    적중 응답 본문이 객체가 아니라 그 문자열이 되어, admin-ui(당시 분석 화면)가 ``cost_summary`` 를
     못 찾고 Server Components 에러로 깨졌다 — 첫 요청만 정상이고 TTL 동안 같은 요청은 전부.
     ``jsonable_encoder`` 는 FastAPI 가 이 라우트(response_model 없음)의 반환값을 직렬화할 때
     쓰는 바로 그 함수라 적중·미스 응답이 같다(Decimal 은 모델 JSON 모드대로 문자열).
@@ -95,7 +95,7 @@ async def get_analytics(
     # ⚠️ Literal 로 좁혀 잘못된 값이 422 로 실패하게 한다. 예전 description 은
     #    'department' 를 광고했지만 analytics_service 에는 그 분기가 없어서, 요청하면
     #    조용히 by_model 응답이 돌아왔다(쓰레기 값과 바이트 단위로 동일 = 무증상 오답).
-    #    이 Literal 집합은 admin-ui/src/types/enums.ts 의 GroupByType 과 일치한다.
+    #    admin-ui 의 유일한 호출부(lib/actions/dashboard.ts fetchAnalytics)도 이 집합 안에서만 보낸다.
     group_by: Literal["model", "team", "user"] = Query("model"),
     # ⚠️ scope 는 닫힌 집합이다 — 그 밖의 값은 422. 예전엔 자유 문자열이라 'xyz' 같은 값이
     #    서비스의 어느 분기도 타지 않고 전사 범위로 떨어졌다(서비스도 스스로 400 으로 닫는다).

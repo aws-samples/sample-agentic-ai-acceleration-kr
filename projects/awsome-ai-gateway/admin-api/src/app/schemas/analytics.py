@@ -4,18 +4,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from pydantic import BaseModel, Field
-
-
-# ── Query Params ──
-
-
-class AnalyticsQueryParams(BaseModel):
-    period: str = Field(description="YYYY-MM format")
-    group_by: str = Field("model", description="model | team | department | user")
-    scope: str = Field("all", description="all | team:{id}")
-    start_date: str | None = Field(None, description="YYYY-MM-DD (KST). end_date 와 함께만 유효")
-    end_date: str | None = Field(None, description="YYYY-MM-DD (KST). start_date 와 함께만 유효")
+from pydantic import BaseModel
 
 
 # ── Responses ──

@@ -908,7 +908,7 @@ async def test_leader_malformed_scope_never_reaches_org_wide_data(session, scope
 
 
 async def test_leader_all_is_scoped_to_the_own_team(session):
-    """대조군 — 'all' 은 TEAM_LEADER 에게 자기 팀이다: 다른 팀(TEAM_B) 사용자는 화면에도 CSV 에도 없다."""
+    """대조군 — 'all' 은 TEAM_LEADER 에게 자기 팀이다: 다른 팀(TEAM_B) 사용자는 응답에 없다."""
     from app.core.auth import CurrentUser
     from app.models.auth import UserRole
     from app.services.analytics_service import AnalyticsService

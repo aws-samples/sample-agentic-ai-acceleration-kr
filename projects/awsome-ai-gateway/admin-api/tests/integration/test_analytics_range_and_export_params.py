@@ -1,6 +1,6 @@
 # Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
-"""라우트 레벨: 날짜 범위와 export 필터가 **선언되어** 실제로 도달하는지.
+"""라우트 레벨: 날짜 범위 파라미터가 **선언되어** 실제로 도달하는지.
 
 서비스 유닛 테스트로는 이 결함을 잡을 수 없다 — 결함은 "라우트가 파라미터를 선언하지
 않아 FastAPI 가 조용히 버린다" 는 데 있고, 서비스는 인자를 받으면 잘 동작했다.
