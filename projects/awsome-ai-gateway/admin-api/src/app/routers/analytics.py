@@ -8,6 +8,7 @@ from datetime import timedelta
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -54,24 +55,39 @@ def _analytics_cache_key(
 
 
 async def _cache_get(request: Request, key: str):
-    """캐시 조회 — 실패는 miss(fail-open). 캐시는 정합성의 근거가 아니다."""
+    """캐시 조회 — 실패는 miss(fail-open). 캐시는 정합성의 근거가 아니다.
+
+    객체(dict)가 아닌 값도 miss 다. 아래 _cache_set 수정 전 파드가 쓴 항목은 모델의 ``str()``
+    문자열이라, 롤링 배포 중 새 파드가 그걸 읽어 내보내면 같은 고장이 TTL 동안 이어진다.
+    """
     redis = getattr(request.app.state, "redis", None)
     if redis is None:
         return None
     try:
         raw = await redis.get(key)
-        return json.loads(raw) if raw else None
+        cached = json.loads(raw) if raw else None
+        return cached if isinstance(cached, dict) else None
     except Exception as exc:  # noqa: BLE001
         logger.debug("analytics cache get failed key=%s err=%s", key, exc)
         return None
 
 
 async def _cache_set(request: Request, key: str, value: object) -> None:
+    """캐시 저장 — 미스 경로가 보내는 JSON 과 **같은 모양**으로 넣는다.
+
+    ⚠️ ``json.dumps(value, default=str)`` 로 넣으면 안 된다. value 는 Pydantic 모델
+    (AnalyticsResponse)이라 JSON 직렬화가 안 되고, ``default=str`` 가 모델의 ``str()``
+    (``"period='2026-09' ... cost_summary=CostSummary(...)"``)을 문자열 하나로 넣는다. 그러면
+    적중 응답 본문이 객체가 아니라 그 문자열이 되어, admin-ui 분석 화면이 ``cost_summary`` 를
+    못 찾고 Server Components 에러로 깨졌다 — 첫 요청만 정상이고 TTL 동안 같은 요청은 전부.
+    ``jsonable_encoder`` 는 FastAPI 가 이 라우트(response_model 없음)의 반환값을 직렬화할 때
+    쓰는 바로 그 함수라 적중·미스 응답이 같다(Decimal 은 모델 JSON 모드대로 문자열).
+    """
     redis = getattr(request.app.state, "redis", None)
     if redis is None:
         return
     try:
-        await redis.setex(key, _ANALYTICS_CACHE_TTL, json.dumps(value, default=str))
+        await redis.setex(key, _ANALYTICS_CACHE_TTL, json.dumps(jsonable_encoder(value)))
     except Exception as exc:  # noqa: BLE001
         logger.debug("analytics cache set failed key=%s err=%s", key, exc)
 
