@@ -1183,7 +1183,14 @@ class StreamingService:
             turn_tool_names: Dict[str, int] = {}
             # True once this turn already wrote GUARDRAIL# (metadata / redact /
             # stopReason / blocked-text). Prevents double-counting.
-            turn_guardrail_recorded: bool = False
+            # The trace (metadata.guardrail) is the only signal that names the
+            # filters, and it arrives *after* messageStop. The other signals —
+            # redactContent, stopReason, the canned blocked text — come first, so
+            # recording on them wrote a label-less event and the trace then wrote
+            # the real one. They now only mark the turn; one event is written after
+            # the stream, and only if the trace never recorded the block.
+            turn_guardrail_traced: bool = False
+            turn_guardrail_fallback_stage: Optional[str] = None
             # Best-effort stage when we only have stopReason / redactContent /
             # blocked messaging (no assessment). Input redaction is the common path.
             turn_guardrail_stage: str = "input"
@@ -1461,7 +1468,7 @@ class StreamingService:
                                         thread_id=thread_id,
                                         turn_id=turn_id,
                                     )
-                                    turn_guardrail_recorded = True
+                                    turn_guardrail_traced = True
                                 except Exception:
                                     logger.warning(
                                         "Failed to record guardrail event for agent %s, user %s",
@@ -1480,35 +1487,16 @@ class StreamingService:
                                 elif redact.get("redactUserContentMessage"):
                                     turn_guardrail_stage = "input"
                                 if (
-                                    self.usage_service
-                                    and not turn_guardrail_recorded
-                                    and (
-                                        redact.get("redactUserContentMessage")
-                                        or redact.get("redactAssistantContentMessage")
-                                    )
+                                    redact.get("redactUserContentMessage")
+                                    or redact.get("redactAssistantContentMessage")
                                 ):
-                                    try:
-                                        await _off_loop(self.usage_service.record_guardrail_event,
-                                            agent_record_id=agent_record_id,
-                                            owner_sub=owner_sub,
-                                            action="BLOCKED",
-                                            stage=turn_guardrail_stage,
-                                            policies=[],
-                                        )
-                                        turn_guardrail_recorded = True
-                                        logger.info(
-                                            "[guardrail-stop-diag] recorded from redactContent "
-                                            "stage=%s agent=%s keys=%s",
-                                            turn_guardrail_stage,
-                                            agent_record_id,
-                                            sorted(redact.keys()),
-                                        )
-                                    except Exception:
-                                        logger.warning(
-                                            "Failed to record guardrail redactContent for agent %s",
-                                            agent_record_id,
-                                            exc_info=True,
-                                        )
+                                    turn_guardrail_fallback_stage = turn_guardrail_stage
+                                    logger.info(
+                                        "[guardrail-stop-diag] redactContent stage=%s agent=%s keys=%s",
+                                        turn_guardrail_stage,
+                                        agent_record_id,
+                                        sorted(redact.keys()),
+                                    )
 
                     # Artifacts must be stored before they go out: the frontend needs
                     # the resolved id/version to refetch or share the artifact later.
@@ -1766,57 +1754,17 @@ class StreamingService:
                             turn_guardrail_stage = blocked_stage
                         logger.info(
                             "[guardrail-stop-diag] messageStop stopReason=%r "
-                            "blocked_text_stage=%s already_recorded=%s agent=%s",
+                            "blocked_text_stage=%s traced=%s agent=%s",
                             stop_reason,
                             blocked_stage,
-                            turn_guardrail_recorded,
+                            turn_guardrail_traced,
                             agent_record_id,
                         )
-                        if (
-                            self.usage_service
-                            and not turn_guardrail_recorded
-                            and (
-                                is_guardrail_intervened_stop(stop_reason)
-                                or blocked_stage is not None
-                            )
-                        ):
-                            if not agent_record_id:
-                                logger.warning(
-                                    "[guardrail-stop-diag] skip record: empty "
-                                    "agent_record_id (stopReason=%r)",
-                                    stop_reason,
-                                )
-                            else:
-                                try:
-                                    await _off_loop(self.usage_service.record_guardrail_event,
-                                        agent_record_id=agent_record_id,
-                                        owner_sub=owner_sub,
-                                        action="BLOCKED",
-                                        stage=turn_guardrail_stage,
-                                        # Policy unknown without assessment — count
-                                        # the intervention only (policies optional).
-                                        policies=[],
-                                    )
-                                    turn_guardrail_recorded = True
-                                    logger.info(
-                                        "[guardrail-stop-diag] recorded from messageStop "
-                                        "stopReason=%r stage=%s via=%s agent=%s",
-                                        stop_reason,
-                                        turn_guardrail_stage,
-                                        "stopReason"
-                                        if is_guardrail_intervened_stop(stop_reason)
-                                        else "blocked_text",
-                                        agent_record_id,
-                                    )
-                                except Exception:
-                                    logger.warning(
-                                        "Failed to record guardrail stopReason for agent %s",
-                                        agent_record_id,
-                                        exc_info=True,
-                                    )
-                        # Reset per-turn guardrail flags after this stop (a
-                        # runtime may emit more than one messageStop).
-                        turn_guardrail_recorded = False
+                        if is_guardrail_intervened_stop(stop_reason) or blocked_stage is not None:
+                            turn_guardrail_fallback_stage = turn_guardrail_stage
+                        # Reset the best-effort stage after this stop (a runtime
+                        # may emit more than one messageStop); the fallback mark
+                        # lives until the post-stream write.
                         turn_guardrail_stage = "input"
 
                         # Content may be empty when the turn only produced reasoning or tool calls.
@@ -1902,10 +1850,11 @@ class StreamingService:
                 # Same blocked-text fallback if the stream ended without a
                 # messageStop that carried stopReason (some AgentCore paths).
                 post_blocked = guardrail_stage_from_blocked_text(current_message_content)
+                fallback_stage = turn_guardrail_fallback_stage or post_blocked
                 if (
                     self.usage_service
-                    and not turn_guardrail_recorded
-                    and post_blocked
+                    and not turn_guardrail_traced
+                    and fallback_stage
                     and agent_record_id
                 ):
                     try:
@@ -1913,19 +1862,21 @@ class StreamingService:
                             agent_record_id=agent_record_id,
                             owner_sub=owner_sub,
                             action="BLOCKED",
-                            stage=post_blocked,
+                            stage=fallback_stage,
+                            # Policy unknown without the trace — count the
+                            # intervention only (policies optional).
                             policies=[],
+                            thread_id=thread_id,
+                            turn_id=turn_id,
                         )
-                        turn_guardrail_recorded = True
                         logger.info(
-                            "[guardrail-stop-diag] recorded from post-loop blocked text "
-                            "stage=%s agent=%s",
-                            post_blocked,
+                            "[guardrail-stop-diag] recorded from fallback stage=%s agent=%s",
+                            fallback_stage,
                             agent_record_id,
                         )
                     except Exception:
                         logger.warning(
-                            "Failed to record post-loop guardrail for agent %s",
+                            "Failed to record fallback guardrail for agent %s",
                             agent_record_id,
                             exc_info=True,
                         )
