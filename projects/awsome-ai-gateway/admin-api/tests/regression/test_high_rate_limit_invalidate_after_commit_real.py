@@ -6,8 +6,8 @@
 응답 직전에 했다. 그 사이 도착한 게이트웨이 요청의 캐시 미스는 자기 커넥션으로 **커밋된(=옛)** 행을
 읽어 300초 다시 캐시한다.
 
-  * GLOBAL 저장은 다른 모델의 GLOBAL 한도를 해제한다(한 번에 한 모델). 해제된 한도가 콘솔이 '한도
-    없음' 으로 보여주는 동안 5분 더 집행됐다.
+  * GLOBAL 한도를 바꾸면 옛 값이 콘솔이 새 값을 보여주는 동안 5분 더 집행됐다. GLOBAL 은 모델별이라
+    (0046) 그 저장이 지우는 것은 **그 모델의** 키 하나다 — 다른 모델의 캐시와 행은 그대로 남아야 한다.
   * USER 오버라이드 제거도 같다 — 지운 개인 한도가 5분 더 집행됐다.
 
 창을 결정적으로 만든다: 라우트가 커밋하는 **바로 그 순간 직전**에 게이트웨이 로더를 한 번 돌린다
@@ -52,8 +52,8 @@ pytestmark = pytest.mark.skipif(
     not PROOF_DSN, reason="PROOF_DSN 미설정 — 실 PostgreSQL + 실 Redis 필요"
 )
 
-ALIAS_A = "claude-opus-4-7"  # 먼저 GLOBAL 한도를 받았다가 해제되는 모델
-ALIAS_B = "claude-sonnet-4-6"  # 다음에 저장되는 모델
+ALIAS_A = "claude-opus-4-7"  # GLOBAL 한도를 바꾸는 모델
+ALIAS_B = "claude-sonnet-4-6"  # 자기 GLOBAL 한도를 가진 다른 모델 — A 의 저장에 영향받지 않아야 한다
 U_OVR = uuid.UUID("dddd0000-0000-4000-a000-0000000000d1")  # 개인 오버라이드가 있는 사용자
 TTL = 300  # gateway-proxy _CONFIG_CACHE_TTL_SEC
 
@@ -206,7 +206,13 @@ async def _run_route_with_gateway_request_at_commit(session, call, on_commit):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-async def test_released_global_limit_is_not_recached_from_the_commit_window(engine, redis_client):
+async def test_changed_global_limit_is_not_recached_and_other_models_keep_theirs(engine, redis_client):
+    """GLOBAL 은 모델별이다(0046). A 를 바꾸는 저장의 커밋 창에 A 로 요청이 들어와도 옛 값이 남지 않고,
+    B 의 GLOBAL 한도는 DB 에서도 캐시에서도 그대로다.
+
+    대조군 두 개: (1) 커밋 **전에** 지우던 코드는 창의 요청이 다시 캐시한 옛 값(5)을 TTL 동안 남겼다.
+    (2) 단일 슬롯 코드는 A 의 저장이 B 의 행을 해제했다(동의 없이는 409).
+    """
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from app.routers import rate_limits as routes
@@ -214,33 +220,37 @@ async def test_released_global_limit_is_not_recached_from_the_commit_window(engi
 
     svc = _service(redis_client)
 
-    # 1) 운영자가 모델 A 에 GLOBAL rpm=5 를 걸었다(커밋됨). 게이트웨이가 그 값을 캐시했다.
-    async with AsyncSession(engine, expire_on_commit=False) as s:
-        await routes.set_global_rate_limit(
-            _request(svc), ALIAS_A, RateLimitSetRequest(rpm=5), admin=_admin(), session=s
-        )
-        if s.in_transaction():
-            await s.commit()
+    # 1) 두 모델에 각자 GLOBAL 한도(커밋됨). 게이트웨이가 둘 다 캐시했다.
+    for alias, rpm in ((ALIAS_A, 5), (ALIAS_B, 7)):
+        async with AsyncSession(engine, expire_on_commit=False) as s:
+            await routes.set_global_rate_limit(
+                _request(svc), alias, RateLimitSetRequest(rpm=rpm), admin=_admin(), session=s
+            )
+            if s.in_transaction():
+                await s.commit()
     assert (await _gateway_load(engine, redis_client, "GLOBAL", None, ALIAS_A))["rpm"] == 5
+    assert (await _gateway_load(engine, redis_client, "GLOBAL", None, ALIAS_B))["rpm"] == 7
 
-    # 2) 운영자가 모델 B 를 저장한다 → A 의 한도가 해제된다. 커밋 직전에 A 로 요청이 들어온다.
+    # 2) 운영자가 A 를 9 로 바꾼다. 커밋 직전에 A 로 요청이 들어온다.
     await redis_client.delete(f"rl:config:GLOBAL:NULL:{ALIAS_A}")  # 창에서 반드시 DB 를 읽게 한다
     async with AsyncSession(engine, expire_on_commit=False) as s:
         _, in_window = await _run_route_with_gateway_request_at_commit(
             s,
             lambda: routes.set_global_rate_limit(
-                _request(svc), ALIAS_B, RateLimitSetRequest(rpm=7), admin=_admin(), session=s,
-                release_alias=ALIAS_A,  # 콘솔의 확인 대화상자가 보내는 동의
+                _request(svc), ALIAS_A, RateLimitSetRequest(rpm=9), admin=_admin(), session=s
             ),
             lambda: _gateway_load(engine, redis_client, "GLOBAL", None, ALIAS_A),
         )
     assert in_window["rpm"] == 5, "전제: 커밋 전 창의 게이트웨이는 아직 옛 행을 본다"
 
-    # DB 는 B 만 활성이다(단일 슬롯) — 그런데 캐시에 A 의 옛 한도가 남아 있으면 5분 더 집행된다.
     stale = await redis_client.get(f"rl:config:GLOBAL:NULL:{ALIAS_A}")
-    assert stale is None, f"해제된 GLOBAL 한도가 캐시에 남았다: {stale} (TTL {await redis_client.ttl(f'rl:config:GLOBAL:NULL:{ALIAS_A}')})"
-    assert (await _gateway_load(engine, redis_client, "GLOBAL", None, ALIAS_A))["rpm"] is None
-    assert (await _gateway_load(engine, redis_client, "GLOBAL", None, ALIAS_B))["rpm"] == 7  # 대조군
+    assert stale is None, f"바꾼 GLOBAL 한도의 옛 값이 캐시에 남았다: {stale}"
+    assert (await _gateway_load(engine, redis_client, "GLOBAL", None, ALIAS_A))["rpm"] == 9
+
+    # B 는 건드리지 않았다 — 캐시가 남아 있고(지울 이유가 없다) DB 도 그 값이다.
+    assert json.loads(await redis_client.get(f"rl:config:GLOBAL:NULL:{ALIAS_B}"))["rpm"] == 7
+    await redis_client.delete(f"rl:config:GLOBAL:NULL:{ALIAS_B}")
+    assert (await _gateway_load(engine, redis_client, "GLOBAL", None, ALIAS_B))["rpm"] == 7
 
 
 async def test_removed_user_override_is_not_recached_from_the_commit_window(engine, redis_client):

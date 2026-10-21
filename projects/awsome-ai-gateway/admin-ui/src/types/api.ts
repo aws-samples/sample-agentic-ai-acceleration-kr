@@ -230,8 +230,6 @@ export const RateLimitSetSchema = z.object({
   tpm: z.number().int().positive().nullable().optional(),
   cpm: z.number().positive().nullable().optional(),
   cph: z.number().positive().nullable().optional(),
-  /** GLOBAL 전용 — 다른 모델이 한도를 갖고 있으면 그 alias(해제 동의). 없으면 admin-api 가 409. */
-  release_alias: z.string().min(1).optional(),
 });
 
 // ─── Page Permission Map ──────────────────────────────────────────────────────

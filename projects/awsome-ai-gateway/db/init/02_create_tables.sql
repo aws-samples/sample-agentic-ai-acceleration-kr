@@ -258,15 +258,106 @@ CREATE TABLE IF NOT EXISTS model.rate_limit_configs (
     updated_at    TIMESTAMPTZ   NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_rate_limit_configs_scope ON model.rate_limit_configs (scope, scope_id) WHERE is_active = true;
+-- migration 0046 과 동일(0024 를 대체). 활성 행의 유일성은 두 인덱스로 나뉜다.
+--   USER/TEAM — 주체당 1개. model_alias 는 키에 넣지 않는다: 그 upsert 는 alias 무관하게 주체의
+--               활성 행 전부를 비활성화하므로, alias 를 넣으면 실제 중복 창이 열린다.
+--   GLOBAL    — model alias 당 1개(GLOBAL 행의 alias 는 model_alias 에 있고 scope_id 는 NULL 이다).
+--               Bedrock 쿼터는 모델별이고, 한 모델의 저장이 다른 모델의 한도를 풀지 않는다.
+-- COALESCE 는 필수 — unique index 에서 NULL 은 서로 구별되므로 NULL 인 키 컬럼은 묶어야 보호된다.
+--
+-- rl_global_release_guard — 활성 GLOBAL 행을 비활성화하는 커밋은 같은 alias 의 활성 GLOBAL 행이 남아
+-- 있어야 한다(지연 제약 트리거). 0046 DB 에 붙은 이전 admin-api 의 alias 무관 upsert 가 다른 모델의
+-- 한도를 말없이 해제하지 못하게 막는다. 의도된 해제는 그 트랜잭션에서만
+-- SET LOCAL rl.allow_global_release = 'on'. 이유와 예외는 migration 0046 docstring.
+-- ⚠️ 함수 본문은 migration 0046 의 CREATE_RELEASE_GUARD_FUNCTION 과 글자까지 같아야 한다(실 PG 대조:
+--    admin-api tests/regression/test_high_global_rate_limit_0046_real_db.py).
+CREATE OR REPLACE FUNCTION model.rl_global_release_guard() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF coalesce(current_setting('rl.allow_global_release', true), '') = 'on' THEN
+        RETURN NULL;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM model.rate_limit_configs
+         WHERE scope = 'GLOBAL' AND is_active
+           AND model_alias IS NOT DISTINCT FROM OLD.model_alias
+    ) THEN
+        RAISE EXCEPTION 'GLOBAL rate limit of % would be released without a replacement',
+            OLD.model_alias
+            USING ERRCODE = 'check_violation',
+                  CONSTRAINT = 'rl_global_release_guard',
+                  HINT = 'Save that model''s GLOBAL limit instead. An intended release runs '
+                         || 'SET LOCAL rl.allow_global_release = ''on'' in its transaction.';
+    END IF;
+    RETURN NULL;
+END
+$$;
 
--- migration 0024 와 동일. model_alias 는 키에 넣지 않는다 — upsert 가 alias 무관하게
--- 해당 scope 의 활성 행 전부를 비활성화하므로, alias 를 넣으면 실제 중복 창이 열린다.
--- COALESCE(scope_id, ...) 는 필수 — GLOBAL scope 는 scope_id IS NULL 이고,
--- unique index 에서 NULL 은 서로 구별되므로 그냥 (scope, scope_id) 로는 보호되지 않는다.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_rate_limit_configs_active
-    ON model.rate_limit_configs (scope, COALESCE(scope_id, '00000000-0000-0000-0000-000000000000'::uuid))
-    WHERE is_active = true;
+-- ⚠️ 이 블록은 매 마이그레이션 Job 에서 alembic 보다 먼저 돈다. 이미 있는 객체는 카탈로그만 보고 건너뛴다
+--    — 맨 CREATE INDEX IF NOT EXISTS 는 인덱스가 있어도 테이블에 SHARE 를 잡아 열린 쓰기 뒤에서
+--    기다렸다(실 PG16 2.1s). 만들어야 할 때만 잠그고, 그 대기는 이 블록 안에서만 lock_timeout 5s 로
+--    묶는다(넘으면 이 문장이 실패해 Job 이 실패하고, 그대로 다시 돌릴 수 있다). 파일 전체에는 걸지 않는다
+--    — usage_logs·budget_usages 의 기존 no-op 문장이 바쁜 쓰기 뒤에서 Job 을 떨어뜨린다.
+--    0045 DB 에서는 uq_rate_limit_configs_active 가 옛 정의로 이미 있어 건너뛰고, 0046 이 그 정의를 바꾼다.
+--
+-- ⚠️ rl_global_release_guard 는 **새 설치**(alembic_version 이 아직 없다)이거나 이미 **0046 이후**인 DB 에만
+--    여기서 만든다. 0046 이전의 기존 DB 는 0046 이 만든다. 이유 둘:
+--      · 0024 이전 DB 에서 트리거가 먼저 있으면 0024 의 중복 정리(GLOBAL 행 비활성화)가 지연 트리거 이벤트를
+--        남기고, 같은 트랜잭션의 0024 CREATE INDEX 가 "pending trigger events" 로 거부된다 — Job 이 0023 에서
+--        멈추고 재시도해도 같다.
+--      · 0046 에 닿기 전에 실패한 업그레이드가 0042~0045 의 단일 슬롯 DB 에 트리거만 남기면, 이전 admin-api 의
+--        정상적인 슬롯 교체(다른 모델로 GLOBAL 을 옮기기)가 거부된다.
+--    판정은 alembic_version 이다 — "0046 이 적용됐는가" 를 직접 묻는다. 인덱스 존재로는 알 수 없다(GLOBAL
+--    인덱스는 이 블록이 0046 이전 DB 에도 만든다). 리비전 id 는 0 으로 채운 4자리 번호라 문자열 비교가 순서와
+--    같다. 그 모양이 아니면 만들지 않는다(그 DB 는 0046 이 만든다). CONSTRAINT TRIGGER 에는 IF NOT EXISTS 가
+--    없어 pg_trigger 로 본다.
+--    alembic_version 은 스키마를 붙이지 않고 search_path 로 찾는다. 이 SQL(psql, DB_MASTER_USER)과
+--    alembic(DB_MASTER_URL)은 같은 롤로 돌고 version_table_schema 를 정하지 않으므로, alembic 이 쓴 바로 그
+--    테이블이다 — 롤 이름의 스키마가 있으면 그쪽이고 없으면 public 이다. public 으로 못박으면 그런 DB 를 새
+--    설치로 오인해 0042 DB 에 트리거를 만든다.
+DO $$
+DECLARE
+    prev_lock_timeout text := current_setting('lock_timeout');
+    guard_wanted boolean;
+BEGIN
+    PERFORM set_config('lock_timeout', '5s', true);
+    IF to_regclass('model.idx_rate_limit_configs_scope') IS NULL THEN
+        CREATE INDEX IF NOT EXISTS idx_rate_limit_configs_scope
+            ON model.rate_limit_configs (scope, scope_id) WHERE is_active = true;
+    END IF;
+    IF to_regclass('model.uq_rate_limit_configs_active') IS NULL THEN
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_rate_limit_configs_active
+            ON model.rate_limit_configs (scope, COALESCE(scope_id, '00000000-0000-0000-0000-000000000000'::uuid))
+            WHERE is_active = true AND scope <> 'GLOBAL';
+    END IF;
+    IF to_regclass('model.uq_rate_limit_configs_global_active') IS NULL THEN
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_rate_limit_configs_global_active
+            ON model.rate_limit_configs (COALESCE(model_alias, ''))
+            WHERE is_active = true AND scope = 'GLOBAL';
+    END IF;
+    IF to_regclass('alembic_version') IS NULL THEN
+        guard_wanted := true;  -- 새 설치: alembic 이 아직 돌지 않았다
+    ELSE
+        -- 동적 SQL — 테이블이 없는 DB 에서 이 문장이 미리 해석되지 않게 한다.
+        EXECUTE 'SELECT EXISTS (SELECT 1 FROM alembic_version '
+             || 'WHERE version_num ~ ''^[0-9]{4}$'' AND version_num >= ''0046'')'
+            INTO guard_wanted;
+    END IF;
+    IF guard_wanted AND NOT EXISTS (
+        SELECT 1 FROM pg_trigger
+         WHERE tgrelid = 'model.rate_limit_configs'::regclass
+           AND tgname = 'rl_global_release_guard'
+    ) THEN
+        CREATE CONSTRAINT TRIGGER rl_global_release_guard
+            AFTER UPDATE OF is_active ON model.rate_limit_configs
+            DEFERRABLE INITIALLY DEFERRED
+            FOR EACH ROW
+            WHEN (OLD.scope = 'GLOBAL' AND OLD.is_active AND NOT NEW.is_active)
+            EXECUTE FUNCTION model.rl_global_release_guard();
+    END IF;
+    PERFORM set_config('lock_timeout', prev_lock_timeout, true);
+END
+$$;
 
 -- ------------------------------------------------------------
 -- 팀별 모델 접근 제어

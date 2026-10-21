@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import CurrentUser, require_admin
 from app.core.db import get_db_session
+from app.core.exceptions import ConflictError
 from app.schemas.rate_limits import (
     RateLimitDeleteResponse,
     RateLimitResponse,
@@ -140,9 +141,27 @@ async def set_global_rate_limit(
     session: AsyncSession = Depends(get_db_session),
     release_alias: Annotated[
         str | None,
-        Query(description="다른 모델이 GLOBAL 한도를 갖고 있으면 그 alias — 해제에 동의한다는 뜻(없으면 409)"),
+        Query(
+            description=(
+                "더 이상 받지 않는다(있으면 409). GLOBAL 한도는 모델별이라(0046) 이 저장은 다른 모델의 "
+                "한도를 해제하지 않는다 — 단일 슬롯 시절 콘솔이 보내던 '해제 동의' 다."
+            )
+        ),
     ] = None,
 ):
+    """이 모델(alias)의 GLOBAL 한도를 저장한다. 다른 모델의 GLOBAL 한도는 바뀌지 않는다(0046).
+
+    ``release_alias`` 를 보내면 409 다. 그 파라미터는 GLOBAL 이 한 번에 한 모델이던 시절, 다른 모델의
+    한도를 해제하는 저장에 콘솔이 붙이던 동의였다. 롤링 배포 동안 이전 콘솔은 확인 대화상자에서 "그
+    모델의 한도가 해제된다" 고 말한 뒤 이 값을 보낸다. 조용히 무시하면 운영자는 풀었다고 믿는 한도가
+    계속 집행되므로, 아무것도 바꾸지 않고 거절한다(이전 콘솔은 409 에 트리를 새로 받는다).
+    """
+    if release_alias is not None:
+        raise ConflictError(
+            f"GLOBAL rate limits are per model: saving {model_alias} does not release the limit on "
+            f"{release_alias}, so release_alias is not accepted and nothing was changed. "
+            "Reload the console, or resend without release_alias."
+        )
     svc: RateLimitService = request.app.state.rate_limit_service
     result = await svc.set_global_rate_limit(
         session,
@@ -151,10 +170,7 @@ async def set_global_rate_limit(
         actor=admin,
         ip_address=request.client.host if request.client else "0.0.0.0",
         request_id=request.headers.get("x-request-id", ""),
-        release_alias=release_alias,
     )
-    # ⚠️ GLOBAL 은 저장이 **다른 모델**의 한도를 해제한다 — 커밋 전에 지우면 해제된 한도가 그 창에서
-    #    다시 캐시돼 5분 더 집행된다(set_user_rate_limit 주석).
-    await session.commit()
+    await session.commit()  # 커밋 뒤에 지운다(set_user_rate_limit 주석)
     await svc.invalidate_after_commit(session)
     return result

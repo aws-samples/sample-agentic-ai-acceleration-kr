@@ -236,6 +236,126 @@ jobs:
           # 대조군 — 마이그레이션이 실제로 끝까지 갔는가.
           if [ -z "${head}" ]; then echo "::error::alembic_version 이 비었다"; exit 1; fi
 
+      # 실 alembic 다운그레이드 왕복 — 공용 proof DB 가 아니라 같은 PG 의 별도 DB 에서 돈다(아래 테스트는
+      # PROOF_DB 의 head 상태를 전제한다). 0042 = 0043 이전 릴리스(main)의 head. 0046 의 downgrade 판정
+      # (두 모델이 실제 GLOBAL 한도를 가지면 거부, 아무것도 바꾸지 않음)과 문서의 우회 정리를 실제로 거친다.
+      - name: alembic round trip (head → 0042 → head) on a separate database
+        working-directory: ${{ env.PROJECT_DIR }}/db
+        env:
+          RT_DB: gwproof_ci_roundtrip
+          DB_URL: postgresql+asyncpg://postgres:proof@127.0.0.1:5432/gwproof_ci_roundtrip
+        run: |
+          set -euo pipefail
+          q() { psql -h 127.0.0.1 -U postgres -d "${RT_DB}" -v ON_ERROR_STOP=1 -tA -c "$1"; }
+          alembic_() {
+            uv run --with alembic --with asyncpg --with "sqlalchemy[asyncio]" --with pgvector alembic "$@"
+          }
+          psql -h 127.0.0.1 -U postgres -c "DROP DATABASE IF EXISTS ${RT_DB} WITH (FORCE)"
+          psql -h 127.0.0.1 -U postgres -c "CREATE DATABASE ${RT_DB}"
+          for f in init/*.sql; do
+            psql -h 127.0.0.1 -U postgres -d "${RT_DB}" -v ON_ERROR_STOP=1 -q -f "$f" \
+              || echo "::warning::init SQL 실패(계속): $f"
+          done
+          alembic_ upgrade head
+          head=$(q "SELECT version_num FROM public.alembic_version")
+          # 새 설치는 init SQL 이 가드를 만든다(alembic_version 이 아직 없었다).
+          test "$(q "SELECT count(*) FROM pg_trigger WHERE tgname = 'rl_global_release_guard'")" = "1"
+          admin=00000000-0000-4000-a000-000000000010
+          q "INSERT INTO model.rate_limit_configs (scope, model_alias, rpm_limit, is_active, created_by)
+             VALUES ('GLOBAL', 'claude-opus-4-7', 60, true, '${admin}'),
+                    ('GLOBAL', 'claude-sonnet-4-6', 30, true, '${admin}'),
+                    ('GLOBAL', NULL, 5, true, '${admin}')"
+          # 두 모델이 실제 한도를 가진다 → 거부, 리비전·데이터 그대로.
+          if alembic_ downgrade 0042 > /tmp/roundtrip.txt 2>&1; then
+            cat /tmp/roundtrip.txt; echo "::error::0046 downgrade 가 두 모델의 GLOBAL 한도를 두고 통과했다"; exit 1
+          fi
+          grep -q "downgrade refused" /tmp/roundtrip.txt || { cat /tmp/roundtrip.txt; exit 1; }
+          test "$(q "SELECT version_num FROM public.alembic_version")" = "${head}"
+          test "$(q "SELECT count(*) FROM model.rate_limit_configs WHERE scope = 'GLOBAL' AND is_active")" = "3"
+          # 우회 없이 해제하면 트리거가 거부한다(대조군) — 문서의 우회로 하나만 남긴다.
+          if q "UPDATE model.rate_limit_configs SET is_active = false, updated_at = now()
+                WHERE scope = 'GLOBAL' AND is_active AND model_alias = 'claude-sonnet-4-6'" 2>/dev/null; then
+            echo "::error::rl_global_release_guard 가 대체 없는 GLOBAL 해제를 통과시켰다"; exit 1
+          fi
+          q "BEGIN; SET LOCAL rl.allow_global_release = 'on';
+             UPDATE model.rate_limit_configs SET is_active = false, updated_at = now()
+              WHERE scope = 'GLOBAL' AND is_active AND model_alias = 'claude-sonnet-4-6'; COMMIT;"
+          alembic_ downgrade 0042
+          test "$(q "SELECT version_num FROM public.alembic_version")" = "0042"
+          test "$(q "SELECT count(*) FROM pg_trigger WHERE tgname = 'rl_global_release_guard'")" = "0"
+          # alias 없는 행은 판정에서 빠지고 비활성화된다 — 남는 것은 opus 하나.
+          test "$(q "SELECT string_agg(model_alias, ',') FROM model.rate_limit_configs WHERE scope = 'GLOBAL' AND is_active")" = "claude-opus-4-7"
+          alembic_ upgrade head
+          test "$(q "SELECT version_num FROM public.alembic_version")" = "${head}"
+          test "$(q "SELECT count(*) FROM pg_trigger WHERE tgname = 'rl_global_release_guard'")" = "1"
+          echo "round trip ${head} → 0042 → ${head} OK"
+          psql -h 127.0.0.1 -U postgres -c "DROP DATABASE ${RT_DB} WITH (FORCE)"
+
+      # 0046 이전의 옛 DB 는 init SQL 이 아니라 0046 이 해제 가드(rl_global_release_guard)를 만든다. 가드가 0024
+      # 보다 먼저 있으면 0024 의 GLOBAL 중복 정리가 지연 트리거 이벤트를 남기고 같은 트랜잭션의 CREATE INDEX 가
+      # "pending trigger events" 로 거부돼 Job 이 0023 에서 멈춘다. 옛 차트가 만든 0023 DB(가드 없음)에 두 모델의
+      # 활성 GLOBAL 행을 두고, 이 차트의 Job(init SQL → alembic upgrade head)이 head 에 닿는지 본다. 대조군은
+      # 같은 DB 의 복제본에 가드를 먼저 만든 경우다(예전 init SQL 이 그렇게 했다) — 0023 에서 멈춰야 한다.
+      # 스키마는 이 차트의 init SQL 로 만든 근사다(얕은 체크아웃에는 옛 init SQL 이 없다). 0024 의
+      # CREATE INDEX IF NOT EXISTS 는 같은 이름의 인덱스가 있어도 지연 이벤트를 먼저 검사하므로 실패 지점은 같다.
+      - name: alembic — a DB below 0024 reaches head with this chart's Job (separate databases)
+        working-directory: ${{ env.PROJECT_DIR }}/db
+        env:
+          OLD_DB: gwproof_ci_below0024
+          CTL_DB: gwproof_ci_below0024_ctl
+        run: |
+          set -euo pipefail
+          q() { psql -h 127.0.0.1 -U postgres -d "$1" -v ON_ERROR_STOP=1 -tA -c "$2"; }
+          alembic_on() {
+            DB_URL="postgresql+asyncpg://postgres:proof@127.0.0.1:5432/$1" \
+              uv run --with alembic --with asyncpg --with "sqlalchemy[asyncio]" --with pgvector alembic "${@:2}"
+          }
+          init_sql() {
+            for f in init/*.sql; do
+              psql -h 127.0.0.1 -U postgres -d "$1" -v ON_ERROR_STOP=1 -q -f "$f" \
+                || echo "::warning::init SQL 실패(계속): $f"
+            done
+          }
+          for d in "${OLD_DB}" "${CTL_DB}"; do
+            psql -h 127.0.0.1 -U postgres -c "DROP DATABASE IF EXISTS ${d} WITH (FORCE)"
+          done
+          psql -h 127.0.0.1 -U postgres -c "CREATE DATABASE ${OLD_DB}"
+          init_sql "${OLD_DB}"
+          alembic_on "${OLD_DB}" upgrade 0023
+          # 옛 init SQL 로 만든 DB 에는 가드가 없었다.
+          q "${OLD_DB}" "DROP TRIGGER rl_global_release_guard ON model.rate_limit_configs"
+          admin=00000000-0000-4000-a000-000000000010
+          q "${OLD_DB}" "INSERT INTO model.rate_limit_configs (scope, model_alias, rpm_limit, is_active, created_by)
+                         VALUES ('GLOBAL', 'claude-opus-4-7', 60, true, '${admin}'),
+                                ('GLOBAL', 'claude-sonnet-4-6', 30, true, '${admin}')"
+          psql -h 127.0.0.1 -U postgres -c "CREATE DATABASE ${CTL_DB} TEMPLATE ${OLD_DB}"
+
+          # 대조군 — 가드가 0024 보다 먼저 있으면 0024 에서 멈춘다.
+          q "${CTL_DB}" "CREATE CONSTRAINT TRIGGER rl_global_release_guard
+                           AFTER UPDATE OF is_active ON model.rate_limit_configs
+                           DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+                           WHEN (OLD.scope = 'GLOBAL' AND OLD.is_active AND NOT NEW.is_active)
+                           EXECUTE FUNCTION model.rl_global_release_guard()"
+          if alembic_on "${CTL_DB}" upgrade head > /tmp/below0024_ctl.txt 2>&1; then
+            echo "::error::대조군이 통과했다 — 가드가 있는 0023 DB 가 0024 를 넘었다"; exit 1
+          fi
+          grep -q "pending trigger events" /tmp/below0024_ctl.txt || { cat /tmp/below0024_ctl.txt; exit 1; }
+          test "$(q "${CTL_DB}" "SELECT version_num FROM public.alembic_version")" = "0023"
+
+          # 이 차트의 Job: init SQL(0023 이라 가드를 만들지 않는다) → alembic upgrade head.
+          init_sql "${OLD_DB}"
+          test "$(q "${OLD_DB}" "SELECT count(*) FROM pg_trigger WHERE tgname = 'rl_global_release_guard'")" = "0"
+          alembic_on "${OLD_DB}" upgrade head
+          head=$(q "${OLD_DB}" "SELECT version_num FROM public.alembic_version")
+          test "${head}" \> "0045"
+          test "$(q "${OLD_DB}" "SELECT count(*) FROM pg_trigger WHERE tgname = 'rl_global_release_guard'")" = "1"
+          # 0024 의 중복 정리가 GLOBAL 을 하나로 줄였다(그 시점의 단일 슬롯).
+          test "$(q "${OLD_DB}" "SELECT count(*) FROM model.rate_limit_configs WHERE scope = 'GLOBAL' AND is_active")" = "1"
+          echo "0023 → ${head} OK; with the guard first it stops at 0023"
+          for d in "${OLD_DB}" "${CTL_DB}"; do
+            psql -h 127.0.0.1 -U postgres -c "DROP DATABASE ${d} WITH (FORCE)"
+          done
+
       - name: Sync admin-api dependencies (frozen lock)
         working-directory: ${{ env.PROJECT_DIR }}/admin-api
         run: uv sync --frozen --all-extras --dev
@@ -264,6 +384,7 @@ jobs:
             tests/regression/test_high_rate_limit_invalidate_after_commit_real.py \
             tests/regression/test_high_my_budget_gateway_parity_real.py \
             tests/regression/test_high_seed_spent_total_real.py \
+            tests/regression/test_high_global_rate_limit_0046_real_db.py \
             > /tmp/proof.txt 2>&1
           status=$?
           tail -40 /tmp/proof.txt
@@ -272,17 +393,20 @@ jobs:
           # ⚠️ 하한만 본다. 정확한 통과 수는 DB 에 쌓인 데이터에 따라 달라진다 — 일부
           #    테스트는 대상 테이블이 비어 있으면 스스로 skip 한다(플랜 어서션 2건 — 빈 usage_logs
           #    에서 스스로 skip 하는 nonsargable 플랜 어서션). 로컬 실측(fresh init SQL + alembic
-          #    head, 실 Redis — 이 잡과 같은 레시피): 291 passed / 2 skipped (17 files). 여기에는
+          #    head, 실 Redis — 이 잡과 같은 레시피): 345 passed / 2 skipped (18 files). 여기에는
           #    AWS 자동연동 real-PG, 0044 계정 레지스트리 트리거·동시성, 계정 API, init SQL 재실행 락,
-          #    커밋 뒤 무효화·실시간 사용량·내 예산 게이트웨이 대조·seed_spent 총액이 들어 있다.
-          #    REDIS_PROOF_URL 만 빠지면 266 passed / 10 skipped / 17 errors 다 — Redis 를 쓰는
+          #    커밋 뒤 무효화·실시간 사용량·내 예산 게이트웨이 대조·seed_spent 총액, 그리고 0046 의
+          #    모델별 GLOBAL(마이그레이션 함수의 스키마 대조·다운그레이드 거부·잠금 순서, 모델별 동시 저장,
+          #    이전 릴리스의 저장을 막는 해제 가드, init SQL 이 가드를 만드는 DB, 문서·거부 메시지의 정리 SQL)이
+          #    들어 있다.
+          #    REDIS_PROOF_URL 만 빠지면 320 passed / 10 skipped / 17 errors 다 — Redis 를 쓰는
           #    파일은 skip 이 아니라 실패하고, 예산 Lua 파일(8건)은 skip 하므로 하한이 그것도
           #    잡는다. 하한은 실측보다 10 낮게 둔다 — 파일 하나(계정 API 14건)만 통째로 skip 돼도
           #    여기서 잡힌다. 예전 하한 95 는 185건 시절에도 절반 가까이 skip 돼야 걸렸다.
           passed=$(grep -oE "[0-9]+ passed" /tmp/proof.txt | tail -1 | grep -oE "[0-9]+" || echo 0)
           echo "passed=${passed}"
-          if [ "${passed:-0}" -lt 281 ]; then
-            echo "::error::통과 수가 ${passed} 건뿐이다(하한 281). PROOF_DSN/REDIS_PROOF_URL 이 안 걸려 일부가 skip 된 것으로 보인다."
+          if [ "${passed:-0}" -lt 335 ]; then
+            echo "::error::통과 수가 ${passed} 건뿐이다(하한 335). PROOF_DSN/REDIS_PROOF_URL 이 안 걸려 일부가 skip 된 것으로 보인다."
             exit 1
           fi
 
@@ -340,29 +464,32 @@ jobs:
             tests/regression/test_medium_long_context_tier.py \
             tests/regression/test_critical_stream_disconnect_ledger_gap.py \
             tests/regression/test_high_alias_account_real_db.py \
-            tests/regression/test_medium_websearch_nonstream_reservation_release.py > /tmp/proof3.txt 2>&1
+            tests/regression/test_medium_websearch_nonstream_reservation_release.py \
+            tests/regression/test_high_global_rate_limit_per_model_real.py > /tmp/proof3.txt 2>&1
           status=$?
           tail -30 /tmp/proof3.txt
           if [ "$status" -ne 0 ]; then exit "$status"; fi
           passed=$(grep -oE "[0-9]+ passed" /tmp/proof3.txt | tail -1 | grep -oE "[0-9]+" || echo 0)
-          # 로컬 실측 기준선: 117 passed (실 DB 3 + 예약 해제 14 + 예산 정책 16 + 임계값 영속 18
+          # 로컬 실측 기준선: 121 passed (실 DB 3 + 예약 해제 14 + 예산 정책 16 + 임계값 영속 18
           #   + long-context 티어 27: calculate_cost/tier/감사 16 + 웹서치 턴별 티어 9
           #     + 실 PG 마이그레이션 2
           #   + 스트림 끊김 원장 공백 10: 실 uvicorn 8 + 실 Redis 대사 2
           #   + alias 계정 9: 레지스트리 선택 → 트리거 사본 → 리졸버 → AccountTarget, 모델 id
           #   형제 계정 불일치·비활성 형제·전부 비활성(kill switch)
           #   + 웹서치 예약 정산 20: 첫 턴 alias 계정 실패 6(비스트리밍 출구 3 × 라우트 2)
-          #     + 스트리밍 대조 6(출구 3 × 라우트 2) + 나중 턴 실패 2 + 성공 경로 6).
+          #     + 스트리밍 대조 6(출구 3 × 라우트 2) + 나중 턴 실패 2 + 성공 경로 6)
+          #   + GLOBAL 모델별 4(0046): alias 별 행·캐시 1 + RPM 독립 1 + TPM 독립 1 + 공유 카운터 대조군 1.
           #   예약 해제 14 중 4건(비-2xx 스트림 이중 환불: 메커니즘 1 + 라우터 2 + /v1/messages 1)이
           #   실 Redis 를 요구한다.
           # ⚠️ 예약 해제 파일은 REDIS_PROOF_URL 을 요구한다 — 환불은 incrbyfloat 로
           #    카운터를 움직이는 것이라, 가짜 Redis 로는 부호가 반대인 환불도 통과한다.
           #    원장 공백 파일의 대사 2건도 REDIS_PROOF_URL 이 없으면 skip 된다 — "카운터는 맞고
           #    원장만 짧다" 는 같은 실 Redis 에서 차감과 XADD 를 대사해야만 드러난다.
-          #    웹서치 예약 정산 20건도 전부 REDIS_PROOF_URL 이 없으면 skip 된다.
+          #    웹서치 예약 정산 20건과 GLOBAL 모델별 4건도 전부 REDIS_PROOF_URL 이 없으면 skip 된다
+          #    (GLOBAL 모델별은 PROOF_DSN 이 alembic head 0046 을 마쳐야 시드가 들어간다).
           #    두 env 중 하나라도 안 걸리면 통과 수가 떨어져 여기서 실패한다.
-          if [ "${passed:-0}" -lt 117 ]; then
-            echo "::error::통과 ${passed} 건(기대 117) — PROOF_DSN/REDIS_PROOF_URL 이 안 걸려 skip 됐다."
+          if [ "${passed:-0}" -lt 121 ]; then
+            echo "::error::통과 ${passed} 건(기대 121) — PROOF_DSN/REDIS_PROOF_URL 이 안 걸려 skip 됐다."
             exit 1
           fi
 

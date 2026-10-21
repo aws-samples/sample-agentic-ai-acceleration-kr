@@ -25,8 +25,9 @@ vi.mock('next-intl', () => ({
     values ? `${key}:${Object.values(values).join(',')}` : key,
 }));
 
+const setRateLimitAction = vi.fn();
 vi.mock('@/lib/actions/rate-limits', () => ({
-  setRateLimitAction: vi.fn().mockResolvedValue({ success: true }),
+  setRateLimitAction: (...a: unknown[]) => setRateLimitAction(...a),
   deleteUserRateLimitAction: vi.fn().mockResolvedValue({ success: true }),
 }));
 
@@ -47,6 +48,7 @@ const teamlessNode = nodes.find((n) => n.scope === 'USER')!;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  setRateLimitAction.mockResolvedValue({ success: true, data: undefined });
   fetchRateLimitUsage.mockResolvedValue({
     available: false,
     measured: false,
@@ -76,7 +78,10 @@ describe('RateLimitTreeView', () => {
     expect(screen.queryByText('∞rpm')).toBeNull();
   });
 
-  it('한도가 없는 모델도 노드로 나와 새 GLOBAL 한도를 설정할 수 있다 — 단일 슬롯 경고와 함께', async () => {
+  it('한도가 없는 모델도 노드로 나와 새 GLOBAL 한도를 바로 설정할 수 있다 — 다른 모델의 한도와 무관하게', async () => {
+    // 다른 모델(globalCapped)이 GLOBAL 한도를 갖고 있다. GLOBAL 은 모델별이므로(admin-api 0046) 경고도
+    // 확인도 없이 저장된다. 대조군: 단일 슬롯이던 트리는 이 모델을 '슬롯 주인' 으로 패널에 넘겨, 첫 저장
+    // 클릭이 경고와 '해제하고 저장' 확인만 띄우고 저장하지 않았다.
     const user = userEvent.setup();
     render(<RateLimitTreeView nodes={nodes} />);
 
@@ -85,20 +90,48 @@ describe('RateLimitTreeView', () => {
     // 패널이 그 노드로 열린다 → PUT 대상 id(=alias)가 생긴다.
     await waitFor(() => expect(fetchRateLimitUsage).toHaveBeenCalledWith('GLOBAL', globalUncapped.id));
     expect(screen.getByLabelText('CPM (Cost Per Minute, USD)')).toBeDisabled();
-    // 다른 모델(globalCapped)이 GLOBAL 슬롯을 갖고 있다 — 트리가 그 사실을 패널에 넘긴다.
-    expect(screen.getByRole('alert')).toHaveTextContent(`globalSlotWarning:${globalCapped.id}`);
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    await user.type(screen.getByLabelText('RPM (Requests Per Minute)'), '30');
+    await user.click(screen.getByRole('button', { name: 'save' }));
+
+    await waitFor(() => expect(setRateLimitAction).toHaveBeenCalledTimes(1));
+    expect(setRateLimitAction.mock.calls[0][0]).toEqual({
+      target_id: globalUncapped.id,
+      scope: 'GLOBAL',
+      rpm: 30,
+      tpm: null,
+      cpm: undefined,
+      cph: undefined,
+    });
+    expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 
-  it('전부 비어 있는 GLOBAL 행은 슬롯 주인이 아니다 — 경고하지 않는다', async () => {
-    // 값을 모두 비우고 저장한 GLOBAL 행은 아무것도 집행하지 않는다(admin-api 도 같은 기준으로 409 를 내지 않는다).
+  it('두 모델이 각자 GLOBAL 한도를 가지면 노드마다 자기 값을 보여 주고 따로 저장한다', async () => {
+    // 서버가 모델별 행 두 개를 내려준 트리(0046 이후 가능한 상태).
     const user = userEvent.setup();
-    const empty = { ...globalCapped.config!, rpm: null, tpm: null };
-    render(
-      <RateLimitTreeView nodes={nodes.map((n) => (n.id === globalCapped.id ? { ...n, config: empty } : n))} />,
+    const both = nodes.map((n) =>
+      n.id === globalUncapped.id
+        ? { ...n, config: { target_id: n.id, scope: 'GLOBAL' as const, rpm: 30, tpm: null, cpm: null, cph: null } }
+        : n,
     );
+    render(<RateLimitTreeView nodes={both} />);
+
+    expect(screen.getByText(`${globalCapped.config?.tpm}tpm`)).toBeInTheDocument();
+    expect(screen.getByText('30rpm')).toBeInTheDocument();
 
     await user.click(screen.getByText(globalUncapped.label));
-    await waitFor(() => expect(fetchRateLimitUsage).toHaveBeenCalledWith('GLOBAL', globalUncapped.id));
+    const rpmInput = screen.getByLabelText('RPM (Requests Per Minute)');
+    expect(rpmInput).toHaveValue(30); // 자기 값으로 프리필된다
+    await user.clear(rpmInput);
+    await user.type(rpmInput, '31');
+    await user.click(screen.getByRole('button', { name: 'save' }));
+
+    await waitFor(() => expect(setRateLimitAction).toHaveBeenCalledTimes(1));
+    expect(setRateLimitAction.mock.calls[0][0]).toMatchObject({ target_id: globalUncapped.id, rpm: 31 });
+
+    await user.click(screen.getByText(globalCapped.label)); // 다른 모델은 자기 값 그대로다
+    expect(screen.getByLabelText('TPM (Tokens Per Minute)')).toHaveValue(globalCapped.config!.tpm);
     expect(screen.queryByRole('alert')).toBeNull();
   });
 

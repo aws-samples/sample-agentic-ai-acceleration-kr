@@ -166,9 +166,17 @@ class RateLimitConfigRepository:
         # deactivate-then-insert and leave two is_active=true rows behind — after which
         # get_active() raises MultipleResultsFound forever (regression #53).
         #
-        # The key is (scope, scope_id) WITHOUT model_alias, matching the predicate below: this
-        # upsert is deliberately alias-blind, so at most one active row per scope exists. Adding
-        # model_alias to the key would let two concurrent writes for different aliases race.
+        # USER/TEAM are alias-blind: the UPDATE below deactivates every active row of the
+        # subject, so at most one active row per (scope, scope_id) exists. GLOBAL keeps one
+        # active row per model alias (migration 0046), so its UPDATE is scoped to the alias and
+        # saving one model never releases another.
+        #
+        # The lock key stays (scope, scope_id) WITHOUT model_alias for GLOBAL too. A coarser key
+        # than the predicate is still correct; it only serializes GLOBAL saves of different
+        # models against each other, which are rare admin writes. In exchange, during a rolling
+        # deploy, the previous release's pods (whose GLOBAL upsert deactivates every GLOBAL row
+        # under this same key) and this release's pods never interleave, so neither side can
+        # trip the partial unique index of the other's write.
         await advisory_xact_lock(
             self._session, "rate_limit_configs", config.scope.value, config.scope_id
         )
@@ -181,12 +189,19 @@ class RateLimitConfigRepository:
             )
             .values(is_active=False)
         )
+        if config.scope == RateLimitScope.GLOBAL:
+            if config.model_alias is not None:
+                stmt = stmt.where(RateLimitConfig.model_alias == config.model_alias)
+            else:
+                stmt = stmt.where(RateLimitConfig.model_alias.is_(None))
         await self._session.execute(stmt)
         self._session.add(config)
         await self._session.flush()
         return config
 
     async def get_active(self, scope: RateLimitScope, scope_id: uuid.UUID | None) -> RateLimitConfig | None:
+        """The one active row of a USER/TEAM subject. Not for GLOBAL: since 0046 every model alias
+        has its own active GLOBAL row, so (GLOBAL, None) can match several and this raises."""
         stmt = select(RateLimitConfig).where(
             RateLimitConfig.scope == scope,
             RateLimitConfig.scope_id == scope_id,

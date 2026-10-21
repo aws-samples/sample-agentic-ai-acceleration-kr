@@ -12,8 +12,8 @@
   2. /admin/rate-limits 트리·실시간 사용량·오버라이드 제거 — 팀 미배정 사용자 조회
      (team_id IS NULL), 활성 alias 목록, 활성 GLOBAL 행, 상속 표식, ``measured`` 의 근거인
      "자기 스코프 활성 rpm 행", DELETE 후 재설정이 유니크 인덱스(0024)와 공존하는지, 그리고
-     GLOBAL 이 **한 번에 한 모델**만 한도를 갖는 현재 불변식(콘솔 경고의 근거) — 다른 모델의 실제
-     한도를 해제하는 저장은 ``release_alias`` 동의 없이는 409 이고, 전부 NULL 인 행은 주인이 아니다.
+     GLOBAL 이 **모델별**이라는 것(0046) — 한 모델을 저장하거나 비워도 다른 모델의 GLOBAL 한도는
+     그대로 활성이고, 트리가 둘을 함께 보여준다.
   3. ``SetBudgetRequest.max_budget_usd`` 의 상한(max_digits=12, decimal_places=4)이
      ``budget_configs.max_budget_usd NUMERIC(12,4)`` 와 **정확히 같은 경계**인지 — 스키마가
      통과시키는 최댓값은 컬럼이 받고, 스키마가 거부하는 최솟값은 컬럼도 거부한다(그 값이
@@ -558,77 +558,68 @@ async def test_delete_override_restores_inheritance_and_reset_still_works(sessio
     assert [(r.rpm_limit,) for r in await _active_rows(session, "USER", U_A)] == [(30,)]
 
 
-async def test_global_limit_is_single_slot_today(session):
-    """현재 불변식을 **고정**한다: 다른 모델의 GLOBAL 을 저장하면 앞 모델의 한도가 해제된다.
+async def test_global_limits_are_per_model(session):
+    """한 모델의 GLOBAL 저장이 다른 모델의 GLOBAL 한도를 해제하지 않는다(0046) — 실제 행과 트리로 본다.
 
-    upsert 가 alias 와 무관하게 GLOBAL 활성 행을 전부 비활성화하고, 0024 의 유니크 인덱스도
-    ``(scope, COALESCE(scope_id, nil))`` 라 GLOBAL 활성 행은 최대 1개다. 콘솔이 GLOBAL 노드를
-    보여주게 되면서 이 동작이 콘솔에서 도달 가능해졌다 — admin-ui 는 저장 전에 경고한다.
-    이 테스트가 깨지면(=모델별 GLOBAL 이 공존하게 되면) 그 경고 문구를 지워야 한다.
+    시드의 RETIRED_ALIAS(비활성 모델, TPM 만 걸림)가 GLOBAL 한도를 갖고 있는 상태에서 다른 모델을
+    저장한다. 둘 다 활성이고, 트리는 두 노드에 각자의 값을 싣는다. 대조군: 단일 슬롯 코드는 이 저장에
+    409 를 냈고(동의 없음), 동의하면 RETIRED_ALIAS 의 행을 비활성화했다 — 어느 쪽이든 이 테스트에서
+    실패한다.
     """
     from app.core.auth import CurrentUser
     from app.models.auth import UserRole
     from app.schemas.rate_limits import RateLimitSetRequest
 
-    from app.core.exceptions import ConflictError
-
     actor = CurrentUser(user_id=SEED_ADMIN_ID, email="admin@example.com", role=UserRole.ADMIN, team_id=None)
     before = await _active_rows(session, "GLOBAL")
-    assert [r.model_alias for r in before] == [RETIRED_ALIAS], "시드 전제가 깨졌다"
-
-    # 해제에 동의하지 않으면(release_alias 없음 / 다른 alias) 409 이고 아무것도 바뀌지 않는다 — 서버가
-    # 실제 활성 행(TPM 만 걸린 RETIRED_ALIAS)을 읽어 판정한다.
-    for consent in (None, "claude-sonnet-4-6"):
-        with pytest.raises(ConflictError, match=RETIRED_ALIAS):
-            await _rl_service().set_global_rate_limit(
-                session, model_alias="claude-opus-4-7", data=RateLimitSetRequest(rpm=10),
-                actor=actor, release_alias=consent,
-            )
-        await session.rollback()
-        assert [r.model_alias for r in await _active_rows(session, "GLOBAL")] == [RETIRED_ALIAS]
+    assert [(r.model_alias, r.tpm_limit) for r in before] == [(RETIRED_ALIAS, 5000)], "시드 전제가 깨졌다"
 
     await _rl_service().set_global_rate_limit(
-        session, model_alias="claude-opus-4-7", data=RateLimitSetRequest(rpm=10), actor=actor,
-        release_alias=RETIRED_ALIAS,
+        session, model_alias="claude-opus-4-7", data=RateLimitSetRequest(rpm=10), actor=actor
     )
     await session.commit()
 
-    after = await _active_rows(session, "GLOBAL")
-    assert [r.model_alias for r in after] == ["claude-opus-4-7"]
+    after = sorted((r.model_alias, r.rpm_limit, r.tpm_limit) for r in await _active_rows(session, "GLOBAL"))
+    assert after == [("claude-opus-4-7", 10, None), (RETIRED_ALIAS, None, 5000)]
     nodes = await _tree(session)
-    assert _find(nodes, RETIRED_ALIAS) is None, "비활성 모델은 한도가 해제되면 트리에서 내려간다"
-    assert _find(nodes, "claude-opus-4-7").config.rpm == 10
+    assert (_find(nodes, "claude-opus-4-7").config.rpm, _find(nodes, RETIRED_ALIAS).config.tpm) == (10, 5000)
 
 
-async def test_an_all_null_global_row_does_not_hold_the_slot(session):
-    """전부 NULL 인 GLOBAL 행(값을 비우고 저장)은 아무것도 집행하지 않는다 — 동의 없이 바로 바꿀 수 있다.
-    (콘솔 트리도 그 행을 슬롯 주인으로 세지 않는다.)"""
-    from sqlalchemy import text
+async def test_clearing_one_models_global_limit_leaves_the_others(session):
+    """콘솔의 '값을 비우고 저장' 이 GLOBAL 한도를 지우는 방법이다(GLOBAL 은 상속이 없어 비운 행 = 한도
+    없음). 그 저장은 그 모델의 행만 바꾼다 — 다른 모델의 한도는 값까지 그대로다.
 
+    대조군: 단일 슬롯 코드에서는 비우는 저장도 '다른 모델에 저장' 이라 나머지 GLOBAL 행을 전부
+    비활성화했다(동의 없이는 409).
+    """
     from app.core.auth import CurrentUser
     from app.models.auth import UserRole
     from app.schemas.rate_limits import RateLimitSetRequest
 
     actor = CurrentUser(user_id=SEED_ADMIN_ID, email="admin@example.com", role=UserRole.ADMIN, team_id=None)
     svc = _rl_service()
-
-    # 상태를 직접 만든다: 활성 GLOBAL 행 하나, rpm/tpm 모두 NULL.
-    await session.execute(text(
-        "UPDATE model.rate_limit_configs SET is_active = false WHERE scope = 'GLOBAL' AND is_active"
-    ))
-    await session.execute(text(
-        "INSERT INTO model.rate_limit_configs (id, scope, scope_id, model_alias, is_active, created_by) "
-        "VALUES (gen_random_uuid(), 'GLOBAL', NULL, 'claude-opus-4-7', true, :by)"
-    ), {"by": SEED_ADMIN_ID})
+    await svc.set_global_rate_limit(
+        session, model_alias="claude-sonnet-4-6", data=RateLimitSetRequest(tpm=300000), actor=actor
+    )
+    await svc.set_global_rate_limit(
+        session, model_alias="claude-opus-4-7", data=RateLimitSetRequest(rpm=20), actor=actor
+    )
     await session.commit()
 
     await svc.set_global_rate_limit(
-        session, model_alias="claude-sonnet-4-6", data=RateLimitSetRequest(rpm=9), actor=actor
+        session, model_alias="claude-opus-4-7", data=RateLimitSetRequest(), actor=actor
     )
     await session.commit()
-    assert [(r.model_alias, r.rpm_limit) for r in await _active_rows(session, "GLOBAL")] == [
-        ("claude-sonnet-4-6", 9)
+
+    rows = sorted((r.model_alias, r.rpm_limit, r.tpm_limit) for r in await _active_rows(session, "GLOBAL"))
+    assert rows == [
+        ("claude-opus-4-7", None, None),  # 비웠다 — 아무것도 집행하지 않는 행 하나
+        ("claude-sonnet-4-6", None, 300000),
+        (RETIRED_ALIAS, None, 5000),
     ]
+    nodes = await _tree(session)
+    assert _find(nodes, "claude-sonnet-4-6").config.tpm == 300000
+    assert (_find(nodes, "claude-opus-4-7").config.rpm, _find(nodes, "claude-opus-4-7").config.tpm) == (None, None)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
