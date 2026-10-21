@@ -333,15 +333,15 @@ Admin UI 로그인 후 좌측 메뉴 **Chat** (또는 우하단 BI Chat 버튼)�
 |------|------|---------|
 | **Kyutae Park, Ph.D.** | AWS AI Specialist Solutions Architect | [Email](mailto:kyutae@amazon.com) |
 | **Minjae An** | AWS Forward Deployed DL Architect | [Email](mailto:aminjae@amazon.com) |
-| **Sue Cha** | AWS Deep Learning Architect | [Email](mailto:suecha@amazon.com) |
-| **Gonsoo Moon** | AWS Sr. AI Specialist Solutions Architect | [Email](mailto:moongons@amazon.com) |
-| **Debasish Mishra** | AWS Sr. Data Scientist | [Email](mailto:misdebas@amazon.com) |
 
 ## Contributors
 
 | Name | Role | Contact |
 |------|------|---------|
 | **Charlie Chang** | AWS Sr. Generative AI Strategist | [Email](mailto:subchang@amazon.com) |
+| **Debasish Mishra** | AWS Sr. Data Scientist | [Email](mailto:misdebas@amazon.com) |
+| **Gonsoo Moon** | AWS Sr. AI Specialist Solutions Architect | [Email](mailto:moongons@amazon.com) |
+| **Sue Cha** | AWS Deep Learning Architect | [Email](mailto:suecha@amazon.com) |
 | **Yash Shah** | AWS Data Science Manager | [Email](mailto:syash@amazon.com) |
 | **Youngjoon Choi** | AWS Sr. AI Specialist Solutions Architect Manager | [Email](mailto:choijoon@amazon.com) |
 
