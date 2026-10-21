@@ -132,6 +132,12 @@ class Settings(BaseSettings):
     # 905 Mantle role; and the httpx timeout for Mantle streaming calls.
     mantle_assume_region: str = "ap-northeast-2"
     mantle_http_timeout: float = 120.0
+    # Count tokens on Mantle (same account and region) for models that Bedrock
+    # CountTokens refuses — Opus 4.7+ and the 5 family. Off by default: it is a new
+    # endpoint for prompt data and needs bedrock-mantle:CountTokens +
+    # bedrock-mantle:CallWithBearerToken on the account that serves the model
+    # (services/token_count_fallback.py, docs/guides/multi-account-bedrock-setup.md).
+    count_tokens_mantle_fallback: bool = False
 
     # OpenModel
     openmodel_base_url: str = "http://mock-vllm:8080"

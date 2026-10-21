@@ -113,7 +113,7 @@ Bedrock 호출의 대상 계정은 **요청에 서명한 자격증명**으로 �
 }
 ```
 
-- `bedrock:CountTokens`가 필요합니다. `/v1/messages/count_tokens`도 고른 계정으로 호출하므로, 빠지면 추론은 되는데 토큰 카운트만 403이 됩니다.
+- `bedrock:CountTokens`가 필요합니다. `/v1/messages/count_tokens`도 고른 계정으로 호출하므로, 빠지면 추론은 되는데 토큰 카운트만 403이 됩니다. **Opus 4.7 이후와 5 계열은 권한이 있어도 Bedrock이 카운트 자체를 지원하지 않는데**, 이 권한은 그 모델들에도 필요합니다 — 권한 검사가 먼저라 없으면 403으로 끝나 2.6의 Mantle 대체로 넘어가지 못합니다.
 - In-Region 모델(접두사 없는 model ID)은 첫 번째 항목으로 충분합니다. Geo 추론 프로필(`us.`, `apac.` 등)은 요청이 도착 리전으로 라우팅되므로 도착 리전의 foundation-model ARN(세 번째 항목)이 필요합니다. Global 추론 프로필(`global.`)은 inference-profile ARN, 리전 foundation-model ARN, **리전 없는** foundation-model ARN(네 번째 항목)이 모두 필요합니다.
 - OpenAI Bedrock Runtime 모델을 이 계정으로 보내려면 `openai.*` 모델의 foundation-model·inference-profile ARN과 `arn:aws:bedrock:<region>:444455556666:project/default`도 추가합니다(게이트웨이 IRSA 정책의 같은 항목 참고: `deployment/terraform/environments/*/variables.tf`의 `bedrock_allowed_model_arns`).
 - Mantle 모델이라면 `bedrock-mantle:CreateInference`, `bedrock-mantle:GetInference`, `bedrock-mantle:CallWithBearerToken`이 추가로 필요합니다.
@@ -192,6 +192,41 @@ gateway-proxy, admin-api, admin-ui, cost-recorder-worker를 함께 롤링합니�
 - OPENMODEL 모델에는 계정을 지정할 수 없습니다(AWS가 서빙하지 않습니다).
 - 콘솔 저장은 게이트웨이의 모델 캐시를 지웁니다. 데이터베이스를 직접 고친 경우에는 최대 5분(캐시 TTL) 뒤에 반영됩니다.
 
+### 2.6 토큰 카운트(`/v1/messages/count_tokens`)
+
+Bedrock CountTokens는 **모델별로** 켜져 있습니다. 2026-10-19 ap-northeast-2·us-east-1·us-west-2에서 실측한 결과입니다(접두사 없는 model ID, `global.` 프로필, `converse` 입력 형식 모두 같은 답).
+
+| Bedrock CountTokens | 모델 |
+|---|---|
+| 지원 | Haiku 4.5, Sonnet 4.5, Sonnet 4.6, Opus 4.5, Opus 4.6 |
+| **미지원** — `ValidationException: The provided model doesn't support counting tokens.` | Opus 4.7, Opus 4.8, Sonnet 5, Opus 5, Fable 5, Fable 5.1, Sonnet 5.5, Opus 5.5, Haiku 5.5 |
+
+미지원은 모델의 기능이지 권한이 아닙니다 — `bedrock:CountTokens`를 줘도 바뀌지 않습니다. 이 모델들의 `/v1/messages/count_tokens`는 기본 설정에서 **400**과 함께 그 이유를 돌려줍니다. 추론·과금·레이트 리밋에는 영향이 없습니다(과금은 응답의 실제 usage로, 레이트 리밋 예약은 바이트 수 추정으로 합니다). Claude Code는 400을 받으면 자체 추정치로 넘어가며, 영향은 `/context` 표시, MCP 도구·스킬 토큰 비용 표시, MCP 도구 출력이 `MAX_MCP_OUTPUT_TOKENS` 근처일 때의 자르기 판단처럼 **추정을 쓰는 곳의 정확도**에 한정됩니다.
+
+> 게이트웨이는 이 경우 501을 쓰지 않습니다. Claude Code는 게이트웨이의 501을 받으면 카운트 대신 실제 `/v1/messages`를 `max_tokens: 1`로 보내 그 usage로 세는데, 이는 입력 토큰이 그대로 과금되는 호출입니다.
+
+**Mantle 카운트 대체(선택)** — `COUNT_TOKENS_MANTLE_FALLBACK=true`(Helm: `gatewayProxy.env.COUNT_TOKENS_MANTLE_FALLBACK: "true"`)이면 Bedrock이 거절한 모델을 **같은 계정·같은 리전**의 Mantle(`bedrock-mantle.<region>.api.aws/anthropic/v1/messages/count_tokens`)로 셉니다. 추론 경로는 그대로 bedrock-runtime이고, Mantle은 카운트에만 씁니다(과금되지 않는 호출).
+
+- 리전은 그 요청이 원래 가던 리전입니다(1.2와 같습니다). 다른 리전으로 세지 않습니다 — 카운트는 프롬프트 전체를 보내므로 리전을 바꾸면 프롬프트 데이터가 리전을 넘습니다.
+- 계정 우선순위는 Bedrock native와 같습니다(alias 계정 → 앱 프로필 계정 → 게이트웨이 계정). 그 계정의 역할에 `bedrock-mantle:CountTokens`와 `bedrock-mantle:CallWithBearerToken`이 필요하고, 게이트웨이에서 `bedrock-mantle.<region>.api.aws`로 나가는 경로가 있어야 합니다. 게이트웨이 계정(IRSA)은 `deployment/terraform/modules/irsa`의 `InAccountMantleInference`에 `CountTokens`가 들어 있지만 리소스가 `mantle_regions`로 한정되므로, 게이트웨이 리전(예: `ap-northeast-2`)이 그 목록에 있어야 합니다.
+- **`bedrock:CountTokens`는 그대로 두십시오.** 권한이 없으면 Bedrock이 모델 판정 전에 403을 주어 대체로 들어가지 못합니다(다른 요청이 이미 그 모델의 거절을 기억했다면 Mantle로 가므로, 403과 대체가 섞여 보입니다).
+- Mantle이 401(자격증명·IAM 거부)을 주면 그 계정·리전은 5분, 닿지 못하면 1분 동안 대체를 시도하지 않고 400을 돌려줍니다. 403(그 모델의 엔타이틀먼트 없음)이면 그 모델만 5분 건너뛰고 다음 후보로 갑니다. 429·5xx는 그 요청만 400이고 기억하지 않습니다.
+- Mantle은 리전마다 서빙하는 모델이 다릅니다(ap-northeast-2는 Sonnet 5, Opus 5뿐). 같은 모델이 없으면 **같은 토크나이저로 확인된** 모델로 셉니다. 단 Fable 5.1은 남의 카운트에 쓰지 않습니다(Fable 트래픽에만 승인된 데이터 보존 `aws_review` 모드로 다른 모델의 프롬프트가 가지 않게). 이미지·문서 블록이 있는 요청은 같은 모델로만 셉니다(그 경우는 측정하지 않았습니다). 실제 invoke의 `usage.input_tokens`와 비교한 오차(Claude Code 모양 요청: system + 도구 12개 + thinking):
+
+| 요청 모델(ap-northeast-2) | 세는 모델 | 실제 usage 대비 |
+|---|---|---|
+| Sonnet 5, Opus 5 | 같은 모델 | 0 |
+| Sonnet 5.5, Opus 5.5, Haiku 5.5, Fable 5.1 | Opus 5 | −2 토큰 |
+| Opus 4.8 | Opus 5 | −4 토큰 |
+| Opus 4.7, Fable 5 | (대체 없음 — 토크나이저가 다름, 도구 포함 +26% / 코드·한국어 +8~10%) | 400 |
+
+  오차는 도구 수와 무관한 상수입니다(도구 1/10/30개에서 같음). 참고로 Bedrock 자체 카운트도 Haiku 4.5·Sonnet 4.6에서 실제 usage보다 17~18토큰 많습니다.
+- 응답 헤더 `x-llm-gateway-token-count-source`(`bedrock`/`mantle`)로 출처를, Mantle로 셌을 때는 `x-llm-gateway-token-count-model`로 실제로 센 모델을 알 수 있습니다.
+- Bedrock이 거절한 모델은 1시간 동안 Bedrock에 다시 묻지 않습니다(그 사이 AWS가 지원을 켜면 1시간 안에 Bedrock 카운트로 돌아갑니다).
+- 같은 플래그가 스트림이 끊겼을 때의 토큰 역산(6장)에도 적용됩니다.
+
+**모든 모델에 공통으로 고친 것** — 대화에 thinking 블록이 있으면 Claude Code는 count_tokens에 `thinking`을 `max_tokens` 없이 보냅니다. 예전에는 게이트웨이가 `max_tokens: 1`을 넣어 Bedrock이 `max_tokens must be greater than thinking.budget_tokens`로 거절했습니다(카운트를 지원하는 Sonnet 4.6·Haiku 4.5에서도). 이제 `max_tokens`를 `budget_tokens`보다 크게 넣고(값은 카운트에 영향 없음), `thinking`은 `/v1/messages`와 같은 모델별 정규화를 거치며, CountTokens가 거부하는 `output_config`는 빼고 셉니다(effort는 입력 토큰에 영향 없음). 실패 응답은 고정 문장 대신 상류의 이유를 그대로 담습니다(계정 번호·ARN은 지움).
+
 ---
 
 ## 3. 적용 확인
@@ -228,6 +263,7 @@ Bedrock invocation log나 CloudTrail과 대조할 때는 `bedrock_request_id`를
 | 해당 모델 요청이 500, 본문에 `AssumeRole failed`(웹 검색 루프의 스트리밍 요청은 HTTP 200에 스트림 안의 `event: error`로, 1.3) | 게이트웨이가 대상 역할로 전환하지 못함(2.1 신뢰 정책, 2.2 권한, External ID 불일치 중 하나) | 게이트웨이 로그 `account_credentials_assume_failed`에 역할 ARN과 오류 코드가 남습니다. 웹 검색 스트리밍의 실패는 상태 코드로 보이지 않으므로 이 로그로 찾습니다. 고치면 최대 30초 안에 다음 요청부터 정상화됩니다 |
 | Bedrock `AccessDeniedException`(403) | 대상 역할의 권한 정책 또는 모델 액세스 누락 | 2.1을 확인합니다 |
 | `/v1/messages/count_tokens`만 403 | 대상 역할에 `bedrock:CountTokens` 누락 | 2.1 권한 정책에 추가합니다 |
+| `/v1/messages/count_tokens`가 400, `Bedrock CountTokens does not support ...` | Opus 4.7 이후·5 계열은 Bedrock이 카운트를 지원하지 않음(권한 무관) | 추론에는 영향 없습니다. 필요하면 2.6의 Mantle 카운트 대체를 켭니다 |
 | 고른 계정이 아니라 이전 계정으로 호출됨 | 이미지가 구버전이거나(2.4) 모델 캐시가 아직 갱신되지 않음 | 네 이미지가 모두 롤링됐는지 확인합니다. DB를 직접 고쳤다면 최대 5분 기다립니다 |
 | 모든 모델 조회가 실패(42703) | 0043 미적용 상태로 새 이미지 기동 | 2.3을 먼저 적용합니다 |
 | 계정 삭제가 409 | 아직 그 계정을 고른 모델이 있음 | 메시지의 모델을 다른 계정이나 기본값으로 바꾼 뒤 삭제합니다 |
@@ -267,4 +303,4 @@ SELECT * FROM model.aws_accounts;
 
 - 계정 지정은 **모델(alias) 단위**입니다. "같은 모델을 앱마다 다른 계정으로"는 앱 프로필(1.2의 2단계)로, "사용자마다 다른 계정으로"는 아직 표현할 수 없습니다.
 - 같은 model ID를 공유하는 활성 모델들에는 서로 다른 계정을 지정할 수 없습니다(2.5의 "같은 model ID"). DB를 직접 고쳐 어긋난 경우 model ID로 부르는 요청은 거절됩니다(4장).
-- 스트림이 끊겼을 때 출력 토큰을 역산하는 내부 추정(Bedrock CountTokens)은 게이트웨이 계정으로 호출합니다. 실패하면 근사치(tiktoken)로 대신하며, 과금되지 않는 호출입니다.
+- 스트림이 끊겼을 때 출력 토큰을 역산하는 내부 추정(Bedrock CountTokens)은 게이트웨이 계정으로 호출합니다. 과금되지 않는 호출입니다. Bedrock이 그 모델을 세지 못한다고 답한 경우(2.6)에만, `COUNT_TOKENS_MANTLE_FALLBACK`이 켜져 있으면 게이트웨이 계정·리전의 Mantle로 셉니다(2.5초 안에 끝나지 않으면 포기). 그 밖에는 근사치(tiktoken)로 대신합니다. tiktoken은 이 모델들의 토크나이저보다 영어를 약 45% 적게 세므로(같은 본문 547 대 약 300), 끊긴 스트림의 추정 청구가 그만큼 낮아집니다.

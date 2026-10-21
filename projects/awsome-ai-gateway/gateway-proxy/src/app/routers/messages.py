@@ -42,6 +42,12 @@ from app.services.fallback_resolver import make_same_provider
 from app.services.router_service import RouterService
 from app.services.streaming import bedrock_anthropic_sse_stream
 from app.services.thinking_normalizer import normalize_thinking
+from app.services.token_count_fallback import (
+    BEDROCK_UNSUPPORTED,
+    count_base_model_id,
+    count_on_mantle,
+    is_bedrock_unsupported,
+)
 from app.services.tool_filter import strip_unsupported_tools
 from app.services.upstream_compat import (
     apply_forwarded_betas,
@@ -128,6 +134,66 @@ class BackendDecision:
     model_config: ModelConfigSchema | None = None  # pre-resolved for Mantle
     model_id: str | None = None          # resolved provider_model_id for Mantle; None = default Bedrock path
     endpoint: str | None = None
+
+
+_COUNT_SOURCE_HEADER = "x-llm-gateway-token-count-source"
+_COUNT_MODEL_HEADER = "x-llm-gateway-token-count-model"
+
+_COUNT_ERROR_TYPES = {
+    400: "invalid_request_error",
+    401: "authentication_error",
+    403: "permission_error",
+    404: "not_found_error",
+    429: "rate_limit_error",
+}
+
+
+def _bedrock_count_body(count_body: dict, provider_model_id: str, request_id: str) -> dict:
+    """The body /v1/messages would send this model, wrapped for Bedrock CountTokens.
+
+    ``thinking`` is normalised exactly as the native path does (the 5 family runs
+    ``adaptive``; Haiku 4.5 runs ``enabled``), so the count is of the request that will
+    actually run. CountTokens generates nothing, but ``max_tokens`` is required and must
+    exceed ``thinking.budget_tokens`` — Claude Code sends ``thinking`` without
+    ``max_tokens`` whenever the conversation holds thinking blocks, and a bare
+    placeholder of 1 made every such count a 400. The value does not change the count
+    (1025, 8192 and 64000 measured identical).
+
+    ``output_config`` is dropped: CountTokens rejects ``output_config.effort`` ("Extra
+    inputs are not permitted") although InvokeModel accepts it, and effort never
+    changes the input count (low/high/max measured identical).
+    """
+    # Shallow on purpose: every step below (and normalize_thinking) only reassigns
+    # top-level keys. A deep copy recursed into client content and turned a deeply
+    # nested body that json.loads accepts into a RecursionError (HTTP 500).
+    b = dict(count_body)
+    normalize_thinking(b, provider_model_id, request_id=request_id)
+    b.pop("output_config", None)
+    b["anthropic_version"] = "bedrock-2023-05-31"
+    thinking = b.get("thinking")
+    budget = (
+        thinking.get("budget_tokens")
+        if isinstance(thinking, dict) and thinking.get("type") == "enabled"
+        else None
+    )
+    floor = budget + 1 if isinstance(budget, int) and budget > 0 else 1
+    if not isinstance(b.get("max_tokens"), int) or b["max_tokens"] < floor:
+        b["max_tokens"] = floor
+    return b
+
+
+def _count_tokens_error(result) -> JSONResponse:
+    """The upstream reason, not a fixed string — "count_tokens failed" hid that the
+    model, not the permission, was the problem. Account identifiers are already
+    redacted by the adapter."""
+    status = result[0]
+    message = getattr(result, "error_message", None) or "count_tokens failed"
+    return JSONResponse(
+        status_code=status,
+        content={
+            "error": {"type": _COUNT_ERROR_TYPES.get(status, "api_error"), "message": message}
+        },
+    )
 
 
 def _account_kwargs(cand_config) -> dict:
@@ -868,19 +934,15 @@ async def count_tokens(request: Request) -> JSONResponse:
 
     body = await request.body()
 
+    request_id = state.get("request_id", "")
     try:
         req_data = json.loads(body)
         model_alias = req_data.get("model", "")
-        bedrock_body = {k: v for k, v in req_data.items() if k in _BEDROCK_ALLOWED_FIELDS}
-        bedrock_body["anthropic_version"] = "bedrock-2023-05-31"
+        count_body = {k: v for k, v in req_data.items() if k in _BEDROCK_ALLOWED_FIELDS}
+        count_body.pop("anthropic_version", None)
         # Same filter as the /v1/messages body builder — an Anthropic-only tool (Claude
         # Code's advisor) or a tool_addition naming one is a 400 here too.
-        bedrock_body = strip_unsupported_tools(
-            bedrock_body, request_id=state.get("request_id", ""))
-        # Bedrock CountTokens requires max_tokens in the wrapped Anthropic body
-        # even though it doesn't generate output; inject a placeholder when absent.
-        bedrock_body.setdefault("max_tokens", 1)
-        body = json.dumps(bedrock_body).encode()
+        count_body = strip_unsupported_tools(count_body, request_id=request_id)
     except Exception:
         return JSONResponse(
             status_code=400,
@@ -935,15 +997,24 @@ async def count_tokens(request: Request) -> JSONResponse:
                 },
             )
 
-    # CountTokens rejects cross-region inference profile IDs (global./us./apac./eu.)
-    # — use the base foundation-model ID instead.
-    count_tokens_model_id = _strip_region_prefix(model_config.provider_model_id)
+    # CountTokens rejects cross-region inference profile IDs (global./us./apac./jp./...)
+    # and profile ARNs — use the base foundation-model ID instead.
+    count_tokens_model_id = count_base_model_id(
+        _strip_region_prefix(model_config.provider_model_id)
+    )
+    body = json.dumps(
+        _bedrock_count_body(count_body, model_config.provider_model_id, request_id)
+    ).encode()
 
     # cross-account(claude-code→374): invoke 와 동일 계정에서 CountTokens 실행 → 계정 스플릿 방지.
     # account_role_arn NULL(codex/기본)이면 in-account adapter 그대로(무회귀). assume 실패 시 859 폴백.
     _ct_xacct = bool(
         _ct_profile and _ct_profile.backend == "invoke" and _ct_profile.account_role_arn
     )
+    settings = get_settings()
+    # The Mantle fallback below must count with the account and region this branch picks
+    # for Bedrock — decided here, once, so the two cannot drift apart.
+    count_region, count_role, count_external_id = settings.aws_region, None, None
     if _ct_xacct:
         _provider = getattr(request.app.state, "bedrock_account_client_provider", None)
         _inacct_adapter = registry.get(ProviderType.BEDROCK)
@@ -960,6 +1031,7 @@ async def count_tokens(request: Request) -> JSONResponse:
                 account_clients=_provider,
                 account_region=_ct_profile.region,
             )
+            count_region, count_role, count_external_id = _reg, _role, _ext
         else:
             adapter = _inacct_adapter
     else:
@@ -967,14 +1039,70 @@ async def count_tokens(request: Request) -> JSONResponse:
     # alias 별 대상 계정(0043). CountTokens 도 모델 액세스를 가진 계정에서만 허가된다 — 다른
     # 계정으로 서빙되는 alias 를 여기서 세면 추론은 되는데 카운트만 403 이 된다(위 claude-code
     # 계정 스플릿과 같은 부류). alias 계정이 없으면 인자가 오늘과 같다.
-    status, input_tokens = await adapter.count_tokens(
-        body, count_tokens_model_id, **_account_kwargs(model_config)
+    _acct_kwargs = _account_kwargs(model_config)
+    # Bedrock CountTokens 가 이 모델을 아예 못 센다고 이미 답했으면 다시 묻지 않는다.
+    if count_tokens_model_id not in BEDROCK_UNSUPPORTED:
+        result = await adapter.count_tokens(body, count_tokens_model_id, **_acct_kwargs)
+        if result[0] == 200:
+            return JSONResponse(
+                status_code=200,
+                content={"input_tokens": result[1]},
+                headers={_COUNT_SOURCE_HEADER: "bedrock"},
+            )
+        if not is_bedrock_unsupported(result):
+            return _count_tokens_error(result)
+        BEDROCK_UNSUPPORTED.add(count_tokens_model_id)
+
+    # 여기부터는 Bedrock 이 이 모델의 카운트를 지원하지 않는 경우다(Opus 4.7+, 5 계열 —
+    # 권한과 무관). 켜져 있으면 같은 계정·같은 리전의 Mantle 로 센다.
+    region = count_region
+    if settings.count_tokens_mantle_fallback:
+        alias_account = _acct_kwargs.get("account")
+        try:
+            mantle_adapter = registry.get(ProviderType.BEDROCK_MANTLE)
+        except ValueError:
+            mantle_adapter = None
+        try:
+            counted = await count_on_mantle(
+                mantle_adapter,
+                body=count_body,
+                base_model=count_tokens_model_id,
+                region=region,
+                account=alias_account,
+                profile_role_arn=count_role if alias_account is None else None,
+                profile_external_id=count_external_id if alias_account is None else None,
+                client=client,
+            )
+        except Exception:
+            # A malformed client body must not become a gateway 500.
+            logger.warning("count_tokens_mantle_fallback_failed", exc_info=True)
+            counted = None
+        if counted is not None:
+            return JSONResponse(
+                status_code=200,
+                content={"input_tokens": counted.input_tokens},
+                headers={
+                    _COUNT_SOURCE_HEADER: "mantle",
+                    _COUNT_MODEL_HEADER: counted.model,
+                },
+            )
+
+    # 400 이지 501 이 아니다: Claude Code 는 게이트웨이의 501 을 받으면 실제 /v1/messages 를
+    # max_tokens=1 로 보내 그 usage 로 센다 — 과금되는 호출이다. 400 이면 자체 추정으로 넘어간다.
+    detail = (
+        f"and Mantle could not count it in {region}"
+        if settings.count_tokens_mantle_fallback
+        else "(the Mantle count fallback is off: COUNT_TOKENS_MANTLE_FALLBACK)"
     )
-
-    if status != 200:
-        return JSONResponse(
-            status_code=status,
-            content={"error": {"type": "provider_error", "message": "count_tokens failed"}},
-        )
-
-    return JSONResponse(status_code=200, content={"input_tokens": input_tokens})
+    return JSONResponse(
+        status_code=400,
+        content={
+            "error": {
+                "type": "invalid_request_error",
+                "message": (
+                    f"Token counting is not available for model '{model_config.alias}': "
+                    f"Bedrock CountTokens does not support {count_tokens_model_id} {detail}."
+                ),
+            }
+        },
+    )

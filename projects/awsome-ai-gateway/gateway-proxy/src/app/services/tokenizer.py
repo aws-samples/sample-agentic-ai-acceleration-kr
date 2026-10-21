@@ -5,17 +5,26 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import structlog
+from botocore.exceptions import ClientError
 
 from app.schemas.domain import ModelConfigSchema, ProviderType, TokenUsage
+from app.services.token_count_fallback import (
+    BEDROCK_UNSUPPORTED,
+    count_base_model_id,
+    is_count_unsupported,
+)
 
 logger = structlog.get_logger(__name__)
 
 
 #: 이 길이까지는 루프에서 바로 센다(~1ms). 그보다 긴 텍스트는 스레드로(estimate_output_tokens).
 _INLINE_TOKENIZE_MAX_CHARS = 32_768
+#: Mantle 카운트에 줄 시간. 넘기면 tiktoken 근사로 간다(_mantle_count_bounded).
+_MANTLE_COUNT_BUDGET_SECONDS = 2.5
 
 # Cross-region inference profile 접두사 제거용 (예: `us.anthropic.claude-...` → `anthropic.claude-...`).
 # Bedrock CountTokens API는 profile ID를 받지 않고 base model ID만 허용.
@@ -35,10 +44,20 @@ class TokenizerService:
       (모델 무관 ±10% 수준).
 
     모든 경로가 실패하면 ``None`` 반환 → cost_recorder는 0 토큰으로 기록.
+
+    ⚠️ Bedrock CountTokens 는 Opus 4.7+ 와 5 계열을 세지 못한다(모델 기능, 권한 무관 —
+       services/token_count_fallback.py). 그 모델들의 잘린 스트림은 tiktoken 으로 떨어지는데,
+       cl100k 는 새 토크나이저보다 영어를 ~45% 적게 센다(같은 본문 547 vs ~300) — 과소청구다.
+       ``mantle_count`` 가 주어지면(COUNT_TOKENS_MANTLE_FALLBACK) 그 앞에서 Mantle 로 센다.
     """
 
-    def __init__(self, bedrock_client: Any | None = None) -> None:
+    def __init__(
+        self,
+        bedrock_client: Any | None = None,
+        mantle_count: Callable[[str, str], Awaitable[int | None]] | None = None,
+    ) -> None:
         self._bedrock_client = bedrock_client
+        self._mantle_count = mantle_count
         self._tiktoken_encoding = None
 
     def _get_tiktoken(self):
@@ -72,6 +91,12 @@ class TokenizerService:
             n = await self._bedrock_count_tokens(text, model_id)
             if n is not None:
                 return n
+            if self._mantle_count is not None and (
+                count_base_model_id(_strip_region_prefix(model_id)) in BEDROCK_UNSUPPORTED
+            ):
+                n = await self._mantle_count_bounded(text, model_id)
+                if n is not None:
+                    return n
             logger.info("bedrock_count_tokens_fallback_to_tiktoken", model_id=model_id)
 
         if len(text) <= _INLINE_TOKENIZE_MAX_CHARS:
@@ -82,12 +107,26 @@ class TokenizerService:
         #    drain 수만큼 겹친다.
         return await asyncio.to_thread(self._tiktoken_count, text)
 
+    async def _mantle_count_bounded(self, text: str, model_id: str) -> int | None:
+        """Mantle count, bounded. The cut-stream finalize writes the usage row only after
+        this estimate, and a shutdown drains for ~12 s — a slow Mantle must cost an
+        approximation, never the row."""
+        try:
+            return await asyncio.wait_for(
+                self._mantle_count(text, model_id), timeout=_MANTLE_COUNT_BUDGET_SECONDS
+            )
+        except Exception:
+            logger.warning("mantle_count_tokens_estimate_failed", model_id=model_id)
+            return None
+
     async def _bedrock_count_tokens(self, text: str, model_id: str) -> int | None:
         """Bedrock CountTokens API 호출. 실패 시 `None`."""
         if self._bedrock_client is None:
             return None
 
-        base_model = _strip_region_prefix(model_id)
+        base_model = count_base_model_id(_strip_region_prefix(model_id))
+        if base_model in BEDROCK_UNSUPPORTED:
+            return None
         body = {
             "anthropic_version": "bedrock-2023-05-31",
             "max_tokens": 1,  # CountTokens는 생성 안 하나 스키마상 필수값.
@@ -107,6 +146,14 @@ class TokenizerService:
             if isinstance(count, int) and count >= 0:
                 return count
             logger.warning("bedrock_count_tokens_unexpected_shape", keys=list(resp.keys()))
+            return None
+        except ClientError as e:
+            err = e.response.get("Error", {})
+            if is_count_unsupported(err.get("Code"), err.get("Message")):
+                BEDROCK_UNSUPPORTED.add(base_model)
+            logger.warning(
+                "bedrock_count_tokens_failed", model_id=base_model, error_code=err.get("Code")
+            )
             return None
         except Exception:
             logger.warning("bedrock_count_tokens_failed", model_id=base_model)

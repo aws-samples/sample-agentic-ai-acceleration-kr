@@ -11,10 +11,12 @@ from typing import Any
 import structlog
 from botocore.exceptions import ClientError
 
-from app.providers.base import ProviderAdapter
+from app.providers.base import CountTokensResult, ProviderAdapter
 from app.schemas.domain import TokenUsage
 from app.services.account_credentials import (
     ACCOUNT_UNAVAILABLE_BODY,
+    ACCOUNT_UNAVAILABLE_CODE,
+    ACCOUNT_UNAVAILABLE_MESSAGE,
     ACCOUNT_UNAVAILABLE_STATUS,
     AccountCredentialsUnavailable,
     redact_account_identifiers,
@@ -257,12 +259,15 @@ class BedrockAdapter(ProviderAdapter):
 
     async def count_tokens(
         self, request_body: bytes, model_id: str, account=None
-    ) -> tuple[int, int]:
+    ) -> CountTokensResult:
         """Bedrock CountTokens API — returns (status, input_tokens). No cost, no inference.
 
         ``account`` 를 받는 이유는 :meth:`invoke` 와 같다: CountTokens 는 모델 액세스를 가진
         계정에서만 허가되므로, 다른 계정으로 서빙되는 alias 를 이 계정에서 세면 추론은 되는데
         토큰 카운트만 403 이 된다(claude-code 의 invoke/count_tokens 계정 스플릿과 같은 부류).
+
+        실패하면 상류 오류 코드·메시지를 결과에 싣는다(계정 번호·ARN 은 지운다). 라우터가
+        "이 모델은 셀 수 없다"(``ValidationException``)와 권한·쓰로틀 실패를 구별해야 한다.
         """
         import asyncio
 
@@ -271,7 +276,10 @@ class BedrockAdapter(ProviderAdapter):
             try:
                 client = await self._client_for(account)
             except AccountCredentialsUnavailable:
-                return ACCOUNT_UNAVAILABLE_STATUS, 0
+                return CountTokensResult(
+                    ACCOUNT_UNAVAILABLE_STATUS, 0, ACCOUNT_UNAVAILABLE_CODE,
+                    ACCOUNT_UNAVAILABLE_MESSAGE,
+                )
         try:
             if account is None:
                 client = await self._get_client()
@@ -282,15 +290,19 @@ class BedrockAdapter(ProviderAdapter):
                     input={"invokeModel": {"body": request_body}},
                 ),
             )
-            return 200, int(response.get("inputTokens", 0))
+            return CountTokensResult(200, int(response.get("inputTokens", 0)))
         except ClientError as e:
             code = e.response["Error"]["Code"]
+            message = redact_account_identifiers(e.response["Error"].get("Message", ""))
             status = _BOTO_ERROR_MAP.get(code, 502)
-            logger.warning("bedrock_count_tokens_error", error_code=code, model_id=model_id)
-            return status, 0
+            logger.warning(
+                "bedrock_count_tokens_error", error_code=code, model_id=model_id,
+                error_message=message,
+            )
+            return CountTokensResult(status, 0, code, message)
         except Exception:
             logger.exception("bedrock_count_tokens_failed", model_id=model_id)
-            return 502, 0
+            return CountTokensResult(502, 0, None, "Bedrock CountTokens call failed")
 
     async def invoke_stream(
         self,

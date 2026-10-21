@@ -50,6 +50,7 @@ from app.services.mantle_credentials import MantleCredentialBroker
 from app.services.rate_limit_service import set_fail_open_metric
 from app.services.routing_profile_loader import RoutingProfileLoader
 from app.services.sigv4_signer import SigV4Signer
+from app.services.token_count_fallback import make_text_counter
 from app.services.tokenizer import TokenizerService
 
 logger = structlog.get_logger(__name__)
@@ -290,7 +291,16 @@ async def lifespan(app: FastAPI):
     cost_recorder = CostRecorder(metrics=gateway_metrics, spool=cost_stream_spool)
 
     # 13b. Tokenizer (KI-08: 스트리밍 disconnect 시 누적 텍스트로 output 토큰 역산)
-    tokenizer_service = TokenizerService(bedrock_client=bedrock_client)
+    # Bedrock CountTokens 가 못 세는 모델(Opus 4.7+, 5 계열)은 켜져 있으면 Mantle 로 센다 —
+    # 꺼져 있으면 tiktoken 근사(새 토크나이저 대비 영어 ~45% 과소)로 떨어진다.
+    tokenizer_service = TokenizerService(
+        bedrock_client=bedrock_client,
+        mantle_count=(
+            make_text_counter(mantle_adapter, settings.aws_region)
+            if settings.count_tokens_mantle_fallback
+            else None
+        ),
+    )
 
     # 14. Security Event Detector
     security_detector = SecurityEventDetector()

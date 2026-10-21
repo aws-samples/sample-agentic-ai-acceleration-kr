@@ -8,19 +8,25 @@ from typing import Protocol
 import httpx
 import structlog
 
-from app.providers.base import ProviderAdapter
+from app.providers.base import CountTokensResult, ProviderAdapter
 from app.providers.bedrock_adapter import _extract_bedrock_usage  # reuse usage parsing
 from app.schemas.domain import TokenUsage
 from app.services.account_credentials import (
     ACCOUNT_UNAVAILABLE_BODY,
+    ACCOUNT_UNAVAILABLE_CODE,
+    ACCOUNT_UNAVAILABLE_MESSAGE,
     ACCOUNT_UNAVAILABLE_STATUS,
     AccountCredentialsUnavailable,
+    redact_account_identifiers,
     redact_account_identifiers_bytes,
 )
 
 logger = structlog.get_logger(__name__)
 
 _ANTHROPIC_VERSION = "2023-06-01"
+# connect stays under the cut-stream estimate's 2.5 s budget (services/tokenizer.py),
+# so an unreachable endpoint is reported — and remembered — rather than cancelled.
+_COUNT_TIMEOUT = httpx.Timeout(connect=1.5, read=10.0, write=10.0, pool=5.0)
 
 
 class _BearerProvider(Protocol):
@@ -183,7 +189,71 @@ class MantleAdapter(ProviderAdapter):
 
         return 200, _gen(), {"Content-Type": "text/event-stream"}, None
 
-    async def count_tokens(self, request_body: bytes, model_id: str, **kwargs) -> tuple[int, int]:
-        # Mantle exposes /v1/messages/count_tokens; not required for Cowork MVP.
-        # The router only calls count_tokens on the Bedrock path for Phase 2.
-        return 200, 0
+    async def count_tokens(
+        self,
+        request_body: bytes,
+        model_id: str,
+        *,
+        profile=None,
+        endpoint: str | None = None,
+        account=None,
+        **kwargs,
+    ) -> CountTokensResult:
+        """Mantle ``/v1/messages/count_tokens`` — the count for the model the body names. No cost.
+
+        Used only as the fallback for models that Bedrock CountTokens refuses
+        (services/token_count_fallback.py), which reads the result as: 200 counted ·
+        404 not served in this region · 403 not entitled to this model · 400/422 this
+        model refused this body · 401 or ``error_code`` ``MantleAuthFailed`` /
+        ``AccountCredentialsUnavailable`` the credentials · ``MantleUnreachable`` could
+        not connect · ``MantleCallFailed`` or anything else this request only.
+        """
+        if profile is None or not endpoint:
+            # This used to return (200, 0): any caller would have recorded a 0-token count.
+            logger.error("mantle_count_tokens_misconfigured", model_id=model_id)
+            return CountTokensResult(
+                500, 0, "MantleCountMisconfigured",
+                "Mantle count_tokens needs a routing profile and an endpoint",
+            )
+        url = f"{endpoint.rstrip('/')}/v1/messages/count_tokens"
+        try:
+            headers = await self._headers(profile, account)
+        except AccountCredentialsUnavailable:
+            return CountTokensResult(
+                ACCOUNT_UNAVAILABLE_STATUS, 0, ACCOUNT_UNAVAILABLE_CODE,
+                ACCOUNT_UNAVAILABLE_MESSAGE,
+            )
+        except Exception:
+            logger.exception("mantle_count_tokens_auth_failed", model_id=model_id)
+            return CountTokensResult(401, 0, "MantleAuthFailed", "Mantle auth failed")
+        try:
+            # Its own short timeout: the shared client's read timeout is sized for
+            # generation, and a count that hangs would hold the caller for minutes.
+            resp = await self._http.post(
+                url, content=request_body, headers=headers, timeout=_COUNT_TIMEOUT
+            )
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            logger.warning(
+                "mantle_count_tokens_unreachable", model_id=model_id, error=type(exc).__name__
+            )
+            return CountTokensResult(502, 0, "MantleUnreachable", "Mantle endpoint unreachable")
+        except Exception as exc:
+            logger.warning(
+                "mantle_count_tokens_failed", model_id=model_id, error=type(exc).__name__
+            )
+            return CountTokensResult(502, 0, "MantleCallFailed", "Mantle count_tokens call failed")
+        if resp.status_code != 200:
+            message = redact_account_identifiers(resp.text[:500])
+            logger.warning(
+                "mantle_count_tokens_http_error",
+                status=resp.status_code, model_id=model_id, error_body=message,
+            )
+            return CountTokensResult(resp.status_code, 0, f"HTTP{resp.status_code}", message)
+        try:
+            input_tokens = int(resp.json()["input_tokens"])
+        except Exception:
+            logger.warning("mantle_count_tokens_bad_response", model_id=model_id)
+            return CountTokensResult(
+                502, 0, "MantleBadResponse", "unexpected Mantle count_tokens response"
+            )
+        return CountTokensResult(200, input_tokens)

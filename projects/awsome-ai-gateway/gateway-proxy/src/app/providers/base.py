@@ -9,6 +9,35 @@ from typing import Any
 from app.schemas.domain import TokenUsage
 
 
+class CountTokensResult(tuple):
+    """``(status, input_tokens)`` — a plain 2-tuple to every existing caller.
+
+    The upstream error code and message ride along as attributes so the
+    count_tokens router can tell "this model cannot be counted" apart from an
+    auth or throttling failure, without changing the tuple every adapter and
+    test unpacks.
+    """
+
+    error_code: str | None
+    error_message: str | None
+
+    def __new__(
+        cls,
+        status: int,
+        input_tokens: int,
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> CountTokensResult:
+        self = super().__new__(cls, (status, input_tokens))
+        self.error_code = error_code
+        self.error_message = error_message
+        return self
+
+    def __getnewargs__(self):
+        # copy / deepcopy / pickle rebuild through __new__, which needs every field.
+        return (self[0], self[1], self.error_code, self.error_message)
+
+
 class ProviderAdapter(ABC):
     """Provider Adapter 기본 클래스."""
 

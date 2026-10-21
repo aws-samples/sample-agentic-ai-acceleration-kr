@@ -66,7 +66,7 @@ BedrockInvoke               bedrock:InvokeModel / InvokeModelWithResponseStream 
                             -> var.bedrock_allowed_model_arns
 BedrockListModels           bedrock:ListFoundationModels / GetFoundationModel /
                             ListInferenceProfiles / GetInferenceProfile          -> *
-InAccountMantleInference    bedrock-mantle:CreateInference / GetInference
+InAccountMantleInference    bedrock-mantle:CreateInference / GetInference / CountTokens
                             -> arn:aws:bedrock-mantle:ap-northeast-1:<ACCOUNT>:*
                             -> arn:aws:bedrock-mantle:us-east-2:<ACCOUNT>:*
 InAccountMantleBearer       bedrock-mantle:CallWithBearerToken                    -> *

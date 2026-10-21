@@ -65,6 +65,10 @@ data "aws_iam_policy_document" "bedrock" {
     actions = [
       "bedrock-mantle:CreateInference",
       "bedrock-mantle:GetInference",
+      # count_tokens 의 Mantle 대체(COUNT_TOKENS_MANTLE_FALLBACK) — Bedrock CountTokens 가
+      # 못 세는 Opus 4.7+·5 계열. 카운트만이고 과금되지 않는다. 쓰려면 게이트웨이 리전이
+      # mantle_regions 에 있어야 한다(docs/guides/multi-account-bedrock-setup.md 2.6).
+      "bedrock-mantle:CountTokens",
     ]
     resources = [
       for r in local.mantle_regions :
