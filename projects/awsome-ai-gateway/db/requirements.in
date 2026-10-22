@@ -1,0 +1,8 @@
+# 마이그레이션 이미지(db/Dockerfile)의 직접 의존성. 설치는 requirements.lock(버전·해시 고정)으로만 한다.
+# 갱신: 버전을 올린 뒤 이 디렉터리에서
+#   uv pip compile requirements.in --generate-hashes --python-version 3.11 \
+#     --python-platform x86_64-unknown-linux-gnu -o requirements.lock
+# env.py 가 create_async_engine 을 쓰므로 greenlet 이 필요하다 — SQLAlchemy 2.1 부터는 [asyncio] extra 로만 들어온다.
+alembic==1.20.0
+asyncpg==0.32.0
+sqlalchemy[asyncio]==2.1.5
