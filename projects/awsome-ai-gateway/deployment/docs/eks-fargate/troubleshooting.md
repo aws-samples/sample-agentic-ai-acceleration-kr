@@ -244,9 +244,10 @@ aws eks describe-cluster --name llm-gateway-dev \
 ([09-upgrade-131-to-136.md](./09-upgrade-131-to-136.md)) — 기본값을 그대로 apply 하면
 1.31→1.36 다중 점프라 같은 InvalidParameterException 으로 멈춘다.
 
-⚠️ **이 사고는 재발했다.** 2026-09-04 감사에서 커밋된 브랜치의 dev·prod `eks_cluster_version`
-기본값이 `"1.30"` 인데 라이브가 `1.31` 인 상태가 발견됐다(그대로 apply 하면 prod 까지 위 에러로
-스택이 웨지되는 부비트랩). 그래서 두 환경 variables.tf 에 `>= 31` **validation** 을 걸어 두었다.
+⚠️ **이 문제는 커밋된 값이 라이브보다 낮아질 때마다 다시 생긴다.** 예를 들어 클러스터가 `1.31` 인데 커밋된
+dev·prod `eks_cluster_version` 기본값이 `"1.30"` 으로 남아 있으면, 그 상태로 apply 하는 순간 prod 까지 위 에러로
+스택이 멈춘다(plan 에 다운그레이드가 늘 끼어 있어 무관한 변경을 apply 해도 걸린다). 그래서 두 환경 variables.tf 에
+`>= 31` **validation** 을 걸어 두었다.
 단 이 검사는 **형식과 하한(1.31)만** 본다 — 라이브보다 낮은 값(예: 1.36 클러스터에 1.35)은 막지 못하고
 apply 의 위 에러로만 드러난다. 그래서 값을 바꾸기 전에 위 명령으로 라이브를 먼저 읽는다.
 버전을 만질 때 이 validation 을 풀지 말 것.

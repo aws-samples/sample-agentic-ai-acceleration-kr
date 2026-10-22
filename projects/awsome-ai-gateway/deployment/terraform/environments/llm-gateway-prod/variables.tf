@@ -53,7 +53,8 @@ variable "eks_cluster_version" {
   # 으로 죽는다. 클러스터 자체는 무사하지만 **prod 스택의 terraform 이 아무것도 못 돌게**
   # 되어 다른 드리프트가 쌓인다(과거 1.30→1.29 동일 사고: docs/eks-fargate/troubleshooting.md
   # "EKS minor version downgrade 금지").
-  # 실제로 prod 전체 plan 이 이 다운그레이드를 부비트랩으로 안고 있었다.
+  # 커밋된 값이 라이브보다 낮으면 prod 의 전체 plan 에 이 다운그레이드가 늘 끼어 있어, 무관한
+  # 변경을 apply 하려 해도 그 순간 위 에러로 멈춘다.
   # 아래 validation 은 **형식과 하한(1.31)만** 강제한다. 라이브보다 낮은 값(예: 1.36 클러스터에
   # 1.35)은 막지 못하고 apply 의 위 에러로만 드러나므로, 값을 바꾸기 전에
   # `aws eks describe-cluster --query cluster.version` 으로 라이브를 먼저 읽는다.
@@ -78,11 +79,15 @@ variable "eks_cluster_version" {
   #   - **prod 는 항상 dev 가 같은 홉을 통과한 뒤에** 올린다. 두 루트가 각자
   #     eks_addon_versions 를 갖는 이유가 이 시차를 만들기 위해서다.
   #   - ⚠️ 1.31 은 이미 extended support 다(표준지원 종료 2025-11-26 / extended 종료
-  #     2026-11-26). 1.31 클러스터는 **1.32 로 가는 첫 홉에 하드 기한이 있다** — 그 전에
-  #     안 올리면 AWS 가 컨트롤플레인을 강제 업그레이드하고 그건 롤백할 수 없다(애드온과
-  #     Fargate 파드의 kubelet 은 이전 버전으로 남는다). 이후 홉은 비용(클러스터당 $0.50/hr
-  #     extended 프리미엄) 동기라 일정 조정이 가능하다. 1.32·1.33 도 extended 이므로 프리미엄이
-  #     실제로 사라지는 건 표준지원 중인 minor 에 도달한 뒤다(EKS 버전 캘린더로 확인).
+  #     2026-11-26). 가장 가까운 하드 기한이 이 날짜다 — 그 전에 1.32 로 안 올리면 AWS 가
+  #     컨트롤플레인을 강제 업그레이드하고 그건 롤백할 수 없다(애드온과 Fargate 파드의
+  #     kubelet 은 이전 버전으로 남는다). 하드 기한이 첫 홉에만 있는 것은 아니다. 1.32·1.33 도
+  #     extended 구간이라 각자의 extended 종료일(작성 시점 1.32 = 2027-03-23, 1.33 = 2027-07-29)에
+  #     같은 방식으로 강제 업그레이드된다. 그 전까지는 비용(클러스터당 $0.50/hr extended
+  #     프리미엄) 동기라 일정 조정이 가능하고, 프리미엄이 실제로 사라지는 건 표준지원 중인
+  #     minor 에 도달한 뒤다. 날짜 확인:
+  #       aws eks describe-cluster-versions --cluster-versions 1.31 1.32 1.33 \
+  #         --query 'clusterVersions[].[clusterVersion,endOfStandardSupportDate,endOfExtendedSupportDate]'
   #   - AWS 가 이미 자동 업그레이드한 클러스터는 여기(tfvars)에 **라이브 minor** 를 고정하고
   #     그 다음 홉부터 시작한다(09 런북 "이미 AWS 가 자동 업그레이드한 클러스터").
   #   - 1.36 의 표준지원은 2027-08-02 까지다. 그 뒤는 extended support 프리미엄 구간이다.
@@ -92,7 +97,8 @@ variable "eks_cluster_version" {
   #    버전과 그 버전의 애드온을 먼저 고정한 뒤 위 순서로 한 칸씩 올린다. 아래 validation 의
   #    하한이 기본값(1.36)이 아니라 1.31 인 이유가 그 고정을 막지 않기 위해서다.
   # nullable = false: 명시적 `eks_cluster_version = null` 은 **거부가 아니라 아래 기본값으로
-  # 폴백**한다(실측 2026-09-07: default 가 있는 변수는 null → default, 에러 없음).
+  # 폴백**한다(Terraform 은 nullable = false 이고 default 가 있는 변수에 null 이 들어오면 에러 없이
+  # default 를 쓴다).
   # 즉 이 키워드의 효과는 "null 이 downstream 으로 전파되지 않는다" 뿐이고, 잘못된 *값* 을
   # 막는 건 아래 validation 이다. default 가 **없는** 변수는 반대로 null 이
   # "required variable may not be set to null" 로 죽는다(modules/eks-fargate/variables.tf).
@@ -301,7 +307,8 @@ variable "bedrock_allowed_model_arns" {
     # 일반 `bedrock:InvokeModel` 이라 이 목록의 통제를 받는다. 위 Claude-5 사고와 **똑같이**
     # 프로파일과 foundation-model 을 **양쪽 다** 적어야 한다.
     #
-    # 실측(2026-09-03, 859/us-east-2, `aws bedrock get-inference-profile`):
+    # 프로파일 구성(작성 시점, us-east-2 에서 `aws bedrock get-inference-profile` 로 조회 — `global.` 의
+    # 리전 멤버는 조회한 리전이고, 프로파일 존재 여부도 리전마다 다르다):
     #   us.openai.gpt-5.6-terra     → foundation-model/openai.gpt-5.6-terra
     #                                 in us-east-1 · us-east-2 · us-west-2  (3개 멤버 리전)
     #   global.openai.gpt-5.6-terra → arn:aws:bedrock:::foundation-model/... + us-east-2

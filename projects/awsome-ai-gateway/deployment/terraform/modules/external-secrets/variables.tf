@@ -26,9 +26,12 @@ variable "chart_version" {
   # (unsafeServeV1Beta1 플래그 존재, crds.conversion.enabled=false 기본, installCRDs 키 유지,
   # ExternalSecret CRD 버전 레이아웃 동일).
   #
-  # 메이저 2개를 건너뛰지만(v1.0.0 2025-11-07 / v2.0.0 2026-02-06) 릴리스 노트상
-  # breaking change 는 **v2.0.0 의 Alibaba·Device42 프로바이더 제거 단 하나**이고
-  # 이 모듈은 aws-secrets-manager 만 쓰므로 무관하다. v1.0.0 에는 breaking 항목이 없다.
+  # 메이저 2개를 건너뛴다(v1.0.0 2025-11-07 / v2.0.0 2026-02-06). 이 두 메이저 릴리스의
+  # 노트에 적힌 breaking 항목은 v2.0.0 의 Alibaba·Device42 프로바이더 제거뿐이고(v1.0.0 은
+  # 없음), 이 모듈은 aws-secrets-manager 만 쓰므로 무관하다.
+  # 그렇다고 0.10.4 → 2.11.0 의 변화가 그것뿐인 것은 아니다. 그 사이 0.x 릴리스들에서 API
+  # 버전이 바뀌었다(`v1alpha1` 제거, `v1` 도입, `v1beta1` 기본 비서빙). 이 부분은
+  # docs/eks-fargate/09-upgrade-131-to-136.md C 단계가 다룬다.
   #
   # ⚠️ 2.x 는 `external-secrets.io/v1` 만 serve 한다(v1beta1 은 아래 serve_v1beta1 로만).
   #    llm-gateway 차트(`llm-gateway.externalSecretsApiVersion`)와 install-eks.sh 의
@@ -43,8 +46,8 @@ variable "chart_version" {
   default = "2.11.0"
 
   validation {
-    condition     = can(regex("^v?[0-9]+\\.[0-9]+\\.[0-9]+", var.chart_version))
-    error_message = "chart_version 은 정확한 chart 버전이어야 한다(예: \"2.11.0\", \"0.10.4\"). 모듈이 major 버전으로 설정을 고르므로 범위(\"^2.0\")나 빈 값은 받지 않는다."
+    condition     = can(regex("^v?[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$", var.chart_version))
+    error_message = "chart_version 은 정확한 chart 버전 하나여야 한다(MAJOR.MINOR.PATCH — 앞의 v 와 -prerelease·+build 접미사는 허용, 예: \"2.11.0\", \"0.10.4\"). 모듈이 major 버전으로 설정을 고르므로 범위·제약식(\"^2.0\", \">=2.0.0\", \"2.11.0 || 0.10.4\"), 부분 버전(\"2.11\"), 앞뒤 공백, 빈 값은 받지 않는다."
   }
 }
 

@@ -4,7 +4,11 @@
 > AWS 가 컨트롤플레인을 강제로 업그레이드하고, 그 업그레이드는 롤백할 수 없다. 자동 업그레이드는
 > 컨트롤플레인만 올리므로 애드온과 Fargate 파드의 kubelet 은 이전 버전으로 남는다. 또 extended support
 > 구간의 클러스터(작성 시점 1.31 · 1.32 · 1.33)에는 클러스터당 시간당 **$0.50** 의 extended 프리미엄이 붙는다.
-> 하드 기한은 1.31 → 1.32 첫 홉에만 있고, 이후 홉은 비용 동기라 일정을 조정할 수 있다.
+> 하드 기한은 첫 홉에만 있는 것이 아니다. 가장 가까운 것이 1.31 의 2026-11-26 이고, 1.32 · 1.33 도 각자의
+> extended support 가 끝나는 날(작성 시점 1.32 는 2027-03-23, 1.33 은 2027-07-29) 같은 방식으로 강제
+> 업그레이드된다. 그 날짜 전까지만 비용을 보며 일정을 조정할 수 있다. 날짜는 직접 확인한다:
+> `aws eks describe-cluster-versions --cluster-versions 1.31 1.32 1.33 --query 'clusterVersions[].[clusterVersion,endOfStandardSupportDate,endOfExtendedSupportDate]' --output table`
+>
 > 이미 자동 업그레이드된 클러스터는 [아래 분기](#이미-aws-가-자동-업그레이드한-클러스터)를 먼저 본다.
 
 이 레포의 기본값은 **EKS 1.36 / aws-load-balancer-controller chart 3.5.0 / external-secrets chart
@@ -55,7 +59,16 @@ alb_controller_chart_version   = "1.8.2"
 external_secrets_chart_version = "0.10.4"
 ```
 
-고정한 뒤의 `terraform plan` 에는 이 값들로 인한 변경(EKS 버전 · 애드온 · 두 helm_release)이 없어야 한다.
+고정한 뒤의 `terraform plan` 은 **`No changes`** 여야 한다 — 이 값들로 인한 변경(EKS 버전 · 애드온 · 두
+helm_release)은 물론 그 밖의 변경도 없어야 한다. 남는 변경은 어디에 남았는지로 나눠 다룬다.
+
+- EKS 버전 · 애드온 · 두 helm_release 에 변경이 남으면 고정값이 라이브와 다르다는 뜻이다(값 오타, 빠진
+  `eks_addon_versions` 블록 등). apply 하지 말고 라이브에서 읽은 값으로 고친다.
+- 그 밖의 리소스에 남는 변경(새 main 이 함께 가져온 변경, 또는 라이브 드리프트)은 따로 검토해 **A 단계 전에
+  별도 apply** 로 먼저 반영한다.
+
+plan 이 `No changes` 가 된 뒤에 A 를 시작한다. 그래야 이후의 "의도한 델타만"(각 단계의 plan, E2E 게이트 7) ·
+"정확히 1건"(B 의 2) 판정이 의미를 갖는다.
 ESO 모듈은 webhook·cert-controller 비활성과 CRD 서빙 플래그를 chart major >= 1 일 때만 넣으므로,
 0.10.x 로 고정한 동안에는 이전과 같은 values 로 렌더된다.
 
@@ -67,8 +80,9 @@ ESO 모듈은 webhook·cert-controller 비활성과 CRD 서빙 플래그를 char
 ### terraform CLI 로 진행한다 (deploy TUI 사용 금지)
 
 `deployment/scripts/deploy-tui.sh` 는 이 업그레이드에 쓰지 않는다. TUI 는 `terraform.tfvars` 를 다시 쓰면서
-최상위 단일 값(문자열 · bool · 숫자)만 보존하고 `eks_addon_versions` 같은 블록 · 여러 줄 값과 주석을 버린다
-(TUI 가 직접 채우는 `azs` · `eks_access_entries` · `tags` 만 예외). 그리고 `terraform plan` 다음에 확인 없이
+최상위 단일 값(문자열 · bool · 정수)만 보존하고 `eks_addon_versions` 같은 블록 · 여러 줄 값 · 주석과 줄 끝에
+주석이 붙은 값을 버린다(TUI 가 직접 채우는 `azs` · `eks_access_entries` · `tags` 만 예외). 이 재기록은 실행 확인
+프롬프트보다 먼저 일어난다. 그리고 `terraform plan` 다음에 확인 없이
 `terraform apply -auto-approve` 를 실행한다. 고정이 빠진 plan 이 그대로 적용될 수 있다. 각 단계는 환경
 루트에서 `terraform plan` 을 읽고, 의도한 델타만 있을 때 `terraform apply` 한다.
 
@@ -198,6 +212,18 @@ v3.0.0 webhook 인증서 버그는 이 모듈과 무관하다(미설정).
   제거가 함께 들어간다. 결과: `v2.11.0` 가동, CRD 4종이 `v1(served,storage)` + `v1beta1(served)` 동시 serve,
   `storedVersions=["v1beta1","v1"]`, 기존 객체 `SecretSynced` 유지, `external-secrets-webhook` ·
   `external-secrets-cert-controller` 없음.
+  > ⚠️ **C2 는 되돌릴 수 없다(0.10.x 로 복귀 불가).** 2.11.0 CRD 가 적용되면 API 서버가 4종의 `status.storedVersions`
+  > 에 `v1` 을 기록한다. 0.10.4 CRD 는 `v1alpha1` · `v1beta1` 만 정의하는데, API 서버는 storedVersions 에 있는
+  > 버전이 `spec.versions` 에서 빠지는 CRD 업데이트를 거부한다. 그래서 실패한 C2 의 자동 롤백(모듈 helm_release 의
+  > `atomic = true`)도, 나중에 0.10.x 로 다시 고정하는 것도 CRD 를 되돌리지 못한다. apply 가 실패하면
+  > `helm rollback` 도 0.10.x 재고정도 하지 말고, 원인을 고친 뒤 **같은 terraform apply 를 다시 실행**한다.
+  > `external_secrets_serve_v1beta1 = true` 는 C4 까지 유지한다 — 롤백이 일부만 적용돼 컨트롤러가 이전 버전으로
+  > 남더라도 v1beta1 로 계속 동기화할 수 있게 하기 위해서다.
+  >
+  > 0.10.x chart 기본값(webhook · cert-controller 활성, CRD conversion `Webhook`) 그대로인 클러스터에서는 chart major
+  > 변경 · webhook · cert-controller 제거 · conversion `None` 전환이 이 한 apply 에 같이 들어가는 것이 정상 경로다.
+  > 그래서 prod 의 C2 는 dev 가 C2 뒤 [E2E 게이트](#e2e-게이트-모든-단계-공통-하나라도-실패하면-다음-단계-금지)를
+  > 통과한 다음에만 한다.
 - **C3 — llm-gateway 를 v1 로.** 현재 차트는 클러스터가 `external-secrets.io/v1` 을 serve 하면 v1 로
   렌더한다(`llm-gateway.externalSecretsApiVersion`). `helm upgrade` 한 번이면 ExternalSecret 3개가
   v1 로 바뀐다. ⚠️ 이 전환은 `checksum/secret` 을 바꿔 **6개 Deployment 전부가 롤링 재시작**된다

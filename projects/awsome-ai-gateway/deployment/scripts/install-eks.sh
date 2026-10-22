@@ -184,12 +184,19 @@ ensure_cluster_secret_store() {
     # 클러스터가 external-secrets.io/v1 을 serve 하면 v1(ESO 0.17+ — 1.x/2.x 는 v1 만),
     # 아니면 v1beta1(ESO 0.10.x). 파이프 대신 herestring — `| grep -q` 가 먼저 닫으면
     # kubectl 이 SIGPIPE 로 죽고 pipefail 때문에 "없음" 으로 오판된다(아래 STS 리전 주석 참고).
-    local api_versions eso_api_version
-    api_versions=$(kubectl api-versions 2>/dev/null || true)
+    # 판정 규칙은 그대로다(v1 이 목록에 없으면 v1beta1). 다만 조회 자체가 실패했거나(비-0 종료)
+    # 결과가 비어서 v1beta1 로 떨어진 경우는 "0.10.x 라서 v1beta1" 과 구분되도록 경고한다.
+    local api_versions="" api_lookup_ok=true eso_api_version
+    if ! api_versions=$(kubectl api-versions 2>/dev/null); then
+        api_lookup_ok=false
+    fi
     if grep -qx 'external-secrets.io/v1' <<<"$api_versions"; then
         eso_api_version="external-secrets.io/v1"
     else
         eso_api_version="external-secrets.io/v1beta1"
+        if [ "$api_lookup_ok" != true ] || [ -z "$api_versions" ]; then
+            warn "kubectl api-versions 조회가 실패했거나 결과가 비어 ClusterSecretStore apiVersion 을 ${eso_api_version} 로 폴백한다. ESO 1.x/2.x 는 기본적으로 v1beta1 을 serve 하지 않으므로 그 클러스터에서는 아래 apply 가 실패할 수 있다 — 'kubectl api-versions | grep external-secrets.io' 로 확인할 것"
+        fi
     fi
 
     info "ClusterSecretStore 생성 (${eso_api_version})"
