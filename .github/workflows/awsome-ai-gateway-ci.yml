@@ -221,14 +221,16 @@ jobs:
       - name: Set up Python
         run: uv python install ${{ env.PYTHON_VERSION }}
 
-      # db/ 는 자체 pyproject 가 없다(Dockerfile 로만 돈다) → 필요한 것만 직접 설치한다.
+      # db/ 는 자체 pyproject 가 없다(Dockerfile 로만 돈다) → 이미지와 같은 requirements.lock 버전으로 돌린다.
+      # uv run --with-requirements 는 버전만 맞추고 해시는 검사하지 않는다 — 해시 강제는 이미지 빌드의
+      # `uv pip install --require-hashes` 가 맡는다. pgvector 는 이 CI 검증에만 쓴다.
       - name: alembic upgrade head
         working-directory: ${{ env.PROJECT_DIR }}/db
         env:
           DB_URL: postgresql+asyncpg://postgres:proof@127.0.0.1:5432/gwproof_ci
         run: |
           set -euo pipefail
-          uv run --with alembic --with asyncpg --with "sqlalchemy[asyncio]" --with pgvector \
+          uv run --with-requirements requirements.lock --with pgvector \
             alembic upgrade head
           head=$(psql -h 127.0.0.1 -U postgres -d "${PROOF_DB}" -tA \
             -c "SELECT version_num FROM public.alembic_version")

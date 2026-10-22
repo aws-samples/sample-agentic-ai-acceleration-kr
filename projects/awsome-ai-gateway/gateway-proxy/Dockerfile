@@ -3,7 +3,9 @@
 # Build stage
 FROM public.ecr.aws/docker/library/python:3.11-slim AS builder
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+# 빌드 도구도 고정한다 — :latest 는 움직이는 태그라 같은 커밋이라도 빌드마다 다른 uv 가 들어온다.
+# 올릴 때는 태그와 digest 를 함께 바꾼다(docker buildx imagetools inspect ghcr.io/astral-sh/uv:<버전>).
+COPY --from=ghcr.io/astral-sh/uv:0.13.4@sha256:9f130421e930bfbdc563c00740466603f8723158e90297d07957c2294640262b /uv /usr/local/bin/uv
 WORKDIR /app
 
 COPY ca-certificates.cr[t] /etc/ssl/certs/ca-certificates.crt
