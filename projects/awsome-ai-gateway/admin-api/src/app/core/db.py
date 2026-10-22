@@ -27,6 +27,12 @@ def create_engine():
         max_overflow=settings.DB_MAX_OVERFLOW,
         pool_timeout=settings.DB_POOL_TIMEOUT,
         pool_recycle=settings.DB_POOL_RECYCLE,
+        # 풀에서 꺼낼 때마다 연결이 살아 있는지 확인한다. RDS Proxy 는 일정 시간(IdleClientTimeout,
+        # 기본 1800s) 쓰지 않은 클라이언트 연결을 끊는데, pool_recycle(차트 기본 3600s)은 그보다 길어
+        # 끊긴 연결이 풀에 그대로 남는다. 확인 없이 꺼내 쓰면 한동안 요청이 없다가 들어온 첫 요청이
+        # "connection is closed" 로 500 이 된다(대시보드 카드가 "집계 실패" 로 뜬다).
+        # gateway-proxy·cost-recorder-worker·notification-worker 는 이미 켜 두었다.
+        pool_pre_ping=True,
         echo=settings.DB_ECHO,
         connect_args={"statement_cache_size": settings.DB_STATEMENT_CACHE_SIZE},
     )

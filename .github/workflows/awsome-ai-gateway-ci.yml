@@ -266,6 +266,7 @@ jobs:
             tests/regression/test_high_rate_limit_invalidate_after_commit_real.py \
             tests/regression/test_high_my_budget_gateway_parity_real.py \
             tests/regression/test_high_seed_spent_total_real.py \
+            tests/regression/test_high_db_pool_pre_ping_real.py \
             > /tmp/proof.txt 2>&1
           status=$?
           tail -40 /tmp/proof.txt
