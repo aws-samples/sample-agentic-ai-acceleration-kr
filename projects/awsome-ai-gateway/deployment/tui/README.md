@@ -29,6 +29,7 @@ Claude Code처럼 **인라인 콘솔**로 동작한다 — 전체 화면을 점�
 - tfstate bucket/table (LLM GW): 계정 접미 규칙 `llm-gateway-vanilla-tfstate-<account-id>` / `llm-gateway-vanilla-tflock` (account id는 `aws sts`로 자동 조회, backend.tf 주석과 일치). 버킷은 S3 전역 유일성 때문에 계정 접미가 필수다.
 - Tool GW bucket: `tool-gateway-tfstate-<account-id>` (account id는 `aws sts`로 자동 조회)
 - cognito_domain_suffix 등: 기존 `terraform.tfvars`가 있으면 그 값으로 프리필
+- ⚠️ 이전 기본값(EKS 1.31 등)으로 만든 기존 설치의 **버전 업그레이드에는 TUI를 쓰지 않는다.** TUI는 `terraform.tfvars`를 다시 쓸 때 기존 값 중 최상위 단일 값(문자열·bool·정수)만 남기고 `eks_addon_versions` 블록과 주석을 버리며(줄 끝에 주석이 붙은 값도 버린다), 이 재기록은 실행 확인 프롬프트보다 먼저 일어난다. 그리고 `terraform plan` 직후 확인 없이 `terraform apply -auto-approve`를 실행한다. [`deployment/docs/eks-fargate/09-upgrade-131-to-136.md`](../docs/eks-fargate/09-upgrade-131-to-136.md)를 따라 terraform CLI로 진행한다.
 
 ## 무엇을 하나
 

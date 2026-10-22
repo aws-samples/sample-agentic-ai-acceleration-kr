@@ -225,6 +225,8 @@ This is **re-origination**, not relay. There is no path for headers to leak.
 
 Step-by-step deployment: [`deployment/docs/eks-fargate/`](deployment/docs/eks-fargate/). Secrets contract: [`deployment/docs/secrets-contract.md`](deployment/docs/secrets-contract.md).
 
+> ⚠️ **Upgrading an existing install:** environments installed with older versions (EKS 1.31, LBC chart 1.8.2, ESO chart 0.10.4, etc.) must pin `eks_cluster_version`, `eks_addon_versions`, `alb_controller_chart_version`, and `external_secrets_chart_version` (and `external_secrets_serve_v1beta1`) to their live values in `terraform.tfvars` before applying a newer `main`, then follow [`09-upgrade-131-to-136.md`](deployment/docs/eks-fargate/09-upgrade-131-to-136.md) (Korean). EKS 1.31 extended support ends on 2026-11-26.
+
 ---
 
 ## Services

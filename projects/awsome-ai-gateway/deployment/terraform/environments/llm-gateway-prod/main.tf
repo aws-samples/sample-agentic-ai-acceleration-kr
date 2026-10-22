@@ -39,7 +39,7 @@ module "eks" {
   environment = var.environment
   # 두 값은 minor 홉마다 **함께** 움직이고, prod 는 dev 가 같은 홉을 통과한 뒤에 올린다.
   # 순서/기한은 variables.tf 의 eks_cluster_version · eks_addon_versions 주석 참고
-  # (현재 1.31, 목표 1.36).
+  # (기본값 1.36, 기존 클러스터는 tfvars 로 라이브 값을 고정).
   cluster_version    = var.eks_cluster_version
   addon_versions     = var.eks_addon_versions
   vpc_id             = module.vpc.vpc_id
@@ -110,6 +110,15 @@ module "alb_controller" {
   vpc_id            = module.vpc.vpc_id
   aws_region        = var.aws_region
 
+  # 기본값 3.5.0(variables.tf 의 alb_controller_chart_version). chart 1.8.2 가 깔린 기존
+  # 클러스터는 tfvars 로 라이브 값을 고정해 두고, 올릴 때는 v3 CRD 를 먼저 수동 apply 한다
+  # (helm 은 chart 의 crds/ 를 업그레이드하지 않는다). 신규 설치는 해당 없음.
+  # 레포 기본값이 라이브보다 앞서 있는데 고정이 없으면 prod 의 첫 plan 에 애드온·LBC·ESO
+  # 업그레이드가 한꺼번에 섞인다. 단계별로 올리려면 tfvars 의 고정을 그 단계에서 지운다.
+  # 근거·절차: modules/alb-controller/variables.tf 의 chart_version 주석,
+  # docs/eks-fargate/09-upgrade-131-to-136.md
+  chart_version = var.alb_controller_chart_version
+
   tags = var.tags
 
   # Fargate 프로파일이 ACTIVE 된 뒤에 helm_release 를 시작해야 한다.
@@ -131,6 +140,15 @@ module "external_secrets" {
   environment   = var.environment
   irsa_role_arn = module.irsa.external_secrets_role_arn
   aws_region    = var.aws_region
+
+  # 기본값 2.11.0(variables.tf 의 external_secrets_chart_version)은 external-secrets.io/v1 만
+  # serve 하고, 모듈은 chart major >= 1 일 때만 webhook·cert-controller 를 끈다 — 0.10.x 로
+  # 고정한 클러스터는 기존 동작 그대로다. 0.10.x 에서 올리는 동안에만 tfvars 에
+  # `external_secrets_serve_v1beta1 = true` 를 잠시 둔다
+  # (modules/external-secrets/variables.tf 의 serve_v1beta1 설명, 09 런북 C 단계).
+  # 전환 순서와 6개 Deployment 롤링 때문에 prod 는 유지보수 창에서 한다.
+  chart_version = var.external_secrets_chart_version
+  serve_v1beta1 = var.external_secrets_serve_v1beta1
 
   tags = var.tags
   # ALB Controller 의 webhook (mutating) 이 ESO Service 생성 시 호출되므로

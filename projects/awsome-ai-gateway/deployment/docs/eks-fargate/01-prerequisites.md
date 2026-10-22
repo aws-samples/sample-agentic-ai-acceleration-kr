@@ -105,7 +105,7 @@ export AWS_PROFILE=your-profile
 ```bash
 aws --version        # aws-cli/2.x
 terraform version    # Terraform v1.9.0+
-kubectl version --client  # Client Version: v1.30 ~ v1.32 (클러스터 1.31 ±1 minor, 권장 v1.31.x)
+kubectl version --client  # Client Version: v1.35 ~ v1.37 (클러스터 1.36 ±1 minor, 권장 v1.36.x)
 helm version         # v3.14+
 docker --version     # Docker version 24+ (또는 finch)
 jq --version         # jq-1.6+
@@ -121,15 +121,14 @@ brew install awscli
 brew tap hashicorp/tap
 brew install hashicorp/tap/terraform
 
-# kubectl — `brew install kubectl` 은 최신(현재 1.37)을 깔지만 클러스터는 1.31 이라
-# 지원 skew(±1 minor)를 벗어난다. 버전을 맞춰 설치한다.
+# kubectl — 클러스터(1.36)와의 지원 skew 는 ±1 minor 다. `brew install kubectl` 은 그때의 최신을
+# 깔아 최신이 1.38 이상이 되면 skew 를 벗어나므로, minor 고정 채널로 설치한다.
 ARCH=$(uname -m | sed 's/x86_64/amd64/')          # Apple Silicon 은 arm64 그대로
-KVER=$(curl -L -s https://dl.k8s.io/release/stable-1.31.txt)   # 예: v1.31.14
+KVER=$(curl -L -s https://dl.k8s.io/release/stable-1.36.txt)   # 예: v1.36.x
 curl -LO "https://dl.k8s.io/release/${KVER}/bin/darwin/${ARCH}/kubectl"
 chmod +x kubectl && sudo mv kubectl /usr/local/bin/kubectl
-# ⚠️ brew 로는 안 된다. 1.31 클러스터의 skew 안에 드는 formula 두 개가 모두 disabled 다
-#    (kubernetes-cli@1.31 → 2025-10-28, kubernetes-cli@1.32 → 2026-02-28, 확인: brew info <formula>).
-#    brew install kubernetes-cli 는 최신(1.37)을 깔아 skew 를 벗어난다. 위 curl 경로를 쓸 것.
+# ⚠️ brew 의 버전 고정 formula(kubernetes-cli@1.xx)는 오래된 minor 부터 disabled 된다
+#    (확인: brew info <formula>). 위 curl 경로를 쓸 것.
 
 # Helm
 brew install helm
@@ -154,9 +153,9 @@ unzip awscliv2.zip && sudo ./aws/install
 wget https://releases.hashicorp.com/terraform/1.9.8/terraform_1.9.8_linux_amd64.zip
 unzip terraform_1.9.8_linux_amd64.zip && sudo mv terraform /usr/local/bin/
 
-# kubectl — ⚠️ stable.txt 는 전체 최신(현재 v1.37)을 가리켜 클러스터 1.31 과의
-# 지원 skew(±1 minor)를 벗어난다. minor 고정 채널 stable-1.31.txt 를 쓴다.
-curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable-1.31.txt)/bin/linux/amd64/kubectl"
+# kubectl — ⚠️ stable.txt 는 전체 최신을 가리켜 클러스터 1.36 과의 지원 skew(±1 minor)를
+# 벗어날 수 있다. minor 고정 채널 stable-1.36.txt 를 쓴다.
+curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable-1.36.txt)/bin/linux/amd64/kubectl"
 sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
 
 # Helm
@@ -260,7 +259,7 @@ Hosted Zone이 없으면:
 - [ ] `aws sts get-caller-identity` 성공
 - [ ] `terraform version` v1.9+
 - [ ] `helm version` v3.14+
-- [ ] `kubectl version --client` v1.30 ~ v1.32 (클러스터 1.31 ±1 minor)
+- [ ] `kubectl version --client` v1.35 ~ v1.37 (클러스터 1.36 ±1 minor)
 - [ ] `jq --version` v1.6+
 - [ ] Bedrock `list-foundation-models` 에서 Claude 모델 ACTIVE 확인
 - [ ] (선택) Route53 Hosted Zone 확인

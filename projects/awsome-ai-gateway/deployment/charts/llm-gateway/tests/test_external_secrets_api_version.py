@@ -2,7 +2,7 @@
 
 """ExternalSecret 의 apiVersion 을 클러스터가 서빙하는 쪽으로 렌더하는가.
 
-ESO 0.10.x(이 레포 terraform 기본값)는 ``external-secrets.io/v1beta1`` 만, 0.17+ 는 ``v1`` 을
+ESO 0.10.x(이 레포의 옛 terraform 기본값 — 지금은 2.11.0)는 ``external-secrets.io/v1beta1`` 만, 0.17+ 는 ``v1`` 을
 서빙하고 1.x/2.x 는 ``v1beta1`` 을 더 이상 서빙하지 않는다. ExternalSecret 은 pre-install/
 pre-upgrade 훅(weight -30)이라, 틀린 apiVersion 이면 helm upgrade 가 migration Job(-5) 에
 가기도 전에 실패한다 — ESO 를 올린 클러스터에 main 차트를 그대로 못 올렸던 이유다.
@@ -51,7 +51,7 @@ def _external_secret_versions(docs: list[dict]) -> list[str]:
 
 
 def test_without_v1_on_the_cluster_it_stays_v1beta1():
-    """ESO 0.10.x(v1 미서빙) 설치 경로는 그대로여야 한다."""
+    """ESO 0.10.x(v1 미서빙)가 남아 있는 클러스터의 설치 경로는 그대로여야 한다."""
     assert set(_external_secret_versions(_render())) == {"external-secrets.io/v1beta1"}
 
 

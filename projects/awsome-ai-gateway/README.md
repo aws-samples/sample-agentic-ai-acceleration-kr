@@ -226,6 +226,8 @@ AWSome AI Gateway는 **re-origination(요청 재구성 발신)** 방식입니다
 
 배포 단계별 상세 절차: [`deployment/docs/eks-fargate/`](deployment/docs/eks-fargate/) — 01 사전조건 ~ 07 Cognito 온보딩 + `troubleshooting.md`. 시크릿 계약: [`deployment/docs/secrets-contract.md`](deployment/docs/secrets-contract.md).
 
+> ⚠️ **기존 설치 업그레이드**: 이전 버전(EKS 1.31 · LBC chart 1.8.2 · ESO chart 0.10.4 등)으로 설치한 환경은 새 main 을 apply 하기 전에 `terraform.tfvars` 에 `eks_cluster_version` · `eks_addon_versions` · `alb_controller_chart_version` · `external_secrets_chart_version`(· `external_secrets_serve_v1beta1`)을 **라이브 값으로 고정**한 뒤 [`09-upgrade-131-to-136.md`](deployment/docs/eks-fargate/09-upgrade-131-to-136.md) 를 따르세요. EKS 1.31 extended support 는 2026-11-26 에 끝납니다.
+
 > **다른 계정에 적용 시**: `terraform.tfvars` (gitignored), `backend.tf` 의
 > `-backend-config`, `values-eks-fargate-{dev,prod}.yaml` 안의 `# CHANGE_ME`
 > 마커 값(dev 8개 / prod 10개)을 본인 계정 값으로 교체. 자세한 절차는

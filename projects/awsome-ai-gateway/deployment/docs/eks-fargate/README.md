@@ -2,6 +2,14 @@
 
 AWS EKS Fargate 환경에 LLM Gateway를 배포하는 전체 가이드입니다. **처음 배포하는 운영자가 이 문서만 보고 dev → prod 까지 완주 가능**하도록 작성되었습니다.
 
+> ⚠️ **기존 설치를 새 main 으로 갱신할 때** — 이 레포 기본값은 이제 EKS 1.36 / aws-load-balancer-controller
+> chart 3.5.0 / external-secrets chart 2.11.0 입니다. 이전 버전(예: EKS 1.31 · LBC 1.8.2 · ESO 0.10.4)으로 설치한
+> 클러스터는 새 main 을 apply 하기 **전에** 각 환경 루트의 `terraform.tfvars` 에 `eks_cluster_version`,
+> `eks_addon_versions`, `alb_controller_chart_version`, `external_secrets_chart_version`(필요하면
+> `external_secrets_serve_v1beta1`)을 **라이브 값으로 고정**하고 [09-upgrade-131-to-136.md](./09-upgrade-131-to-136.md)
+> 를 따르세요. 그대로 apply 하면 1.31 → 1.36 다중 점프로 `InvalidParameterException` 이 나고 애드온·LBC·ESO
+> 업그레이드가 한 plan 에 섞입니다. EKS 1.31 의 extended support 는 2026-11-26 에 끝납니다.
+
 ## 총 소요시간 (첫 배포)
 
 | 환경 | 소요 |
@@ -24,6 +32,8 @@ AWS EKS Fargate 환경에 LLM Gateway를 배포하는 전체 가이드입니다.
 | 05 | [smoke-test.md](./05-smoke-test.md) | 배포 후 E2E 검증 | 10분 |
 | 06 | [upgrade-rollback.md](./06-upgrade-rollback.md) | 버전 업데이트와 롤백 | 참고용 |
 | 07 | [cognito-onboarding.md](./07-cognito-onboarding.md) | Cognito 첫 admin 등록 + OIDC end-to-end 검증 | 30~45분 |
+| 08 | [post-deploy-tui.md](./08-post-deploy-tui.md) | 배포 후 TUI | 참고용 |
+| 09 | [upgrade-131-to-136.md](./09-upgrade-131-to-136.md) | EKS 1.31 → 1.36, LBC v3, ESO v1 업그레이드 (기존 설치) | 기존 설치 필수 |
 | — | [troubleshooting.md](./troubleshooting.md) | 공통 이슈 (OIDC 섹션 포함) | 참고용 |
 
 ## 이 가이드의 규칙

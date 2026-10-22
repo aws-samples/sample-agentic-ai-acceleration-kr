@@ -19,6 +19,34 @@ environment = "prod"
 aws_region  = "ap-northeast-2"
 
 # ------------------------------------------------------------------------------
+# 기존 클러스터: 새 main 을 받아 apply 하기 전에 라이브 버전으로 고정할 것
+# — docs/eks-fargate/09-upgrade-131-to-136.md 참고
+# ------------------------------------------------------------------------------
+# 신규 설치는 주석 그대로 둔다(기본값 = EKS 1.36 / LBC chart 3.5.0 / ESO chart 2.11.0).
+# 이전 기본값으로 만든 클러스터는 아래 주석을 풀어 **지금 라이브 값**으로 채우고, plan 에
+# 이 값들로 인한 변경이 없는지 먼저 확인한다. 고정 없이 새 기본값을 apply 하면 1.31→1.36
+# 다중 점프로 InvalidParameterException 이 나고 애드온·LBC·ESO 업그레이드가 한 plan 에 섞인다.
+# prod 의 고정은 dev 가 같은 단계를 통과한 뒤에 푼다.
+# 라이브 읽기:
+#   aws eks describe-cluster --name <cluster> --query cluster.version --output text
+#   aws eks describe-addon --cluster-name <cluster> --addon-name <coredns|kube-proxy|vpc-cni> \
+#     --query addon.addonVersion --output text
+#   helm list -A    # aws-load-balancer-controller / external-secrets 의 CHART 열
+# 고정은 라이브 값이 레포 기본값과 같아진 뒤에만 지운다.
+# ⚠️ deploy TUI 는 이 파일을 다시 쓰면서 eks_addon_versions 블록과 주석을 버린다 — 고정한
+#    동안에는 TUI 대신 terraform CLI 로 plan 을 확인하고 apply 한다.
+# 예: 옛 기본값 그대로인 클러스터
+# eks_cluster_version = "1.31"
+# eks_addon_versions = {
+#   coredns    = "v1.11.3-eksbuild.1"
+#   kube_proxy = "v1.29.7-eksbuild.2"
+#   vpc_cni    = "v1.18.3-eksbuild.1"
+# }
+# alb_controller_chart_version   = "1.8.2"
+# external_secrets_chart_version = "0.10.4"
+# external_secrets_serve_v1beta1 = false # 0.10.x → 2.x 전환 중에만 true (09 런북 C 단계)
+
+# ------------------------------------------------------------------------------
 # Cognito Hosted UI 도메인 — 전 세계 unique 해야 함
 # ------------------------------------------------------------------------------
 # 최종 형식: {project}-{env}-{cognito_domain_suffix}.auth.{region}.amazoncognito.com
