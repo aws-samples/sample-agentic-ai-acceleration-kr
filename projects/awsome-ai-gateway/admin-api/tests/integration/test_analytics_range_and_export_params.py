@@ -1,6 +1,6 @@
 # Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
-"""라우트 레벨: 날짜 범위와 export 필터가 **선언되어** 실제로 도달하는지.
+"""라우트 레벨: 날짜 범위 파라미터가 **선언되어** 실제로 도달하는지.
 
 서비스 유닛 테스트로는 이 결함을 잡을 수 없다 — 결함은 "라우트가 파라미터를 선언하지
 않아 FastAPI 가 조용히 버린다" 는 데 있고, 서비스는 인자를 받으면 잘 동작했다.
@@ -8,13 +8,8 @@
 """
 from __future__ import annotations
 
-import uuid
-
 import pytest
 from httpx import AsyncClient
-
-OTHER_TEAM_ID = uuid.UUID("00000000-0000-0000-0000-0000000000b2")
-
 
 async def test_analytics_honors_start_and_end_date(client: AsyncClient, admin_headers: dict):
     resp = await client.get(
@@ -83,40 +78,3 @@ async def test_cache_key_includes_the_date_range(
     assert month_key not in (first_key, second_key)
 
 
-async def test_export_declares_scope(client: AsyncClient, leader_headers: dict):
-    """리더가 남의 팀 scope 로 내보내면 403 — scope 가 드롭되면(예전) 자기 팀 CSV 200 이 된다."""
-    resp = await client.get(
-        f"/admin/analytics/export?format=csv&period=2026-09&group_by=team&scope=team:{OTHER_TEAM_ID}",
-        headers=leader_headers,
-    )
-    assert resp.status_code == 403, resp.text
-
-
-async def test_export_csv_header_follows_group_by(client: AsyncClient, admin_headers: dict):
-    resp = await client.get(
-        "/admin/analytics/export?format=csv&period=2026-09&group_by=user", headers=admin_headers
-    )
-    assert resp.status_code == 200, resp.text
-    assert resp.headers["content-type"].startswith("text/csv")
-    header = resp.text.splitlines()[0]
-    assert header.startswith("period,user,email")
-    assert "model" not in header
-
-
-async def test_export_filename_states_the_range(client: AsyncClient, admin_headers: dict):
-    resp = await client.get(
-        "/admin/analytics/export?format=csv&period=2026-09"
-        "&start_date=2026-09-01&end_date=2026-09-05",
-        headers=admin_headers,
-    )
-    assert resp.status_code == 200, resp.text
-    assert 'filename="analytics_2026-09-01_2026-09-05.csv"' in resp.headers["content-disposition"]
-
-
-async def test_export_month_filename_is_unchanged(client: AsyncClient, admin_headers: dict):
-    """대조군 — 범위가 없으면 파일명은 예전 그대로(월)다."""
-    resp = await client.get(
-        "/admin/analytics/export?format=csv&period=2026-09", headers=admin_headers
-    )
-    assert resp.status_code == 200, resp.text
-    assert 'filename="analytics_2026-09.csv"' in resp.headers["content-disposition"]

@@ -1,6 +1,6 @@
 # Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
-"""HTTP 경계: 두 analytics 라우트가 닫힌 scope 집합만 받는다.
+"""HTTP 경계: GET /admin/analytics 가 닫힌 scope 집합만 받는다.
 
   * pattern(`^(all|team:<36자>)$`)을 벗어난 값 → FastAPI 검증 실패 **422** (group_by Literal 과 같은 봉투).
   * pattern 은 통과하지만 UUID 가 아닌 값(`team:` + 대시 36개) → 서비스가 닫아 **400**.
@@ -14,7 +14,7 @@ from urllib.parse import quote
 import pytest
 from httpx import AsyncClient
 
-ROUTES = ["/admin/analytics", "/admin/analytics/export"]
+ROUTES = ["/admin/analytics"]
 PATTERN_REJECTS = ["xyz", "ALL", " all", "team:garbage", "team:not-a-uuid", "all%"]
 
 

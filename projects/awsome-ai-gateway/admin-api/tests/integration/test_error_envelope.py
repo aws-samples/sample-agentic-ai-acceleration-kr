@@ -56,20 +56,6 @@ async def test_422_is_normalized_to_the_error_envelope(client: AsyncClient, admi
 
 
 @pytest.mark.asyncio
-async def test_unsupported_export_format_is_422_not_a_silent_json_fallback(
-    client: AsyncClient, admin_headers
-):
-    """format=xlsx 처럼 미지원 값은 거부돼야 한다 — 예전엔 조용히 JSON 을 반환했다."""
-    res = await client.get(
-        "/admin/analytics/export",
-        params={"period": "2026-09", "format": "xlsx"},
-        headers=admin_headers,
-    )
-    assert res.status_code == 422, res.text
-    assert "format" in res.json()["error"]["message"]
-
-
-@pytest.mark.asyncio
 async def test_unhandled_exception_returns_json_not_text_plain(test_app: FastAPI):
     """최후의 그물: 미처리 예외도 JSON 봉투 + request_id 로 나가야 한다."""
 

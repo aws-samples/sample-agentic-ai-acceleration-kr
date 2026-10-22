@@ -130,10 +130,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-gateway}:${POSTGRES_PASSWORD:-gateway_dev_password}@postgres:5432/${POSTGRES_DB:-gateway}
       REDIS_URL: redis://redis:6379/0
-      CLI_DIST_DIR: /app/cli-dist
       DEV_LOGIN_ENABLED: ${DEV_LOGIN_ENABLED:-true}
-    volumes:
-      - ./gateway-cli/dist:/app/cli-dist:ro
     networks: [control-plane, shared]
     ports:
       - "8080:8080"

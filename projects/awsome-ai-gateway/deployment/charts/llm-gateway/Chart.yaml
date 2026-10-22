@@ -4,7 +4,7 @@ apiVersion: v2
 name: llm-gateway
 description: |
   LLM Gateway — <Customer> 통합 LLM 게이트웨이. Bedrock(Claude)과 사내 오픈모델(vLLM/TGI)을
-  하나의 API로 프록시하며 예산/Rate Limit/ROI 분석을 제공합니다. EKS Fargate
+  하나의 API로 프록시하며 예산/Rate Limit/사용량 집계를 제공합니다. EKS Fargate
   K8s를 동일 chart로 지원합니다.
 type: application
 

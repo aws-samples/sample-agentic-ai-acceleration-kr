@@ -162,3 +162,23 @@ describe('middleware — session expiry', () => {
     expect(res.status).toBe(200);
   });
 });
+
+describe('middleware — removed screens are not public', () => {
+  // /analytics 와 /cli 화면은 제거됐다. 예전 공개 분기 `startsWith('/cli')` 는 접두사만 봐서
+  // `/clients` 같은 경로까지 무인증으로 통과시켰다 — 남은 소비자가 없으니 일반 경로처럼 막는다.
+  it.each(['/cli', '/cli/download/linux/amd64', '/clients', '/analytics', '/analytics/models'])(
+    '%s without a cookie → login',
+    async (path) => {
+      const res = await middleware(requestWith(undefined, path));
+      expectSameOriginRedirect(res, '/api/auth/login');
+    },
+  );
+
+  it.each(['/cli', '/analytics', '/analytics/models'])(
+    '%s with a live ADMIN token → /403 (권한표 미등재 = default-deny)',
+    async (path) => {
+      const res = await middleware(requestWith(tokenWithExp(3600), path));
+      expectSameOriginRedirect(res, '/403');
+    },
+  );
+});

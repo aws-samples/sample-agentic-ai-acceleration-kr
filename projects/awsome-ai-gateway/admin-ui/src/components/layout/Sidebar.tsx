@@ -9,9 +9,7 @@ import { useTranslations } from 'next-intl';
 import {
   Activity,
   AppWindow,
-  BarChart3,
   BrainCircuit,
-  Download,
   Gauge,
   KeyRound,
   LayoutDashboard,
@@ -90,16 +88,6 @@ const NAV_ITEMS: NavItemDef[] = [
     icon: <Activity size={18} />,
     allowedRoles: [UserRoleConst.ADMIN],
   },
-  // ⚠️ analytics / cli 는 페이지·권한표(PAGE_PERMISSIONS)·번역키(nav.analytics, nav.cli)가
-  //    모두 있는데 여기 항목만 없어서, URL 을 직접 입력하지 않으면 도달할 수 없는
-  //    화면이었다(사이드바가 유일한 내비게이션이다). allowedRoles 는 PAGE_PERMISSIONS 와
-  //    일치시킨다 — 어긋나면 메뉴는 보이는데 눌러서 /403 으로 튕긴다.
-  {
-    key: 'analytics',
-    href: '/analytics',
-    icon: <BarChart3 size={18} />,
-    allowedRoles: [UserRoleConst.ADMIN, UserRoleConst.TEAM_LEADER],
-  },
   {
     key: 'chat',
     href: '/chat',
@@ -110,12 +98,6 @@ const NAV_ITEMS: NavItemDef[] = [
     // 그러면 메뉴는 보이지만 페이지의 모든 호출이 403 이 되는 죽은 화면이 된다.
     // 권한표 쪽을 백엔드에 맞춰 좁히는 것이 맞다.
     allowedRoles: [UserRoleConst.ADMIN],
-  },
-  {
-    key: 'cli',
-    href: '/cli',
-    icon: <Download size={18} />,
-    allowedRoles: [UserRoleConst.ADMIN, UserRoleConst.TEAM_LEADER],
   },
   {
     key: 'my',

@@ -395,29 +395,6 @@ async def test_month_mode_by_user_is_unchanged(session):
     assert _ours(resp.by_user)["range-seed@example.com"].cost_usd == Decimal("164.00")
 
 
-async def test_team_export_csv_follows_the_range_and_axis(session):
-    import csv
-    import io
-
-    from app.services.analytics_service import AnalyticsService
-
-    content, ctype = await AnalyticsService().export_analytics(
-        session,
-        format="csv",
-        period=PERIOD,
-        group_by="team",
-        start_date="2026-09-01",
-        end_date="2026-09-05",
-        actor=_admin(),
-    )
-    assert ctype == "text/csv"
-    rows = list(csv.reader(io.StringIO(content)))
-    assert rows[0] == ["period", "team", "team_id", "cost_usd", "active_users"]
-    got = {r[2]: (r[0], Decimal(r[3])) for r in rows[1:]}
-    assert got[str(TEAM_B_ID)] == ("2026-09-01~2026-09-05", Decimal("8"))
-    assert got[str(SEED_TEAM_ID)] == ("2026-09-01~2026-09-05", Decimal("3"))
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. rate-limit 트리 / 실시간 사용량 / 오버라이드 제거
 # ─────────────────────────────────────────────────────────────────────────────
@@ -928,12 +905,10 @@ async def test_leader_malformed_scope_never_reaches_org_wide_data(session, scope
     svc = AnalyticsService()
     with pytest.raises(ValidationError):
         await svc.get_analytics(session, period=PERIOD, group_by="user", scope=scope, actor=leader)
-    with pytest.raises(ValidationError):
-        await svc.export_analytics(session, format="csv", period=PERIOD, group_by="user", scope=scope, actor=leader)
 
 
 async def test_leader_all_is_scoped_to_the_own_team(session):
-    """대조군 — 'all' 은 TEAM_LEADER 에게 자기 팀이다: 다른 팀(TEAM_B) 사용자는 화면에도 CSV 에도 없다."""
+    """대조군 — 'all' 은 TEAM_LEADER 에게 자기 팀이다: 다른 팀(TEAM_B) 사용자는 응답에 없다."""
     from app.core.auth import CurrentUser
     from app.models.auth import UserRole
     from app.services.analytics_service import AnalyticsService
@@ -945,10 +920,6 @@ async def test_leader_all_is_scoped_to_the_own_team(session):
     assert "range-b@example.com" not in emails, "다른 팀 사용자가 리더 화면에 나왔다"
     assert "range-a@example.com" in emails
     assert resp.cost_summary.total_cost_usd == Decimal("71.00")  # 시드 팀만: 1+2+4+64 (TEAM_B 의 8 제외)
-    csv_body, _ = await svc.export_analytics(
-        session, format="csv", period=PERIOD, group_by="user", scope="all", actor=leader
-    )
-    assert "range-b@example.com" not in csv_body
 
 
 # ─────────────────────────────────────────────────────────────────────────────

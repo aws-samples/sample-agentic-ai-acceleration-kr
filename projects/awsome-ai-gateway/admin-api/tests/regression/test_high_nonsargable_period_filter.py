@@ -258,7 +258,7 @@ def test_malformed_period_raises_validation_error_not_500(bad):
     없애려던 "조용한 거짓말"이 형식 검증의 빈틈으로 되살아난 것이다. 자리수는
     값의 범위가 아니라 형식 불변식이라, 정규식 없이는 표현할 수 없다.
 
-    admin-ui 는 period.ts 의 resolveMonth() 가 항상 'YYYY-MM' 으로 환산하므로 정상
+    admin-ui(대시보드)는 데이터가 있는 'YYYY-MM' 월만 넘기므로 정상
     경로는 영향 없음. 이 테스트는 API 직접 호출/외부 통합을 지킨다.
     """
     from app.core.exceptions import ValidationError
@@ -279,7 +279,7 @@ def test_malformed_period_raises_validation_error_not_500(bad):
 @pytest.mark.unit
 def test_productivity_and_git_bin_by_kst_like_cost():
     """productivity/git 지표가 비용과 같은 KST 창을 쓰는지."""
-    for rel in ("routers/productivity.py", "scheduler/roi_aggregator.py"):
+    for rel in ("scheduler/roi_aggregator.py",):
         src = (_SRC / rel).read_text()
         assert "kst_period_range_filter" in src, (
             f"{rel}: 월 binning 이 KST 가 아님 — ROI 분자/분모가 다른 달을 본다"
@@ -445,9 +445,7 @@ def test_all_period_defaults_go_through_the_single_helper():
     expected = {
         "routers/dashboard.py",
         "routers/my.py",
-        "routers/analytics.py",
         "routers/budgets.py",
-        "routers/productivity.py",
         # 쓰는 쪽도 같은 헬퍼를 써야 한다 — 읽기/쓰기 월 정의가 갈리면 월초 9시간
         # 동안 조회 대상 행이 아예 생성되지 않는다(위 테스트 주석).
         "scheduler/main.py",
