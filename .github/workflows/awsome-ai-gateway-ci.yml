@@ -266,6 +266,7 @@ jobs:
             tests/regression/test_high_rate_limit_invalidate_after_commit_real.py \
             tests/regression/test_high_my_budget_gateway_parity_real.py \
             tests/regression/test_high_seed_spent_total_real.py \
+            tests/regression/test_high_db_pool_pre_ping_real.py \
             > /tmp/proof.txt 2>&1
           status=$?
           tail -40 /tmp/proof.txt
@@ -274,7 +275,7 @@ jobs:
           # ⚠️ 하한만 본다. 정확한 통과 수는 DB 에 쌓인 데이터에 따라 달라진다 — 일부
           #    테스트는 대상 테이블이 비어 있으면 스스로 skip 한다(플랜 어서션 2건 — 빈 usage_logs
           #    에서 스스로 skip 하는 nonsargable 플랜 어서션). 로컬 실측(fresh init SQL + alembic
-          #    head, 실 Redis — 이 잡과 같은 레시피): 290 passed / 2 skipped (17 files). 여기에는
+          #    head, 실 Redis — 이 잡과 같은 레시피): 293 passed / 2 skipped (18 files). 여기에는
           #    AWS 자동연동 real-PG, 0044 계정 레지스트리 트리거·동시성, 계정 API, init SQL 재실행 락,
           #    커밋 뒤 무효화·실시간 사용량·내 예산 게이트웨이 대조·seed_spent 총액이 들어 있다.
           #    REDIS_PROOF_URL 만 빠지면 266 passed / 10 skipped / 17 errors 다 — Redis 를 쓰는
@@ -283,8 +284,8 @@ jobs:
           #    여기서 잡힌다. 예전 하한 95 는 185건 시절에도 절반 가까이 skip 돼야 걸렸다.
           passed=$(grep -oE "[0-9]+ passed" /tmp/proof.txt | tail -1 | grep -oE "[0-9]+" || echo 0)
           echo "passed=${passed}"
-          if [ "${passed:-0}" -lt 281 ]; then
-            echo "::error::통과 수가 ${passed} 건뿐이다(하한 281). PROOF_DSN/REDIS_PROOF_URL 이 안 걸려 일부가 skip 된 것으로 보인다."
+          if [ "${passed:-0}" -lt 283 ]; then
+            echo "::error::통과 수가 ${passed} 건뿐이다(하한 283). PROOF_DSN/REDIS_PROOF_URL 이 안 걸려 일부가 skip 된 것으로 보인다."
             exit 1
           fi
 
