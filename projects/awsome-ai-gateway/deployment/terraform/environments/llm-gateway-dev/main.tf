@@ -42,7 +42,8 @@ module "eks" {
   project     = var.project
   environment = var.environment
   # 두 값은 minor 홉마다 **함께** 움직인다. 순서/기한은 variables.tf 의
-  # eks_cluster_version · eks_addon_versions 주석 참고(현재 1.36 = 라이브).
+  # eks_cluster_version · eks_addon_versions 주석 참고(기본값 1.36, 기존 클러스터는 tfvars 로
+  # 라이브 값을 고정).
   cluster_version     = var.eks_cluster_version
   addon_versions      = var.eks_addon_versions
   vpc_id              = module.vpc.vpc_id
@@ -139,10 +140,12 @@ module "alb_controller" {
   vpc_id            = module.vpc.vpc_id
   aws_region        = var.aws_region
 
-  # chart 1.8.2 가 깔린 클러스터를 모듈 기본값(3.5.0)으로 올릴 때는 v3 CRD 를 먼저 수동
-  # apply 한다(helm 은 chart 의 crds/ 를 업그레이드하지 않는다). 신규 설치는 해당 없음.
+  # 기본값 3.5.0(variables.tf 의 alb_controller_chart_version). chart 1.8.2 가 깔린 기존
+  # 클러스터는 tfvars 로 라이브 값을 고정해 두고, 올릴 때는 v3 CRD 를 먼저 수동 apply 한다
+  # (helm 은 chart 의 crds/ 를 업그레이드하지 않는다). 신규 설치는 해당 없음.
   # 근거·절차: modules/alb-controller/variables.tf 의 chart_version 주석,
   # docs/eks-fargate/09-upgrade-131-to-136.md
+  chart_version = var.alb_controller_chart_version
 
   tags = var.tags
 
@@ -166,9 +169,13 @@ module "external_secrets" {
   irsa_role_arn = module.irsa.external_secrets_role_arn
   aws_region    = var.aws_region
 
-  # ESO 2.x 는 external-secrets.io/v1 만 serve 하고, 모듈이 webhook·cert-controller 를 끈다.
-  # 0.10.x 가 깔린 클러스터를 올리는 동안에만 `serve_v1beta1 = true` 를 여기에 잠시 넣는다
-  # (modules/external-secrets/variables.tf 의 serve_v1beta1 설명, 09 런북).
+  # 기본값 2.11.0(variables.tf 의 external_secrets_chart_version)은 external-secrets.io/v1 만
+  # serve 하고, 모듈은 chart major >= 1 일 때만 webhook·cert-controller 를 끈다 — 0.10.x 로
+  # 고정한 클러스터는 기존 동작 그대로다. 0.10.x 에서 올리는 동안에만 tfvars 에
+  # `external_secrets_serve_v1beta1 = true` 를 잠시 둔다
+  # (modules/external-secrets/variables.tf 의 serve_v1beta1 설명, 09 런북 C 단계).
+  chart_version = var.external_secrets_chart_version
+  serve_v1beta1 = var.external_secrets_serve_v1beta1
 
   tags = var.tags
   # ALB Controller 의 webhook (mutating) 이 ESO Service 생성 시 호출되므로

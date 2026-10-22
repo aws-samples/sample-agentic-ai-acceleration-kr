@@ -131,7 +131,8 @@ no matches for kind "ClusterSecretStore" in version "external-secrets.io/v1beta1
 
 ⚠️ **ESO 1.x/2.x 에서는 같은 메시지의 원인이 다르다** — `v1beta1` 이 아예 serve 되지 않는다
 (이 레포 기본값 2.11.0 은 `crds.unsafeServeV1Beta1=false`). 매니페스트를 `external-secrets.io/v1` 로
-쓴다. `install-eks.sh` 와 llm-gateway 차트는 이미 v1 을 쓴다(차트는 클러스터가 v1 을 serve 할 때).
+쓴다. `install-eks.sh` 의 ClusterSecretStore 와 llm-gateway 차트의 ExternalSecret 은 클러스터가
+`external-secrets.io/v1` 을 serve 하면 v1, 아니면 v1beta1 을 쓴다.
 확인: `kubectl api-versions | grep external-secrets.io`.
 
 ---
@@ -225,32 +226,30 @@ kubelet skew 가 ERROR insight 로 떠서 롤백이 막히므로, 롤백하려�
 
 **왜 1.30이 먼저 생성됐나**: 과거 apply 때 변수를 비웠거나, EKS 모듈이 자동으로 더 최신 버전을 선택했거나, 이후 AWS auto-upgrade 가 발생했을 수 있음.
 
-**해결**: 기존 버전 이상으로 맞춤:
+**해결**: 선언값을 라이브 minor 와 같게 맞춘다. 레포 기본값을 고치지 말고 환경 루트의 `terraform.tfvars` 에 고정한다:
 ```hcl
-# deployment/terraform/environments/{dev,prod}/variables.tf
-variable "eks_cluster_version" {
-  type     = string
-  default  = "1.36"   # 라이브와 동일하게. 라이브보다 낮추지 말 것
-  nullable = false
-}
+# deployment/terraform/environments/llm-gateway-{dev,prod}/terraform.tfvars
+eks_cluster_version = "1.36"   # describe-cluster 의 라이브 minor 와 동일하게. 라이브보다 낮추지 말 것
 ```
 
 **확인** (선언값을 정하기 전에 **먼저 라이브를 읽어라**):
 ```bash
 aws eks describe-cluster --name llm-gateway-dev \
   --query 'cluster.version' --output text --region "$AWS_REGION"
-# → 1.36
+# → 예: 1.36
 ```
 
-우리 리포의 현재 기본값은 dev·prod 모두 **`1.36`** = 라이브(2026-10-22 실측)와 일치.
+이 레포의 현재 기본값은 dev·prod 모두 **`1.36`** 이다(신규 설치용).
 옛 기본값(1.31)으로 만든 클러스터는 tfvars 로 지금 버전을 고정한 뒤 한 칸씩 올린다
 ([09-upgrade-131-to-136.md](./09-upgrade-131-to-136.md)) — 기본값을 그대로 apply 하면
 1.31→1.36 다중 점프라 같은 InvalidParameterException 으로 멈춘다.
 
 ⚠️ **이 사고는 재발했다.** 2026-09-04 감사에서 커밋된 브랜치의 dev·prod `eks_cluster_version`
 기본값이 `"1.30"` 인데 라이브가 `1.31` 인 상태가 발견됐다(그대로 apply 하면 prod 까지 위 에러로
-스택이 웨지되는 부비트랩). 그래서 이제 두 환경 variables.tf 에 `>= 31` **validation** 을 걸어
-다운그레이드 커밋 자체를 막는다. 버전을 만질 때 이 validation 을 풀지 말 것.
+스택이 웨지되는 부비트랩). 그래서 두 환경 variables.tf 에 `>= 31` **validation** 을 걸어 두었다.
+단 이 검사는 **형식과 하한(1.31)만** 본다 — 라이브보다 낮은 값(예: 1.36 클러스터에 1.35)은 막지 못하고
+apply 의 위 에러로만 드러난다. 그래서 값을 바꾸기 전에 위 명령으로 라이브를 먼저 읽는다.
+버전을 만질 때 이 validation 을 풀지 말 것.
 
 ---
 
@@ -644,10 +643,31 @@ EOF
 검증 webhook 이 꺼진 상태라도 ClusterSecretStore 객체 자체는 정상 동작 (syncing 에 영향 없음). security 측면에서는 webhook 이 안정화된 후 `failurePolicy=Fail` 로 복귀 권장.
 
 **근본 해결 옵션**:
-1. ESO 재설치: `terraform apply -replace='module.external_secrets.helm_release.external_secrets'`
-2. ESO 버전 업그레이드: 이 레포 기본값은 이제 2.11.0 이고 모듈이 webhook·cert-controller 를 끈다
-   (`modules/external-secrets/main.tf`). 0.10.x 에서 올리는 절차는 [09-upgrade-131-to-136.md](./09-upgrade-131-to-136.md)
+1. 인증서 재발급 (제자리, 아무것도 지우지 않음): cert-controller → webhook 순으로 재시작하고, 파드 Ready 가
+   아니라 **실제 admission 요청**으로 판정한다.
+   ```bash
+   kubectl -n external-secrets rollout restart deploy/external-secrets-cert-controller
+   kubectl -n external-secrets rollout status  deploy/external-secrets-cert-controller --timeout=180s
+   kubectl -n external-secrets rollout restart deploy/external-secrets-webhook
+   kubectl -n external-secrets rollout status  deploy/external-secrets-webhook --timeout=180s
+   # 판정: UPDATE 도 검증 webhook 을 탄다 — 에러 없이 끝나야 정상
+   kubectl annotate clustersecretstore aws-secrets-manager eso-webhook-probe="$(date +%s)" --overwrite
+   ```
+   이 판정은 VWC 가 있고 `failurePolicy` 가 `Fail` 일 때만 의미가 있다(위 "빠른 해결" 로 `Ignore` 가 됐거나
+   `install-eks.sh` 가 VWC 를 지웠다면 TLS 가 깨져 있어도 통과한다). 먼저
+   `kubectl get validatingwebhookconfiguration secretstore-validate -o jsonpath='{.webhooks[*].failurePolicy}'` 로 확인한다.
+2. ESO 버전 업그레이드: 이 레포 기본값은 이제 2.11.0 이고, 모듈은 chart major >= 1 일 때 webhook·cert-controller 를
+   끈다(`modules/external-secrets/main.tf`). 0.10.x 에서 올리는 절차는 [09-upgrade-131-to-136.md](./09-upgrade-131-to-136.md) C 단계
 3. cert-manager 통합 활성화: values 에 `webhook.certManager.enabled=true`
+
+> ⚠️ **`terraform apply -replace='module.external_secrets.helm_release.external_secrets'` 로 "재설치" 하지 말 것.**
+> replace 는 helm uninstall → install 이다. 이 chart 는 CRD 를 `templates/crds/` 로 helm 이 직접 관리하고
+> (`installCRDs=true`, `helm.sh/resource-policy: keep` 없음) uninstall 이 ESO CRD 를 지운다. CRD 가 지워지면
+> 그 종류의 객체 — 모든 ExternalSecret · SecretStore · ClusterSecretStore · ClusterExternalSecret — 가 함께
+> 지워지고, ExternalSecret 이 소유한 K8s Secret(`creationPolicy: Owner`, llm-gateway 차트 기본값)까지 가비지
+> 컬렉션된다. 그 뒤 재시작되는 앱 파드는 시크릿을 찾지 못한다. 위 1(재시작) 또는 2(업그레이드)로 해결한다.
+> release 상태 자체가 꼬였다면 `helm -n external-secrets history external-secrets` 로 확인하고 terraform
+> plan/apply(제자리 upgrade)로 맞춘다 — uninstall 을 거치는 경로는 쓰지 않는다.
 
 **우리 리포 대응**: `install-eks.sh` 의 `ensure_cluster_secret_store()` 가 webhook 호출 실패 시 자동으로 `failurePolicy=Ignore` 로 완화 후 재시도 (2026-04-23 이후 버전). 추가로 **`helm install` 직전**에도 ExternalSecret/SecretStore validating webhook 을 선제적으로 비활성 (2026-04-24 이후) — 아래 섹션 참조.
 
@@ -690,7 +710,7 @@ helm -n "$NAMESPACE" uninstall llm-gateway --no-hooks 2>&1 || true
 
 **우리 리포 대응 (2026-04-24)**: `install-eks.sh` 가 helm install 직전에 `pre_install_disable_es_webhooks()` 를 호출해 두 webhook 을 선제적으로 삭제 — 매 배포마다 재발하는 이슈를 자동 우회.
 
-**근본 해결**: 위 "ESO webhook TLS SAN 불일치" 섹션의 3가지 옵션 (ESO 재설치 / 버전 업그레이드 / cert-manager 통합) 중 선택.
+**근본 해결**: 위 "ESO webhook TLS SAN 불일치" 섹션의 3가지 옵션 (인증서 재발급 / 버전 업그레이드 / cert-manager 통합) 중 선택. `-replace` 로 ESO 를 재설치하는 경로는 CRD 와 함께 모든 ExternalSecret·소유 Secret 을 지우므로 쓰지 않는다(같은 섹션의 경고).
 
 ---
 

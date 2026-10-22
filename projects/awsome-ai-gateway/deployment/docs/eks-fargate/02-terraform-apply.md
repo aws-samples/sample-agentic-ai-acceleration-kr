@@ -320,7 +320,9 @@ kubectl get deployment -n external-secrets
 
 ✅ `external-secrets` 디플로이먼트 하나가 `READY 1/1`(dev) 또는 `2/2`(prod) 여야 함.
 `external-secrets-cert-controller` / `external-secrets-webhook` 은 **없는 게 정상**이다 —
-모듈이 둘 다 끈다(`modules/external-secrets/main.tf`, 이유는 [troubleshooting — ESO webhook TLS SAN 불일치](./troubleshooting.md#증상-eso-webhook-tls-san-불일치--clustersecretstore-생성-실패)).
+기본 chart(2.11.0)에서는 모듈이 둘 다 끈다(`modules/external-secrets/main.tf`, 이유는 [troubleshooting — ESO webhook TLS SAN 불일치](./troubleshooting.md#증상-eso-webhook-tls-san-불일치--clustersecretstore-생성-실패)).
+기존 클러스터가 `external_secrets_chart_version` 을 0.10.x 로 고정해 둔 동안에는 셋 다 그대로 있다
+(모듈은 chart major >= 1 일 때만 끈다 — [09](./09-upgrade-131-to-136.md) C 단계).
 
 > **ClusterSecretStore 는 이 단계에서 없는 게 정상**. `kubectl get clustersecretstore` → `No resources found` 가 맞음. Terraform + Helm 의 CRD chicken-and-egg 문제를 피하려고 `ClusterSecretStore` 생성은 `04-helm-install.md` 의 `install-eks.sh` 로 분리했습니다. 04 단계 실행 후 자동 생성됩니다.
 
@@ -333,7 +335,7 @@ kubectl get deployment -n external-secrets
 - [ ] Aurora `status: available`
 - [ ] `all_role_arns` 출력에 4개 ARN (gateway_proxy, admin_api, notification_worker, external_secrets)
 - [ ] `aws-load-balancer-controller` READY
-- [ ] `external-secrets` deployment READY (cert-controller·webhook 은 없음이 정상)
+- [ ] `external-secrets` deployment READY (기본 chart 2.11.0 에서는 cert-controller·webhook 은 없음이 정상)
 - [ ] **ClusterSecretStore 는 이 단계에서는 없음이 정상** (04 단계에서 생성됨)
 
 ---

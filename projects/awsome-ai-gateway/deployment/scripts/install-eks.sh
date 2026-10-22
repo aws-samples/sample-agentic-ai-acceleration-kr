@@ -180,9 +180,21 @@ ensure_cluster_secret_store() {
         return
     fi
 
-    info "ClusterSecretStore 생성"
+    # apiVersion 은 차트(llm-gateway.externalSecretsApiVersion)와 같은 규칙으로 고른다:
+    # 클러스터가 external-secrets.io/v1 을 serve 하면 v1(ESO 0.17+ — 1.x/2.x 는 v1 만),
+    # 아니면 v1beta1(ESO 0.10.x). 파이프 대신 herestring — `| grep -q` 가 먼저 닫으면
+    # kubectl 이 SIGPIPE 로 죽고 pipefail 때문에 "없음" 으로 오판된다(아래 STS 리전 주석 참고).
+    local api_versions eso_api_version
+    api_versions=$(kubectl api-versions 2>/dev/null || true)
+    if grep -qx 'external-secrets.io/v1' <<<"$api_versions"; then
+        eso_api_version="external-secrets.io/v1"
+    else
+        eso_api_version="external-secrets.io/v1beta1"
+    fi
+
+    info "ClusterSecretStore 생성 (${eso_api_version})"
     if ! kubectl apply -f - <<EOF 2>&1 | grep -v "failed calling webhook"
-apiVersion: external-secrets.io/v1
+apiVersion: ${eso_api_version}
 kind: ClusterSecretStore
 metadata:
   name: aws-secrets-manager
@@ -214,7 +226,7 @@ EOF
             fi
         done
         kubectl apply -f - <<EOF
-apiVersion: external-secrets.io/v1
+apiVersion: ${eso_api_version}
 kind: ClusterSecretStore
 metadata:
   name: aws-secrets-manager
