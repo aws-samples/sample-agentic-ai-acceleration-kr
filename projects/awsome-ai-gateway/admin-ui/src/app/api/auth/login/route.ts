@@ -38,7 +38,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { redirectRelative } from '@/lib/redirect';
 
 // 로그인 진입점 — 캐시/정적최적화 금지. 여기서 만든 state/PKCE 가 캐시되면 모든 사용자가
-// 같은 state·verifier 를 쓰게 되어 CSRF 보호가 무력화된다(cli-download/route.ts:21 과 같은 이유).
+// 같은 state·verifier 를 쓰게 되어 CSRF 보호가 무력화된다.
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 

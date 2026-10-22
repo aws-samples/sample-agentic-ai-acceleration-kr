@@ -39,7 +39,6 @@ BILLED_BUCKETS = {
 # 토큰을 합산하는 모듈들 (dashboard.py 는 기준 구현으로 함께 검사).
 TOKEN_SUM_MODULES = [
     "repositories/analytics_repository.py",
-    "routers/analytics.py",
     "routers/dashboard.py",
     "routers/my.py",
     "routers/monitoring.py",
@@ -108,35 +107,6 @@ def test_every_token_sum_covers_all_billed_buckets(rel: str):
         "토큰 합계가 과금 버킷을 누락했다(총 토큰 과소보고 / 단가 왜곡):\n  "
         + "\n  ".join(offenders)
     )
-
-
-@pytest.mark.unit
-def test_cost_per_1k_denominator_matches_the_cost_numerator():
-    """cost_per_1k_tokens 의 분모(total_tokens)가 4버킷을 모두 더해야 한다.
-
-    분자 total_cost_usd 는 캐시 비용까지 포함하므로, 분모에서 캐시를 빼면
-    캐시를 많이 쓰는 모델의 단가가 실제보다 부풀어 순위가 뒤집힌다.
-    """
-    tree = ast.parse((SRC / "routers" / "analytics.py").read_text())
-    targets = [
-        n
-        for n in ast.walk(tree)
-        if isinstance(n, ast.Assign)
-        and any(isinstance(t, ast.Name) and t.id == "total_tokens" for t in n.targets)
-    ]
-    assert targets, "routers/analytics.py 에 total_tokens 대입이 없다"
-    for node in targets:
-        # row.<bucket> 형태로 읽는다 — UsageLog.* 가 아니라 결과행 속성.
-        attrs = {
-            s.attr
-            for s in ast.walk(node.value)
-            if isinstance(s, ast.Attribute) and s.attr.endswith("_tokens")
-        }
-        missing = BILLED_BUCKETS - attrs
-        assert not missing, f"cost_per_1k 분모 누락={sorted(missing)} (분자는 캐시 포함 비용)"
-        assert "reasoning_tokens" not in attrs, (
-            "reasoning_tokens 는 output_tokens 에 이미 포함 — 더하면 이중계상"
-        )
 
 
 def _get_analytics_body() -> ast.AsyncFunctionDef:

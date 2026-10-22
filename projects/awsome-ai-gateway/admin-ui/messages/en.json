@@ -10,8 +10,6 @@
     "monitoring": "Monitoring",
     "chat": "BI Insight",
     "my": "My Usage",
-    "analytics": "Analytics",
-    "cli": "CLI Download",
     "docker": "Docker Status",
     "mainMenu": "Main menu"
   },
@@ -576,55 +574,6 @@
       "unassigned": "Unassigned",
       "hint": "↑↓ navigate · Enter select · Esc close"
     }
-  },
-  "analytics": {
-    "title": "Analytics",
-    "pageTitle": "Analytics (ROI Dashboard)",
-    "period": "Period",
-    "groupBy": "Group By",
-    "totalCost": "Total Cost",
-    "startDate": "Start Date",
-    "endDate": "End Date",
-    "rangeTooLong": "The date range can be at most {max} days (selected: {days} days).",
-    "thisMonth": "This month",
-    "lastMonth": "Last month",
-    "monthPicker": "Select a month",
-    "monthPickerPlaceholder": "Select period",
-    "customRange": "Custom range",
-    "costByModel": "Cost by Model",
-    "costByTeam": "Cost by Team",
-    "usageTrend": "Usage Trend",
-    "roi": "ROI Analysis",
-    "costPerLine": "Cost Per Line",
-    "costPerCommit": "Cost Per Commit",
-    "productivityGain": "Productivity Gain",
-    "roiRatio": "ROI Ratio",
-    "commits": "Commits",
-    "linesGenerated": "Lines Generated",
-    "activeDevelopers": "Active Developers",
-    "exportCsv": "Export CSV",
-    "exportJson": "Export JSON",
-    "periods": {
-      "7d": "Last 7 Days",
-      "30d": "Last 30 Days",
-      "90d": "Last 90 Days",
-      "custom": "Custom Range"
-    },
-    "groupByOptions": {
-      "model": "By Model",
-      "team": "By Team",
-      "user": "By User"
-    }
-  },
-  "cli": {
-    "title": "CLI Download",
-    "os": "Operating System",
-    "arch": "Architecture",
-    "version": "Version",
-    "fileSize": "File Size",
-    "checksum": "SHA256 Checksum",
-    "download": "Download",
-    "copyChecksum": "Copy Checksum"
   },
   "docker": {
     "title": "Docker Status",

@@ -49,20 +49,3 @@ export const OrgNodeType = {
   USER: 'USER',
 } as const;
 export type OrgNodeType = (typeof OrgNodeType)[keyof typeof OrgNodeType];
-
-// Analytics time period selector
-export const PeriodType = {
-  '7d': '7d',
-  '30d': '30d',
-  '90d': '90d',
-  custom: 'custom',
-} as const;
-export type PeriodType = (typeof PeriodType)[keyof typeof PeriodType];
-
-// Analytics group-by dimension
-export const GroupByType = {
-  model: 'model',
-  team: 'team',
-  user: 'user',
-} as const;
-export type GroupByType = (typeof GroupByType)[keyof typeof GroupByType];

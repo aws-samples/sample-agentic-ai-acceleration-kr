@@ -363,7 +363,6 @@ request headers
 | `GET /admin/dashboard/client-share` | `client` | usage_logs |
 | `GET /admin/dashboard/top-users` / `top-teams` | user / team | usage_logs |
 | `GET /admin/analytics` | model / team / user(`group_by`) | usage_logs |
-| `GET /admin/analytics/models` | `model_alias`, `(day, model_alias)` | usage_logs |
 | `GET /admin/monitoring/{overview,models,events,users}` | — / model / row / user(last-1h) | usage_logs |
 
 admin-ui(Next.js)는 server-only `adminAPI` 클라이언트(`src/lib/api-client.ts`, `ADMIN_API_URL`, cookie-forwarded admin_jwt) + `/api/*` 프록시 라우트로 fetch. 위젯은 SSR `initialData` 를 받는 client 컴포넌트, 필터(period/team/client)가 프록시 라우트로 refetch 를 트리거한다. 대시보드 차트는 **Chart.js**(`react-chartjs-2`), BI 챗 차트는 **recharts**.

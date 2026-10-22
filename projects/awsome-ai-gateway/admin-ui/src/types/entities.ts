@@ -3,10 +3,8 @@
 import type {
   AlertLevel,
   BudgetScope,
-  GroupByType,
   KeyStatus,
   OrgNodeType,
-  PeriodType,
   RateLimitScope,
   UserRole,
 } from './enums';
@@ -208,18 +206,6 @@ export interface OrgTreeNode {
   meta: OrgNodeMeta;
 }
 
-// ─── CLI Downloads ────────────────────────────────────────────────────────────
-
-export interface CLIDownloadItem {
-  os: string;
-  arch: string;
-  filename: string;
-  download_url: string;
-  version: string;
-  file_size_bytes: number;
-  checksum_sha256: string;
-}
-
 // ─── Dashboard KPIs ───────────────────────────────────────────────────────────
 
 export interface DashboardKPI {
@@ -227,61 +213,6 @@ export interface DashboardKPI {
   active_keys: number;
   active_models: number;
   budget_utilization_percent: number;
-}
-
-// ─── ROI / Analytics ─────────────────────────────────────────────────────────
-
-export interface ROIMetrics {
-  cost_per_line: number;
-  cost_per_commit: number;
-  productivity_gain_percent: number;
-  roi_ratio: number;
-}
-
-export interface TrendDataPoint {
-  date: string; // ISO 8601 date (YYYY-MM-DD)
-  cost_usd: number;
-}
-
-export interface ModelBreakdown {
-  model_alias: string;
-  cost_usd: number;
-  token_count: number;
-  request_count: number;
-}
-
-export interface TeamBreakdown {
-  team_id: string;
-  team_name: string;
-  cost_usd: number;
-  token_count: number;
-  request_count: number;
-}
-
-export interface CostSummary {
-  total_cost_usd: number;
-  period: PeriodType;
-  start_date: string; // ISO 8601
-  end_date: string; // ISO 8601
-  trend: TrendDataPoint[];
-  by_model: ModelBreakdown[];
-  by_team: TeamBreakdown[];
-}
-
-export interface ProductivitySummary {
-  period: PeriodType;
-  start_date: string;
-  end_date: string;
-  roi: ROIMetrics;
-  commits: number;
-  lines_generated: number;
-  active_developers: number;
-}
-
-export interface ROIAnalyticsResponse {
-  cost: CostSummary;
-  productivity: ProductivitySummary;
-  group_by: GroupByType;
 }
 
 // ─── Budget Allocation ────────────────────────────────────────────────────────

@@ -135,13 +135,13 @@ class ApiFormat(str, Enum):
 
 운영에 필요한 모든 관리 작업과 VK 발급을 담당합니다. 라우터는 책임별로 명확히 분리되어 있습니다.
 
-- **인증·CLI**: `POST /v1/auth/exchange`(OIDC id_token → Virtual Key 교환, §5.1), `POST /cli/auth/virtual-key`, `GET /cli/downloads`·`/cli/download/{os}/{arch}`(gateway-cli 바이너리 배포).
+- **인증·CLI**: `POST /v1/auth/exchange`(OIDC id_token → Virtual Key 교환, §5.1), `POST /cli/auth/virtual-key`.
 - **API Key 관리**: `GET /admin/keys`(VK 목록), `/admin/keys/count`, `DELETE /admin/keys/{id}`(키 해지).
 - **예산**: `PUT /admin/budgets/team/{id}`·`/user/{id}`(한도 설정), `GET /admin/budgets/summary`, `GET|PUT|DELETE /admin/budgets/{scope}/{id}/downgrade`(다운그레이드 정책 CRUD, §4.3에서 다룸).
 - **모델**: `GET /admin/models`, `POST /admin/models`(등록), `PUT /admin/models/{alias}`, `PUT /admin/models/{alias}/pricing`(단가 버전), `PATCH /admin/models/{alias}/status`(활성/비활성).
 - **Rate Limit**: `GET /admin/rate-limits/tree`, `PUT /admin/rate-limits/user/{id}`·`/team/{id}`·`/global/{model}`.
 - **사용자·팀·조직**: `POST /admin/teams`·`/departments`, `PUT /admin/teams/{id}/leader`, `PUT /admin/teams/{id}/allowed-models`(팀별 허용 모델, §5.3), `POST /admin/users/sync-cognito`(IdP 그룹 동기화), `GET /admin/users/tree`.
-- **분석·모니터링**: `/admin/analytics/*`(ROI·생산성), `GET /admin/monitoring/{overview,models,events,users}`(실시간 운영 현황), `/admin/dashboard/*`, `/admin/my/*`(개인 사용량).
+- **분석·모니터링**: `GET /admin/analytics`(대시보드 비용 추이), `GET /admin/monitoring/{overview,models,events,users}`(실시간 운영 현황), `/admin/dashboard/*`, `/admin/my/*`(개인 사용량).
 
 모든 `/admin/*` 핸들러는 `Depends(require_admin)` 또는 `require_admin_or_team_leader`로 Cognito JWT와 역할을 강제합니다. 경로 문자열을 보는 인증 미들웨어가 따로 없고 의존성 주입(DI)으로 핸들러에 직접 바인딩하는 구조라, §2에서 설명한 경로 불일치 공격면이 존재하지 않습니다.
 

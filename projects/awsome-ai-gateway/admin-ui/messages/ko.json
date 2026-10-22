@@ -10,8 +10,6 @@
     "monitoring": "모니터링",
     "chat": "BI Insight",
     "my": "내 사용량",
-    "analytics": "분석",
-    "cli": "CLI 다운로드",
     "docker": "Docker 상태",
     "mainMenu": "주요 메뉴"
   },
@@ -576,55 +574,6 @@
       "unassigned": "미배정",
       "hint": "↑↓ 이동 · Enter 선택 · Esc 닫기"
     }
-  },
-  "analytics": {
-    "title": "분석",
-    "pageTitle": "분석 (ROI 대시보드)",
-    "period": "기간",
-    "groupBy": "그룹화 기준",
-    "totalCost": "총 비용",
-    "startDate": "시작일",
-    "endDate": "종료일",
-    "rangeTooLong": "조회 기간은 최대 {max}일입니다 (선택: {days}일).",
-    "thisMonth": "이번 달",
-    "lastMonth": "지난 달",
-    "monthPicker": "기간 선택 (월)",
-    "monthPickerPlaceholder": "기간 선택",
-    "customRange": "직접 입력",
-    "costByModel": "모델별 비용",
-    "costByTeam": "팀별 비용",
-    "usageTrend": "사용량 추세",
-    "roi": "ROI 분석",
-    "costPerLine": "라인당 비용",
-    "costPerCommit": "커밋당 비용",
-    "productivityGain": "생산성 향상률",
-    "roiRatio": "ROI 비율",
-    "commits": "커밋 수",
-    "linesGenerated": "생성된 코드 라인",
-    "activeDevelopers": "활성 개발자",
-    "exportCsv": "CSV 내보내기",
-    "exportJson": "JSON 내보내기",
-    "periods": {
-      "7d": "최근 7일",
-      "30d": "최근 30일",
-      "90d": "최근 90일",
-      "custom": "사용자 지정"
-    },
-    "groupByOptions": {
-      "model": "모델별",
-      "team": "팀별",
-      "user": "사용자별"
-    }
-  },
-  "cli": {
-    "title": "CLI 다운로드",
-    "os": "운영체제",
-    "arch": "아키텍처",
-    "version": "버전",
-    "fileSize": "파일 크기",
-    "checksum": "SHA256 체크섬",
-    "download": "다운로드",
-    "copyChecksum": "체크섬 복사"
   },
   "docker": {
     "title": "Docker 상태",

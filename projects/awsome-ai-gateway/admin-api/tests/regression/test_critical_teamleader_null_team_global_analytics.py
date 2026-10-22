@@ -159,19 +159,6 @@ async def test_team_leader_without_a_team_is_refused_not_given_everything():
 
 
 @pytest.mark.asyncio
-async def test_csv_export_is_refused_too():
-    """CSV/JSON export 가 실제 유출 경로였다 — 같은 403 이어야 한다."""
-    session, seen = _recording_session()
-    svc = AnalyticsService()
-
-    with pytest.raises(ForbiddenError):
-        await svc.export_analytics(
-            session, format="csv", period="2026-09", group_by="user", actor=_leader(None)
-        )
-    assert not seen
-
-
-@pytest.mark.asyncio
 async def test_team_leader_with_a_team_is_still_scoped_to_it():
     """대조군 ① — 정상적인 TEAM_LEADER 를 막아 버리면 안 된다.
 

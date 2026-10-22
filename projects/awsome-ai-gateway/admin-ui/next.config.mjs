@@ -9,6 +9,16 @@ const nextConfig = {
   output: 'standalone',
   reactStrictMode: true,
   experimental: {},
+  // 제거된 화면(분석, CLI 다운로드)의 옛 북마크는 대시보드로 보낸다. 그대로 두면 middleware 의
+  // default-deny 에 걸려 '권한 없음(/403)' 으로 보여 권한 문제처럼 오해된다. 영구(308)가 아닌 307 —
+  // 브라우저가 캐시하지 않게.
+  async redirects() {
+    return ['/analytics', '/analytics/:path*', '/cli', '/cli/:path*'].map((source) => ({
+      source,
+      destination: '/',
+      permanent: false,
+    }));
+  },
   async headers() {
     return [
       {

@@ -7,14 +7,12 @@
 //   /keys        → API Keys     h1: t('keys.pageTitle')    ko="API Keys" (same in en)
 //   /models      → Model Mgmt   h1: t('models.title')      ko="모델 관리"
 //   /budgets     → Budgets      h1: t('budgets.title')     ko="예산 관리"
-//   /analytics   → Analytics    h1: t('analytics.pageTitle') ko="분석 (ROI 대시보드)"
 //   /users       → Users/Teams  h1: t('users.title')       ko="사용자/팀 관리"
 //   /monitoring  → Monitoring   h1: t('monitoring.title')  ko="실시간 모니터링"
 //   /rate-limits → Rate Limits  h1: t('rateLimits.title')  ko="Rate Limits" (same in en)
 //
-// Note: /chat, /my, /cli, /analytics/models routes exist but are not covered here —
-//   /chat requires active admin-chat-agent; /my is personal usage (role-scoped);
-//   /cli depends on release artifacts being seeded.
+// Note: /chat, /my routes exist but are not covered here —
+//   /chat requires active admin-chat-agent; /my is personal usage (role-scoped).
 //   /403 is an error page, not a main nav route.
 //
 // Error boundary detection: 기대 h1 이 보이는 것 + 에러 바운더리가 안 떴는지를 함께 본다.
@@ -31,7 +29,6 @@ const ROUTES = [
   { path: '/keys',        heading: 'API Keys',             level: 1 as const },
   { path: '/models',      heading: '모델 관리',             level: 1 as const },
   { path: '/budgets',     heading: '예산 관리',             level: 1 as const },
-  { path: '/analytics',   heading: '분석 (ROI 대시보드)',   level: 1 as const },
   { path: '/users',       heading: '사용자/팀 관리',        level: 1 as const },
   { path: '/monitoring',  heading: '실시간 모니터링',       level: 1 as const },
   { path: '/rate-limits', heading: 'Rate Limits',          level: 1 as const },

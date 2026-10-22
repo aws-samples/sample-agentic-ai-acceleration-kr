@@ -4,7 +4,7 @@
 
 [한국어 README](README.md)
 
-A unified LLM Gateway for coding agents (Claude Code / Codex / Cowork). Authenticates via OIDC, auto-issues Virtual Keys, and routes each client and model to the right backend (Bedrock native / Bedrock Mantle / the OpenAI-compatible bedrock-runtime endpoint) and AWS account. Provides per-team/user/app budget management, rate limiting, model access control, usage tracking (ROI), server-side web search, and a natural-language **AI BI Assistant** for querying operational data.
+A unified LLM Gateway for coding agents (Claude Code / Codex / Cowork). Authenticates via OIDC, auto-issues Virtual Keys, and routes each client and model to the right backend (Bedrock native / Bedrock Mantle / the OpenAI-compatible bedrock-runtime endpoint) and AWS account. Provides per-team/user/app budget management, rate limiting, model access control, usage tracking, server-side web search, and a natural-language **AI BI Assistant** for querying operational data.
 
 ---
 
@@ -192,7 +192,7 @@ AWSome AI Gateway uses **re-origination**. Inbound requests are deconstructed; o
 - **Resilience** — Readiness gate (`/health/ready`, 503 on degradation), invalid-VK fast rejection (no DB session opened), DB pool tuning (10s `pool_timeout` fast-fail), Redis circuit breaker with in-memory rate-limit fallback, response header leak prevention, security event detector with LRU OOM defense, cost stream spooling on Redis blip.
 - **Server-side Web Search (Architecture C)** — Gateway injects `web_search` tool, intercepts model `tool_use`, calls AgentCore managed WebSearch (MCP/SigV4). Zero client configuration — just ask and get searched answers. Supports both Anthropic/Responses formats.
 - **Claude Code Auto mode verdicts on Bedrock** — Forwards only the `anthropic-beta` values Bedrock accepts (`dangerous-tool-use` + `safeguards`, etc.) into the body's `anthropic_beta`, so Bedrock makes the Auto mode safety calls (no local classifier requests or billing notice). Verdicts survive web-search responses; the Anthropic-only advisor tool is stripped. List: `BEDROCK_FORWARD_BETAS` (blank = off) · test records and update checks: [`docs/beta-headers/`](docs/beta-headers/README.md) (Korean) · verify: `deployment/scripts/check-safeguards-passthrough.py`
-- **Admin UI (Next.js 14)** — Dashboard (KPI, cost trends, model/client share donuts, team/user ranking), user/team/model/budget/rate-limit management, real-time monitoring, ROI analysis, `/chat` BI assistant. Light/dark glass design.
+- **Admin UI (Next.js 14)** — Dashboard (KPI, cost trends, model/client share donuts, team/user ranking), user/team/model/budget/rate-limit management, real-time monitoring, `/chat` BI assistant. Light/dark glass design.
 - **AI BI Assistant (`/chat`)** — Natural language → validated SQL (text2SQL) → Aurora query → markdown table + recharts chart. Agents-as-tools orchestrator on AWS Strands + Bedrock AgentCore Runtime. Real-time token streaming + heartbeat.
 
 ---
@@ -292,7 +292,7 @@ Examples:
 |------|-------------|
 | `gateway-proxy/` | Data plane (FastAPI, VK auth + client identification + Bedrock/Mantle proxy) |
 | `admin-api/` | Control plane (model/team/budget/VK REST API + scheduler entrypoint) |
-| `admin-ui/` | Next.js 14 management UI (dashboard/monitoring/analysis + `/chat` BI) |
+| `admin-ui/` | Next.js 14 management UI (dashboard/monitoring + `/chat` BI) |
 | `admin-chat-agent/` | BI assistant — Strands agents-as-tools + AgentCore Runtime |
 | `cost-recorder-worker/` | Redis Stream → Aurora cost recorder |
 | `notification-worker/` | Budget threshold alert worker |

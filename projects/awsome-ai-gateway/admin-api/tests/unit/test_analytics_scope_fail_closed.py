@@ -68,16 +68,6 @@ async def test_malformed_scope_is_rejected_before_any_query(scope, role):
     repo.sum_usage_by_model.assert_not_awaited()
 
 
-async def test_export_rejects_a_malformed_scope_too():
-    session = _session()
-    with pytest.raises(ValidationError):
-        await AnalyticsService().export_analytics(
-            session, format="csv", period="2026-09", group_by="user", scope="xyz",
-            actor=_actor(UserRole.TEAM_LEADER),
-        )
-    session.execute.assert_not_awaited()
-
-
 async def test_leader_all_and_own_team_still_work_and_stay_scoped():
     """대조군 — 정상 값은 그대로 동작하고 TEAM_LEADER 는 자기 팀으로 좁혀진다."""
     for scope in ("all", f"team:{OWN_TEAM}"):

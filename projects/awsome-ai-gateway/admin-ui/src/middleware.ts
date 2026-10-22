@@ -86,7 +86,6 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
   // permission check, and bounces back to /403 → ERR_TOO_MANY_REDIRECTS.
   if (
     pathname.startsWith('/api/') ||
-    pathname.startsWith('/cli') ||
     pathname === '/403'
   ) {
     return response;

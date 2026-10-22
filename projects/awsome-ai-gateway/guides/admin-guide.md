@@ -52,7 +52,7 @@
 | 팀 예산 현황 조회 (GET /budgets/summary) | ✅ (본인 팀만) | ✅ (전체) |
 | 팀 예산 할당 (PUT /budgets/team/{id}/allocate) | ✅ | ✅ |
 | 다운그레이드 정책 조회 (GET /budgets/{scope}/{id}/downgrade) | ✅ (본인 팀만) | ✅ |
-| Analytics 조회/내보내기 | ✅ (본인 팀만) | ✅ (전체) |
+| 대시보드 비용 추이 조회 (`GET /admin/analytics`) | ✅ (본인 팀만) | ✅ (전체) |
 | 팀 예산 상한 변경 (PUT /budgets/team/{id}) | ❌ | ✅ |
 | Rate Limit 설정 | ❌ | ✅ |
 | 모델 관리 | ❌ | ✅ |
@@ -565,7 +565,7 @@ print(r.keys('budget:*'))
 
 ### 주 1회
 
-- [ ] Admin UI Analytics — 비용 추이 검토
+- [ ] Admin UI 대시보드 — 비용 추이 검토
 - [ ] 새로 자동 생성된 팀 확인 (budget 미설정 팀 → 활성화)
 - [ ] IDP 그룹과 DB 팀 일치 확인
 - [ ] 비활성 사용자 정리 (퇴사자)
@@ -574,7 +574,7 @@ print(r.keys('budget:*'))
 ### 월 1회
 
 - [ ] 전체 예산 vs 실사용 리뷰
-- [ ] 모델별 비용 효율 검토 (ROI)
+- [ ] 모델별 비용 효율 검토 — 대시보드 모델 점유율 + BI 어시스턴트(`/chat`)
 - [ ] Rate Limit 적정성 검토 (429 빈도)
 - [ ] 보안: 미사용 VK 정리, 이상 사용 패턴 확인
 - [ ] 시크릿 교체 주기 확인

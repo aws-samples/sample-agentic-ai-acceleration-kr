@@ -13,7 +13,7 @@
  *    **쿠키에 심긴 verifier 의 SHA-256** 인지 다시 계산해서 대조한다 — 그게 PKCE 의 전부다.
  *
  * ⚠️ node 환경이 필요하다: crypto.subtle / btoa / fetch 스텁을 쓴다(jsdom 기본값이면
- *    crypto.subtle 이 없다). cliDownloadProxy.test.ts 와 같은 지시자.
+ *    crypto.subtle 이 없다).
  */
 
 // @vitest-environment node

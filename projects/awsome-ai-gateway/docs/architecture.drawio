@@ -52,7 +52,7 @@
         <mxCell id="cp-lane" value="CONTROL PLANE — 관리 (admin-ui / admin-api)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;verticalAlign=top;fontStyle=1;fontSize=13;" vertex="1" parent="1">
           <mxGeometry x="880" y="70" width="780" height="430" as="geometry" />
         </mxCell>
-        <mxCell id="adminui" value="admin-ui (Next.js 14)\n대시보드·모니터링·분석·예산\n사용자/팀·모델·RateLimit·키\n/chat (BI) · Glass 디자인" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=11;" vertex="1" parent="1">
+        <mxCell id="adminui" value="admin-ui (Next.js 14)\n대시보드·모니터링·예산\n사용자/팀·모델·RateLimit·키\n/chat (BI) · Glass 디자인" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=11;" vertex="1" parent="1">
           <mxGeometry x="910" y="130" width="230" height="120" as="geometry" />
         </mxCell>
         <mxCell id="adminapi" value="admin-api (FastAPI)\nVK발급·CRUD(사용자/팀/모델/\n예산/RateLimit)·분석·ROI\nCognito JWT (ADMIN/TEAM_LEADER)\n/admin/chat/* (BI proxy, SigV4)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=11;" vertex="1" parent="1">

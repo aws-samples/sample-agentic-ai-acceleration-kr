@@ -88,7 +88,7 @@ def period_to_utc_range(period: str) -> tuple[datetime, datetime]:
     대시보드가 빈 화면으로 보일 뿐 원인을 알 수 없었다. 경계 계산을 파이썬으로 옮긴
     뒤로는 `int()` 가 그대로 터져 500 이 됐다(dev E2E 에서 실측). 둘 다 틀렸다 —
     조용한 거짓말과 스택트레이스 사이의 정답은 명시적 400 이다.
-    admin-ui 는 resolveMonth() 가 항상 'YYYY-MM' 으로 환산해 넘기므로(period.ts)
+    admin-ui(대시보드)는 데이터가 있는 'YYYY-MM' 월만 넘기므로
     정상 경로에는 영향이 없고, 이 검증은 API 를 직접 호출하는 경우에만 걸린다.
 
     ⚠️ **모양을 정규식으로 고정하는 이유**(prod E2E 실측). 과거 구현은
