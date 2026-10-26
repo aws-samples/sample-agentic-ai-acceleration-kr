@@ -25,7 +25,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 export interface InsightsSources {
   /** False when a month partition could not be read: totals are short. */
   usage: boolean;
-  /** True when the collector has written today's runtime quantities. */
+  /** True when the collector finished a pass in the last few intervals. */
   collector: boolean;
   /** True when a reconciliation snapshot exists in the window. */
   recon: boolean;
@@ -440,6 +440,11 @@ export interface ModelRow {
 
 export interface InsightsSummary extends WindowFields {
   sources: InsightsSources;
+  /**
+   * When the collector last finished a pass, and whether today has runtime
+   * items. A day nobody used has none, which is not a stopped collector.
+   */
+  collector?: { last_pass_at: string | null; today_runtime: boolean };
   totals: InsightsTotals;
   /** Ledger + collector figures, plus the bill. */
   cost: CostBlock;

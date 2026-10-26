@@ -8,11 +8,18 @@ from auth.sigv4 import sigv4_httpx_client_factory
 logger = logging.getLogger(__name__)
 
 
+SESSION_SCOPE_HEADER = "X-Agent-Session-Scope"
+
+
 def load_tools_from_mcp(gateway_endpoint, session_scope=None):
     """SigV4로 서명해 MCP 서버에서 툴을 로드한다.
 
-    ``session_scope``는 이 게이트웨이엔 인터셉터가 없어 무시된다(stateless 툴).
-    시그니처는 호출부 호환을 위해 남긴다.
+    ``session_scope``(서버가 thread_id 에서 만든 runtimeSessionId)는 모든 MCP 요청에
+    ``X-Agent-Session-Scope`` 헤더로 실린다. 내장 툴 게이트웨이의 인터셉터는 이 값을
+    검증된 호출자 신원 *아래에* 붙여 샌드박스 라벨을 만들므로, 실행 역할 하나로 모든
+    사용자를 부르는 runtime 이라도 대화마다 다른 Code Interpreter·Browser 세션에 닿는다.
+    헤더가 없으면 역할 하나에 샌드박스 하나가 되어 다른 사용자의 파일이 보였다
+    (도쿄 스택 실측, 2026-10-21). 인터셉터가 없는 게이트웨이는 헤더를 무시한다.
     """
     from strands.tools.mcp import MCPClient
 
@@ -26,6 +33,8 @@ def load_tools_from_mcp(gateway_endpoint, session_scope=None):
     client_kwargs = {"url": base if base.endswith("/mcp") else f"{base}/mcp"}
     if factory:
         client_kwargs["httpx_client_factory"] = factory
+    if session_scope:
+        client_kwargs["headers"] = {SESSION_SCOPE_HEADER: str(session_scope)}
 
     mcp_client = MCPClient(lambda: streamablehttp_client(**client_kwargs))
     mcp_client.__enter__()

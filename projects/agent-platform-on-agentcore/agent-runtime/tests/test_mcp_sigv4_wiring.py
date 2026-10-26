@@ -75,3 +75,24 @@ def test_load_tools_follows_pagination_cursor(monkeypatch):
 
     assert tools == ["a", "b", "c"]  # 두 페이지가 모두 합쳐진다
     assert calls == [None, "cursor-2"]  # 커서를 따라 두 번 호출한다
+
+
+@pytest.mark.parametrize("scope, expected", [("thread-abc-0000000000000000000000000", "thread-abc-0000000000000000000000000"), (None, None)])
+def test_load_tools_sends_session_scope_header(monkeypatch, scope, expected):
+    """runtime 은 모든 사용자를 실행 역할 하나로 부르므로, 내장 툴 게이트웨이의 인터셉터가
+    대화별 샌드박스를 나누려면 runtimeSessionId 가 헤더로 와야 한다. 헤더가 없을 때는
+    다른 사용자가 만든 Code Interpreter 파일이 보였다(도쿄 스택 실측, 2026-10-21)."""
+    import auth.access_token as at
+    from strands.tools.mcp import MCPClient
+
+    captured = {}
+    monkeypatch.setattr(MCPClient, "__init__", lambda self, f: captured.setdefault("factory", f) and None)
+    monkeypatch.setattr(MCPClient, "__enter__", lambda self: (_ for _ in ()).throw(RuntimeError("stop")))
+    monkeypatch.setattr(at, "sigv4_httpx_client_factory", lambda ep: None)
+    with pytest.raises(RuntimeError):
+        at.load_tools_from_mcp(f"{GW}/mcp", session_scope=scope)
+
+    http = {}
+    monkeypatch.setattr(at, "streamablehttp_client", lambda **kw: http.update(kw))
+    captured["factory"]()
+    assert (http.get("headers") or {}).get(at.SESSION_SCOPE_HEADER) == expected
