@@ -707,6 +707,21 @@ class CollectorService:
                 logger.warning("Repricing after reconciliation failed", exc_info=True)
         return summary
 
+    # The time of the last pass that finished. Day items alone cannot say the
+    # collector is alive: a day nobody used writes none (a missing series stays
+    # missing), and Insights read that as a stopped collector every idle morning.
+    _HEARTBEAT = ("COLLECTOR#heartbeat", "H")
+
+    def record_pass(self, now: datetime) -> None:
+        pk, sk = self._HEARTBEAT
+        self.repository.set_fields(pk, sk, {"last_pass_at": now.isoformat()})
+
+    def last_pass(self) -> Optional[str]:
+        """ISO time of the last finished pass, or None before the first one."""
+        pk, sk = self._HEARTBEAT
+        item = self.repository.get(pk, sk) or {}
+        return str(item["last_pass_at"]) if item.get("last_pass_at") else None
+
     def _acquire_lease(self, now: datetime) -> bool:
         """One collector per stack. A second server task sees a live lease and
         skips; a crashed holder's lease expires on its own."""
@@ -740,6 +755,10 @@ class CollectorService:
                 if self._acquire_lease(now):
                     report = await asyncio.to_thread(self.run_once, now)
                     logger.info("collector: %s", report)
+                    try:
+                        await asyncio.to_thread(self.record_pass, clock.now())
+                    except Exception:
+                        logger.warning("Collector heartbeat write failed", exc_info=True)
                     if self.reconciler is not None and (
                         reconciled_at is None or now - reconciled_at >= timedelta(hours=6)
                     ):

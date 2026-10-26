@@ -522,3 +522,38 @@ def test_a_runtime_shared_by_several_records_is_allocated_by_turns():
     # No runtime cost collected: absent, like the whole figure.
     assert rows["content_creator"]["allocated_runtime_micros"] is None
     assert rows["content_creator"]["allocated_cost_micros"] is None
+
+
+def _without_today_items(repo):
+    for key in [k for k in repo.items if k[0].startswith("RESOURCES#") and k[1].startswith(f"D#{TODAY}")]:
+        del repo.items[key]
+    return repo
+
+
+def _heartbeat(repo, at):
+    repo.items[("COLLECTOR#heartbeat", "H")] = {"pk": "COLLECTOR#heartbeat", "sk": "H", "last_pass_at": at.isoformat()}
+    return repo
+
+
+def test_a_day_nobody_used_is_not_a_stopped_collector():
+    # The 2026-10-22 Tokyo morning: the collector passed every five minutes, but
+    # no runtime ran yet, so today had no day item and the page said it stopped.
+    repo = _heartbeat(_without_today_items(repo_with_everything()), insights.clock.now() - timedelta(minutes=4))
+    wire(repo)
+    out = insights.summary(days=7, user=admin())
+    assert out["sources"]["collector"] is True
+    assert out["collector"]["today_runtime"] is False
+    assert out["collector"]["last_pass_at"]
+
+
+def test_a_stale_heartbeat_is_a_stopped_collector_even_with_today_items():
+    repo = _heartbeat(repo_with_everything(), insights.clock.now() - timedelta(hours=2))
+    wire(repo)
+    out = insights.summary(days=7, user=admin())
+    assert out["sources"]["collector"] is False
+    assert out["collector"]["today_runtime"] is True
+
+
+def test_without_a_heartbeat_today_items_still_decide():
+    wire(_without_today_items(repo_with_everything()))
+    assert insights.summary(days=7, user=admin())["sources"]["collector"] is False
