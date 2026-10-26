@@ -234,3 +234,14 @@ def test_agent_name_falls_back_to_the_runtime_id_for_retired_runtimes():
     assert names[ARN] == "bap_default"
     assert svc.agent_name_for(old, names) == "platform_ops"
     assert svc.agent_name_for("arn:aws:bedrock-agentcore:us-east-1:1:runtime/bap_default-FgHiJ67890", names) == "bap_default"
+
+
+def test_a_pass_leaves_a_heartbeat_the_dashboard_can_read():
+    from datetime import datetime, timezone
+
+    repo = Repo()
+    collector = CollectorService(repository=repo, cloudwatch=None, pricing=None, registry=None,
+                                 harness=None, region="us-east-1")
+    assert collector.last_pass() is None
+    collector.record_pass(datetime(2026, 10, 22, 1, 13, tzinfo=timezone.utc))
+    assert collector.last_pass() == "2026-10-22T01:13:00+00:00"
