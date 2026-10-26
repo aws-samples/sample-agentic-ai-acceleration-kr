@@ -14,6 +14,10 @@
 
 ![AWSome AI Gateway 아키텍처](docs/img/architecture-overview.png)
 
+**▶ 아키텍처 워크스루 (30초)** — SSO 로그인 → Virtual Key 발급 → 모델 호출 → Invocation log(CloudWatch Logs, 100 KB 넘는 본문은 S3) → AgentCore 순서로 요청이 지나는 길을 따라갑니다.
+
+[<img src="docs/video/architecture-walkthrough-kr.jpg" width="720" alt="아키텍처 워크스루 영상 (30초)">](docs/video/architecture-walkthrough-kr.mp4)
+
 인증·과금·거버넌스는 단일 게이트웨이에서 처리하되, 요청은 클라이언트(client) 종류에 따라 서로 다른 계정·백엔드로 분기합니다. 게이트웨이의 백엔드 라우팅은 코드가 아니라 `model.routing_profiles` 테이블 row로 데이터 드리븐하게 결정되며(`RoutingProfileLoader`가 Redis TTL 300s 캐시), 미등록/disabled인 client는 기본 Bedrock 경로로 폴백합니다.
 
 > 위 다이어그램: Seoul 리전 EKS Fargate에서 게이트웨이 전 서비스가 돌고, 요청은 앱(또는 모델)별 AWS 계정의
@@ -137,11 +141,17 @@ alias 를 해석하고(Redis 300s 캐시) `status='INACTIVE'` 로만 차단합�
 
 | 데모 | 링크 |
 |------|------|
+| AWSome AI Gateway — 홍보 영상 (48초) | [<img src="docs/video/awsome-ai-gateway-promo-kr.jpg" width="480" alt="홍보 영상">](docs/video/awsome-ai-gateway-promo-kr.mp4) |
+| AWSome AI Gateway — 아키텍처 워크스루 (30초) | [<img src="docs/video/architecture-walkthrough-kr.jpg" width="480" alt="아키텍처 워크스루">](docs/video/architecture-walkthrough-kr.mp4) |
 | AWSome AI Gateway — 개요 및 데모 ① | [![Demo 1](https://img.youtube.com/vi/vp-Zsb5BocI/0.jpg)](https://youtu.be/vp-Zsb5BocI) |
 | AWSome AI Gateway — 개요 및 데모 ② | [![Demo 2](https://img.youtube.com/vi/NDDsjHrkXMQ/0.jpg)](https://youtu.be/NDDsjHrkXMQ) |
 
+- 홍보 영상: [docs/video/awsome-ai-gateway-promo-kr.mp4](docs/video/awsome-ai-gateway-promo-kr.mp4)
+- 아키텍처 워크스루: [docs/video/architecture-walkthrough-kr.mp4](docs/video/architecture-walkthrough-kr.mp4)
 - 데모 ①: https://youtu.be/vp-Zsb5BocI
 - 데모 ②: https://youtu.be/NDDsjHrkXMQ
+
+> 홍보 영상 음악: Stomp Rap \| Adrenaline — Alex-Productions / Alex Cristoforetti, from [Pixabay](https://pixabay.com/music/introoutro-stomp-rap-adrenaline-133120/) (Pixabay Content License). 이 영상에 맞게 편집했습니다.
 
 ---
 

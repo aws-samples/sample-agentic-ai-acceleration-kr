@@ -12,6 +12,10 @@ A unified LLM Gateway for coding agents (Claude Code / Codex / Cowork). Authenti
 
 ![AWSome AI Gateway Architecture](docs/img/architecture-overview.png)
 
+**▶ Architecture walkthrough (30 s)** — follows a request from SSO sign-in → Virtual Key issuance → model invocation → invocation log (CloudWatch Logs; bodies over 100 KB go to S3) → AgentCore.
+
+[<img src="docs/video/architecture-walkthrough-en.jpg" width="720" alt="Architecture walkthrough video (30 s)">](docs/video/architecture-walkthrough-en.mp4)
+
 Authentication, billing, and governance happen at a single gateway. Requests are then routed to different AWS accounts/backends based on the client type. Routing is **data-driven** — determined by `routing_profiles` table rows (Redis-cached, TTL 300s), not code.
 
 > The diagram: every gateway service runs on EKS Fargate in the Seoul region, and requests fan out to Bedrock in
@@ -136,8 +140,12 @@ thinking exceeds 60s. Tune via `gatewayProxy.streaming.{idleTimeout,disconnectDr
 
 | Demo | Link |
 |------|------|
+| AWSome AI Gateway — Promo video (48 s) | [<img src="docs/video/awsome-ai-gateway-promo-en.jpg" width="480" alt="Promo video">](docs/video/awsome-ai-gateway-promo-en.mp4) |
+| AWSome AI Gateway — Architecture walkthrough (30 s) | [<img src="docs/video/architecture-walkthrough-en.jpg" width="480" alt="Architecture walkthrough">](docs/video/architecture-walkthrough-en.mp4) |
 | AWSome AI Gateway — Overview & Demo ① | [![Demo 1](https://img.youtube.com/vi/vp-Zsb5BocI/0.jpg)](https://youtu.be/vp-Zsb5BocI) |
 | AWSome AI Gateway — Overview & Demo ② | [![Demo 2](https://img.youtube.com/vi/NDDsjHrkXMQ/0.jpg)](https://youtu.be/NDDsjHrkXMQ) |
+
+> Promo video music: Stomp Rap \| Adrenaline — Alex-Productions / Alex Cristoforetti, from [Pixabay](https://pixabay.com/music/introoutro-stomp-rap-adrenaline-133120/) (Pixabay Content License). Edited for this video.
 
 ---
 
