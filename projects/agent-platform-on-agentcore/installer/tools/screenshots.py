@@ -72,11 +72,9 @@ OUTPUTS = {
 }
 
 TS_PENDING = (
-    "Transaction Search 를 켜면 trace 패널이 작동합니다.\n\n"
-    "계정 ID 를 확인한 후 아래 명령을 붙여넣으세요:\n\n"
-    "aws xray update-trace-segment-destination --destination CloudWatchLogs\n"
-    "aws xray update-indexing-rule --name Default \\\n"
-    "  --rule '{\"Probabilistic\":{\"DesiredSamplingPercentage\":10}}'"
+    "Transaction Search 를 켜야 trace 패널이 작동합니다. Enter 로 실행하면 로그 리소스 정책을 두고\n"
+    "스팬 목적지를 CloudWatch Logs 로 바꿉니다 (샘플링 10%, 수집 스팬 수만큼 과금).\n"
+    "터미널에서 직접: sh installer/scripts/enable_transaction_search.sh ap-northeast-1"
 )
 
 # (state, detail) per step, for the three dashboard moments the guide shows.
