@@ -293,7 +293,7 @@ variable "registry_tool_on_gateway" {
 }
 
 variable "registry_python_bin" {
-  description = "Python interpreter for the agent_registry module's registry.py (needs botocore >= 1.43 with the agent-registry-control model). Defaults to system python3; override with a venv python where that is too old."
+  description = "Python interpreter for the local-exec helper scripts in the agent_registry, mcp_gateway and bedrock_guardrail modules (needs botocore >= 1.43: agent-registry-control, Gateway connector targets). Defaults to system python3; override with a venv python where that is too old."
   type        = string
   default     = "python3"
 }

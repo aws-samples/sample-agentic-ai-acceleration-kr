@@ -83,7 +83,7 @@ resource "null_resource" "tier" {
 
   provisioner "local-exec" {
     command = join(" ", [
-      "python3", local.tier_script, "apply",
+      var.python_bin, local.tier_script, "apply",
       "--guardrail-id", aws_bedrock_guardrail.this.guardrail_id,
       "--region", var.region,
       "--tier", var.tier,
