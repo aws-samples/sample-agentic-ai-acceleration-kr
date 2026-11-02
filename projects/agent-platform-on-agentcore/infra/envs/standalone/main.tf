@@ -140,10 +140,11 @@ module "cost_allocation_tags" {
 }
 
 module "bedrock_guardrail" {
-  source  = "../../modules/bedrock_guardrail"
-  project = var.project
-  region  = var.region
-  tier    = var.guardrail_tier
+  source     = "../../modules/bedrock_guardrail"
+  python_bin = var.registry_python_bin
+  project    = var.project
+  region     = var.region
+  tier       = var.guardrail_tier
 }
 
 module "policy_engine" {
@@ -154,6 +155,7 @@ module "policy_engine" {
 
 module "mcp_gateway" {
   source                   = "../../modules/mcp_gateway"
+  python_bin               = var.registry_python_bin
   project                  = var.project
   region                   = var.region
   web_search_backend       = var.web_search_backend
