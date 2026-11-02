@@ -165,20 +165,21 @@ the *full* value. That matters more than it looks: a runtime session id is deriv
 a thread id and padded to at least 33 characters, so on truncation alone two threads
 sharing a prefix would land in the same sandbox.
 
-This repo's **`agent-runtime` does not send the scope header today.** `deploy.sh` wires
-it to the Lambda tool gateway (`infra/modules/mcp_gateway`, `MCP_GATEWAY_URL`), whose tools
-are stateless and which has no interceptor, so `auth/access_token.py` accepts a
-`session_scope` argument for call-site compatibility and ignores it. What the runtime
-*does* keep is the plumbing a scoped gateway needs: `context.session_id` (the
+This repo's **`agent-runtime` sends the scope header.** `context.session_id` (the
 `runtimeSessionId` the server derives from `thread_id`) flows through
-`AgentManager.ensure_initialized` → `MCPServerManager.load_tools` →
-`load_tools_from_mcp`, and `AgentManager` rebuilds the runner whenever that scope changes,
-because MCP tools are bound to the connection they were listed from — a reused container
-must not run one conversation's code in another's sandbox. To point the runtime at this
-gateway, set `MCP_GATEWAY_URL` to its endpoint and add the header in
-`load_tools_from_mcp` (see `mcp_client.py` for the shape). An AgentCore Runtime caller
-that already sends `X-Amzn-Bedrock-AgentCore-Runtime-Session-Id` is scoped with no
-further change.
+`AgentManager.ensure_initialized` → `MCPServerManager.load_tools` → `load_tools_from_mcp`,
+which puts it on every MCP request as `X-Agent-Session-Scope`. `AgentManager` rebuilds the
+runner whenever that scope changes, because MCP tools are bound to the connection they were
+listed from — a reused container must not run one conversation's code in another's sandbox.
+To point the runtime at this gateway, set `MCP_GATEWAY_URL` to its endpoint.
+
+The header is not optional for a multi-user runtime. Every user reaches the gateway as the
+same execution role, so without it the label is one per role: on the Tokyo stack
+(2026-10-21) a file one user wrote through `execute_code` was listed for another user and
+for the first user's other threads, and the interceptor logged `scope=<none>` for every
+call. A harness has the same problem (one label per team or platform role), so harnesses
+should use their own `agentcore_code_interpreter` / `agentcore_browser` built-in tools,
+which AgentCore already scopes per conversation.
 
 ### Escaping the shared sandbox
 

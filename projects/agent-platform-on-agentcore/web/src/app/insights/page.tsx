@@ -261,27 +261,19 @@ export default function InsightsPage() {
         "CloudWatch 지표를 읽지 못했습니다. 지연시간·오류율은 비어 있고, 사용량·비용 값은 그대로입니다.",
     });
   }
-  // The collector writes today's runtime quantities every few minutes. No item
-  // for today means the figure on screen stops at yesterday — said out loud so a
-  // flat Runtime tile is not read as an idle fleet.
+  // The collector leaves a heartbeat on every pass. Only a missing or stale one
+  // means it stopped; a day nobody used has no runtime items and is not news.
   if (summary && !summary.sources.collector) {
+    const last = summary.collector?.last_pass_at;
+    const minutes = last ? Math.round((Date.now() - new Date(last).getTime()) / 60000) : NaN;
     notices.push({
       id: "collector-stale",
       tone: "warning",
       icon: AlertTriangle,
-      children:
-        "수집기가 오늘의 Runtime 수량을 아직 쓰지 않았습니다. Runtime 비용은 마지막으로 수집된 날까지의 값입니다 — 서버의 COLLECTOR_ENABLED 와 CloudWatch 권한을 확인하세요.",
+      children: Number.isFinite(minutes)
+        ? `수집기가 ${minutes}분째 돌지 않았습니다. Runtime 비용이 그 시점에 멈춰 있습니다.`
+        : "수집기가 아직 한 번도 돌지 않았습니다. 서버의 COLLECTOR_ENABLED 와 CloudWatch 권한을 확인하세요.",
     });
-  } else if (summary?.cost.runtime.as_of) {
-    const age = Date.now() - new Date(summary.cost.runtime.as_of).getTime();
-    if (Number.isFinite(age) && age > 15 * 60 * 1000) {
-      notices.push({
-        id: "collector-stale",
-        tone: "warning",
-        icon: AlertTriangle,
-        children: `수집기의 마지막 기록이 ${Math.round(age / 60000)}분 전입니다. Runtime 비용이 그 시점에 멈춰 있습니다.`,
-      });
-    }
   }
   if (summary && summary.cost.rate_card.mismatches.length > 0) {
     notices.push({
