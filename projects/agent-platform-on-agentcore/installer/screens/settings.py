@@ -96,6 +96,11 @@ class Settings(Screen):
             if (message := values.validate(fields[name], raw))
             and not fields[name].has_default
         ]
+        # Cognito usernames are the emails (modules/cognito): the same address
+        # twice creates admin, then fails the user with UsernameExistsException.
+        admin, user = edits.get("admin_email", ""), edits.get("user_email", "")
+        if admin.strip() and admin.strip().lower() == user.strip().lower():
+            blocking.append("user_email: admin_email 과 다른 주소여야 합니다 (예: name+user@example.com).")
         if blocking:
             set_text(self.query_one("#save-status", Static),
                      "저장하지 않았습니다:\n" + "\n".join(blocking))

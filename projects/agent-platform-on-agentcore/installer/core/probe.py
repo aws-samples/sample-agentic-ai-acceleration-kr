@@ -226,7 +226,12 @@ async def tfvars_complete(env: Env, sh: Shell) -> ProbeOutcome:
 
 async def tf_initialised(env: Env, sh: Shell) -> ProbeOutcome:
     _, detail = resolve_project(env)
-    if not (env.tf_dir / ".terraform").is_dir():
+    # init installs modules before configuring the backend, so a run that failed
+    # at the backend (Terraform 1.5 S3 backend + sso_session profile) left
+    # .terraform/modules behind and this row read 완료. The backend state file
+    # and providers only exist once init got past both.
+    tf = env.tf_dir / ".terraform"
+    if not ((tf / "terraform.tfstate").is_file() and (tf / "providers").is_dir()):
         return ProbeOutcome(State.PENDING, "terraform init 이 필요합니다")
     return ProbeOutcome(State.DONE, detail)
 

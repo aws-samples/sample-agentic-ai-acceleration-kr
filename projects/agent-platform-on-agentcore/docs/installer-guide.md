@@ -20,7 +20,7 @@ AWS 와 로컬 파일을 실제로 조회해서 "이 단계는 이미 끝났는�
 | 항목 | 확인 방법 |
 | --- | --- |
 | Python 3.13 | `python3.13 --version`. 실행 파일 이름이 다르면 `PYTHON_BIN=python3 ./install.sh` 처럼 지정합니다 |
-| Terraform 1.5 이상, AWS CLI v2, Docker | 인스톨러의 첫 단계가 세 도구의 존재를 자동으로 검사합니다 |
+| Terraform 1.6 이상, AWS CLI v2, Docker | 인스톨러의 첫 단계가 세 도구의 존재를 자동으로 검사합니다 |
 | AWS 자격 증명 | `aws sts get-caller-identity` 가 배포할 계정을 돌려주는지 확인합니다 |
 | 리전 | 기본값은 `ap-northeast-1`(도쿄)입니다. 바꾸려면 설정 화면 Advanced 탭에서 `region` 과 `azs` 를 함께 수정합니다 |
 | Bedrock 모델 접근 | Amazon Bedrock 콘솔의 Model access 에서 Anthropic Claude 모델을 켜 둡니다 |

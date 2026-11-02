@@ -38,6 +38,15 @@ _RULES: tuple[tuple[tuple[str, ...], object], ...] = (
         "`terraform init` 을 실행한 뒤 다시 시도하십시오.",
     ),
     (
+        ("is configured to use SSO but is missing required configuration",
+         "Unsupported Terraform Core version"),
+        "Terraform 1.6 이상이 필요합니다. 1.5 이하의 S3 backend 는 `sso_session` 형식 "
+        "프로필을 읽지 못합니다. macOS 의 Homebrew 기본 `terraform` 은 1.5.7 에 "
+        "멈춰 있으므로 `brew uninstall terraform && brew install hashicorp/tap/terraform` "
+        "으로 설치합니다. Linux·WSL 은 https://developer.hashicorp.com/terraform/install "
+        "의 패키지 저장소나 바이너리로 설치합니다.",
+    ),
+    (
         ("no valid credential sources", "No valid credential sources",
          "Unable to locate credentials", "ExpiredToken", "InvalidClientTokenId"),
         "AWS 자격증명이 없거나 만료되었습니다. `aws sso login` 또는 "
