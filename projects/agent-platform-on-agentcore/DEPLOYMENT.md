@@ -49,7 +49,7 @@ Runtime 에이전트를 붙일 때 Memory 생성 단계를 건너뛸 수 있습�
 
 | 도구 | 버전 | 용도 |
 | --- | --- | --- |
-| Terraform | ≥ 1.5 | 인프라 |
+| Terraform | ≥ 1.6 | 인프라 (Homebrew 기본 `terraform` 은 1.5.7 이므로 `hashicorp/tap/terraform` 으로 설치) |
 | AWS CLI | v2 | 계정 설정 |
 | Docker | `linux/amd64` 빌드 가능 | web/server 이미지 |
 | Python | 3.13 | 인스톨러, 배포 스크립트 |
