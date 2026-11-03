@@ -15,6 +15,8 @@ and what puts it in the harness composer's catalog.
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
+from botocore.exceptions import ClientError
+
 from models.registry import (
     CreateRecordRequest,
     DeployedTarget,
@@ -42,6 +44,19 @@ logger = logging.getLogger(__name__)
 # Only settled deployments are worth registering; CREATING has no usable endpoint
 # yet and CREATE_FAILED never will. Runtimes report READY, harnesses ACTIVE.
 _READY_STATUSES = {"READY", "ACTIVE"}
+
+# How many taken versions a re-registration steps past before giving up.
+_MAX_VERSION_BUMPS = 20
+
+
+def _next_version(version: Optional[str]) -> str:
+    """'1.0.0' -> '1.0.1', '1.0' -> '1.1': the last numeric part plus one."""
+    parts = (version or "1.0.0").split(".")
+    try:
+        parts[-1] = str(int(parts[-1]) + 1)
+    except ValueError:
+        parts.append("1")
+    return ".".join(parts)
 
 # Gateway authorizers a harness can actually authenticate against. The only
 # alternative to SigV4 is an OAuth credential provider, which is configured per
@@ -263,6 +278,30 @@ class AgentSyncService:
             target.foreign = not ours
         return targets
 
+    def _create_with_free_version(
+        self, request: CreateRecordRequest, owner: Optional[str]
+    ):
+        """
+        CreateRegistryRecord, bumping the version past ones that are taken.
+
+        A DEPRECATED record keeps its name and version, and AWS rejects a second
+        record with the same pair (ConflictException). The listings treat a
+        deprecated record as absent, so re-registering a retired gateway, or an
+        agent named explicitly, would otherwise fail on every attempt.
+        """
+        # ponytail: probes one version per call; a name retired more than
+        # _MAX_VERSION_BUMPS times in a row needs a manual cleanup.
+        for _ in range(_MAX_VERSION_BUMPS):
+            try:
+                return self.registry.create_record(request, owner=owner)
+            except ClientError as exc:
+                if exc.response.get("Error", {}).get("Code") != "ConflictException":
+                    raise
+                request = request.model_copy(
+                    update={"version": _next_version(request.version)}
+                )
+        return self.registry.create_record(request, owner=owner)
+
     @staticmethod
     def _record_request(
         target: DeployedTarget, submit_for_approval: bool
@@ -435,8 +474,8 @@ class AgentSyncService:
                 continue
 
             try:
-                record = self.registry.create_record(
-                    self._record_request(target, req.submit_for_approval), owner=owner
+                record = self._create_with_free_version(
+                    self._record_request(target, req.submit_for_approval), owner
                 )
                 response.registered.append(record)
             except Exception as exc:

@@ -709,3 +709,77 @@ def test_naming_a_foreign_runtime_still_registers_it():
                   platform_tags={FOREIGN_ARN: "other"})
     result = svc.sync(SyncAgentsRequest(targets=["sa_copilot"]))
     assert len(result.registered) == 1
+
+
+def _reject_taken_versions(svc, taken):
+    """Make create_record raise ConflictException for taken (name, version) pairs,
+    as AWS does while a DEPRECATED record still holds them."""
+    from botocore.exceptions import ClientError
+
+    original = svc.registry.create_record
+    attempts = []
+
+    def create(req, owner=None):
+        attempts.append(req.version)
+        if (req.name, req.version) in taken:
+            raise ClientError(
+                {"Error": {"Code": "ConflictException", "Message": "already exists"}},
+                "CreateRegistryRecord",
+            )
+        return original(req, owner=owner)
+
+    svc.registry.create_record = create
+    return attempts
+
+
+def test_gateway_re_registers_past_a_deprecated_record_holding_its_version():
+    """
+    A deprecated gateway record keeps its name and version, so the listing shows
+    the gateway as unregistered while CreateRegistryRecord rejects 1.0.0. The sync
+    steps to the next free version instead of failing on every attempt.
+    """
+    svc = service(gateways=[gateway()])
+    attempts = _reject_taken_versions(svc, {("builtin_tools", "1.0.0")})
+
+    result = svc.sync(SyncAgentsRequest())
+
+    assert result.failed == []
+    assert len(result.registered) == 1
+    assert attempts == ["1.0.0", "1.0.1"]
+    assert svc.registry.created[-1].version == "1.0.1"
+
+
+def test_explicit_agent_re_registration_skips_taken_versions():
+    svc = service(
+        records=[deprecated_record(agent_runtime_arn=RUNTIME_ARN)],
+        runtimes=[runtime()],
+    )
+    attempts = _reject_taken_versions(
+        svc, {("strands_agent", "1.0"), ("strands_agent", "1.1")}
+    )
+
+    result = svc.sync(SyncAgentsRequest(targets=[RUNTIME_ARN]))
+
+    assert result.failed == []
+    assert attempts == ["1.0", "1.1", "1.2"]
+
+
+def test_other_registry_errors_are_not_retried():
+    from botocore.exceptions import ClientError
+
+    svc = service(gateways=[gateway()])
+    calls = []
+
+    def denied(req, owner=None):
+        calls.append(req.version)
+        raise ClientError(
+            {"Error": {"Code": "AccessDeniedException", "Message": "no"}},
+            "CreateRegistryRecord",
+        )
+
+    svc.registry.create_record = denied
+    result = svc.sync(SyncAgentsRequest())
+
+    assert calls == ["1.0.0"]
+    assert len(result.failed) == 1
+    assert "AccessDenied" in result.failed[0].error
