@@ -69,6 +69,7 @@ from pydantic import BaseModel
 
 from core import clock
 from core.cache import StaleWhileRevalidate
+from core.config import COLLECTOR_INTERVAL_SECONDS
 from core.auth import AuthUser, current_user
 from core.dependencies import (
     billing_service,
@@ -573,6 +574,36 @@ def _harness_runtimes(usage: Any) -> Dict[str, str]:
     except Exception:
         logger.info("Harness listing unavailable for runtime mapping", exc_info=True)
         return {}
+
+
+# Three missed passes at the default 5-minute cadence before the collector is
+# called stopped.
+_COLLECTOR_STALE = timedelta(seconds=max(900, 3 * COLLECTOR_INTERVAL_SECONDS))
+
+
+def _collector_last_pass() -> Optional[str]:
+    collector = _collector()
+    if collector is None:
+        return None
+    try:
+        return collector.last_pass()
+    except Exception:
+        logger.warning("Collector heartbeat read failed", exc_info=True)
+        return None
+
+
+def _collector_alive(last_pass: Optional[str], today_collected: bool) -> bool:
+    """Whether the collector is running, from its heartbeat.
+
+    Not from today's day items: a day without usage has none, and that is an
+    idle fleet, not a stopped collector. Without a heartbeat (a server from
+    before it) today's items are the only evidence there is."""
+    if last_pass is None:
+        return today_collected
+    try:
+        return clock.now() - datetime.fromisoformat(last_pass) <= _COLLECTOR_STALE
+    except (TypeError, ValueError):
+        return today_collected
 
 
 _COLLECTED_KEYS = ("resources", "gateways", "memories", "sessions")
@@ -1177,11 +1208,12 @@ def _compute_summary(
     today_collected = any(
         window["end_date"] in days_map for days_map in collected["resources"].values()
     )
+    last_pass = _collector_last_pass()
     sources = {
         # Never hardcoded true again. A shard that could not be read leaves the
         # totals short by however much it held, and the reader cannot see the hole.
         "usage": usage.reads_complete(),
-        "collector": today_collected,
+        "collector": _collector_alive(last_pass, today_collected),
         "recon": bool(recon["agent_runtime"] or recon["component_day"] or recon["model_rate"]),
         "usage_logs": bool(collected["sessions"]),
         "guardrail": guardrail is not None,
@@ -1190,6 +1222,7 @@ def _compute_summary(
     return {
         **_window_fields(window),
         "sources": sources,
+        "collector": {"last_pass_at": last_pass, "today_runtime": today_collected},
         "totals": {
             "turns": sum(row["turns"] for row in rows),
             "input_tokens": sum(row["input_tokens"] for row in rows),
