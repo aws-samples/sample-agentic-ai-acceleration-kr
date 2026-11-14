@@ -23,9 +23,10 @@ from agents.formatters.event_formatter import EventFormatter
 logger = logging.getLogger(__name__)
 
 # What AgentCore accepts as a runtimeSessionId, and the tail `_session_id` gives
-# every id it had to derive.
-_VALID_SESSION_ID = re.compile(r"^[A-Za-z0-9_-]{33,128}$")
-_DERIVED_SESSION_SUFFIX = re.compile(r"-[0-9a-f]{64}$")
+# every id it had to derive. Matched with fullmatch and \Z, never `$`: `$` also
+# matches before a final newline, which would pass "<uuid>\n" as a valid id.
+_VALID_SESSION_ID = re.compile(r"[A-Za-z0-9_-]{33,128}")
+_DERIVED_SESSION_SUFFIX = re.compile(r"-[0-9a-f]{64}\Z")
 
 # read_timeout applies to the gap between chunks of a streaming body, not to the
 # whole turn. botocore's 60s default is shorter than a single silent step: an
@@ -380,7 +381,7 @@ class AgentCoreClient(AgentClient):
         ends like that digest is derived again rather than trusted, so a thread
         cannot be named after another thread's derived session.
         """
-        if _VALID_SESSION_ID.match(thread_id) and not _DERIVED_SESSION_SUFFIX.search(thread_id):
+        if _VALID_SESSION_ID.fullmatch(thread_id) and not _DERIVED_SESSION_SUFFIX.search(thread_id):
             return thread_id
         sanitized = "".join(
             c if (c.isascii() and c.isalnum()) or c in "-_" else "-" for c in thread_id
