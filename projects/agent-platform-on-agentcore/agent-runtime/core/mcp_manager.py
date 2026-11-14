@@ -104,8 +104,9 @@ class MCPServerManager:
     def load_tools(self, session_scope: Optional[str] = None) -> Tuple[Optional[list], Optional[Any]]:
         """Load tools from MCP server with SigV4 authentication
 
-        ``session_scope`` is accepted for compatibility but ignored by this gateway
-        (no interceptor; all tools are stateless).
+        ``session_scope`` is sent as ``X-Agent-Session-Scope`` so a gateway with an
+        identity interceptor (infra/builtin_tools_gateway) gives each conversation its
+        own sandbox; a gateway without one ignores it.
         """
         if not self.config.mcp_server_url:
             self.logger.error("MCP server URL is not configured, cannot load tools")
