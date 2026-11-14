@@ -1,4 +1,4 @@
-strands-agents
+strands-agents>=1.52  # 1.52 fixed a thinking signature leaking into the next block, which the API rejects
 strands-agents-tools
 boto3
 bedrock-agentcore

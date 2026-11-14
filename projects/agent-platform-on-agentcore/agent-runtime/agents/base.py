@@ -6,6 +6,7 @@ returns a *runner*: an object with ``async def stream(prompt) -> AsyncIterator[d
 yielding Strands-shaped ``{"event": {...}}`` dicts. ``main.py`` consumes runners
 uniformly, so every sample shares one streaming path.
 """
+import copy
 import re
 import logging
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Protocol, Union
@@ -21,6 +22,31 @@ logger = logging.getLogger(__name__)
 # Matched on the model id because the switch is per model, not per deployment:
 # basic chat picks the model per turn on a runtime whose REASONING_BUDGET is set.
 _ADAPTIVE_THINKING_MODELS = re.compile(r"claude-(?:opus|sonnet|haiku)-5(?:[-.]|$)")
+
+
+# Models that bind each thinking block's signature to the conversation that
+# produced it ("preserved thinking"), and think whether or not a budget is set.
+_PRESERVED_THINKING_MODELS = re.compile(
+    r"claude-(?:(?:opus|sonnet|haiku)-5-5|(?:fable|mythos)-5-[12])(?![0-9])"
+)
+
+# The runner keeps one Agent across a session's turns, and Strands' sliding
+# window drops the oldest messages past 40 (as does a context-overflow retry).
+# The thinking blocks that remain were produced with those messages in front of
+# them, so on an account where the check is enforced (created on or after
+# 2026-08-31) the next call is a 400: `Invalid signature in thinking block. The
+# block is bound to a different conversation`. Ask the API to drop such a block
+# and continue; the model re-derives that reasoning. Measured 2026-11-14 on
+# Claude Sonnet 5.5: the oldest turn removed is a 400 under "error" and a 200
+# under "drop_block". Same setting as the harness path
+# (server/models/harness.py, PRESERVED_THINKING_PARAMS).
+PRESERVED_THINKING_FIELDS = {
+    "thinking": {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "drop_block"},
+    },
+    "anthropic_beta": ["thinking-binding-controls-2026-08-01"],
+}
 
 
 def thinking_fields(model_id: str, budget: int) -> dict:
@@ -139,6 +165,12 @@ def build_bedrock_model(config, model_id: Optional[str], region_name: Optional[s
         # Extended thinking requires temperature 1.0; top_p must be left unset
         # (this builder never sets it), so nothing else needs changing.
         kwargs["temperature"] = 1.0
+
+    # After the budget block so it also replaces the plain adaptive form: these
+    # models think by default, so this is needed with no budget set as well, and
+    # naming adaptive thinking here asks for nothing they were not already doing.
+    if _PRESERVED_THINKING_MODELS.search(final_model_id or ""):
+        kwargs["additional_request_fields"] = copy.deepcopy(PRESERVED_THINKING_FIELDS)
 
     return BedrockModel(**kwargs)
 

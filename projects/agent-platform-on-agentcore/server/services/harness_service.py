@@ -26,7 +26,6 @@ from core.config import (
 from models.harness import (
     AWS_SKILL_CATEGORIES,
     BUILTIN_TOOL_TYPES,
-    HARNESS_MAX_TOKENS,
     ComposableRecord,
     ComposeHarnessRequest,
     ComposeHarnessResponse,
@@ -37,6 +36,7 @@ from models.harness import (
     TOOL_REMOTE_MCP,
     TruncationSettings,
     UpdateHarnessRequest,
+    harness_model_config,
 )
 from models.registry import (
     CreateRecordRequest,
@@ -681,6 +681,7 @@ class HarnessService:
                 allowed_tools = harness_allowed_tools(team_cfg.allowed_tools)
             tags["Team"] = team
 
+        base_model_id = req.model_id or BEDROCK_MODEL_ID
         params: Dict[str, Any] = {
             "harnessName": harness_name,
             "executionRoleArn": execution_role_arn,
@@ -694,16 +695,15 @@ class HarnessService:
             # comment used to claim — but the hours billed before the tag landed
             # stay in the untagged bucket forever.
             "tags": tags,
+            # maxTokens is per model call, not per invocation — see
+            # HARNESS_MAX_TOKENS; preserved-thinking models also get
+            # PRESERVED_THINKING_PARAMS.
             "model": {
-                "bedrockModelConfig": {
-                    "modelId": self._model_id_for(
-                        req.model_id or BEDROCK_MODEL_ID, harness_name
-                    ),
-                    # Per model call, not per invocation. Unset, Bedrock's own
-                    # default (4096) ends a long reply as a fatal error — see
-                    # HARNESS_MAX_TOKENS.
-                    "maxTokens": req.max_tokens or HARNESS_MAX_TOKENS,
-                }
+                "bedrockModelConfig": harness_model_config(
+                    self._model_id_for(base_model_id, harness_name),
+                    req.max_tokens,
+                    base_model_id=base_model_id,
+                )
             },
             # The harness persists conversation state in AgentCore Memory and
             # reloads it per session, so the client sends only the new message.
@@ -773,10 +773,11 @@ class HarnessService:
                 self.get_harness(harness_id).harness_name if MODEL_COST_AIP_ENABLED else ""
             )
             params["model"] = {
-                "bedrockModelConfig": {
-                    "modelId": self._model_id_for(req.model_id, agent_name),
-                    "maxTokens": req.max_tokens or HARNESS_MAX_TOKENS,
-                }
+                "bedrockModelConfig": harness_model_config(
+                    self._model_id_for(req.model_id, agent_name),
+                    req.max_tokens,
+                    base_model_id=req.model_id,
+                )
             }
         if req.selects_tools:
             params["tools"] = self._compose_tools(

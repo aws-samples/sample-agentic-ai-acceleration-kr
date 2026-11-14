@@ -51,7 +51,7 @@ def test_env_turns_caching_off(monkeypatch):
     assert Config.from_env().prompt_cache is True
 
 
-# Config() defaults to Sonnet 5, which takes adaptive thinking; the budgeted-form
+# Config() defaults to Sonnet 5.5, which takes adaptive thinking; the budgeted-form
 # tests pin a Claude 4.x id so they keep exercising the budget arithmetic.
 LEGACY_MODEL = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 
@@ -65,7 +65,7 @@ def _reasoning_fields(config, model_id=None):
 
 def test_reasoning_off_by_default_builds_model_unchanged():
     """Budget 0 must not touch the request: no thinking field, no forced temp."""
-    fields, temp = _reasoning_fields(Config())
+    fields, temp = _reasoning_fields(Config(), "global.anthropic.claude-sonnet-5")
     assert fields is None
     assert temp is None
 
@@ -79,7 +79,7 @@ def test_reasoning_budget_enables_thinking_and_forces_temperature():
 def test_claude_5_models_get_adaptive_thinking_instead_of_a_budget():
     """Sonnet 5 rejects thinking.type=enabled (ValidationException at ConverseStream);
     the same budget on a Claude 5 id must become the adaptive block."""
-    for model_id in ("global.anthropic.claude-sonnet-5", "global.anthropic.claude-opus-5-5",
+    for model_id in ("global.anthropic.claude-sonnet-5", "global.anthropic.claude-opus-5",
                      "us.anthropic.claude-haiku-5-20270101-v1:0"):
         fields, _ = _reasoning_fields(Config(reasoning_budget=2048), model_id)
         assert fields == {"thinking": {"type": "adaptive"}}, model_id
@@ -106,3 +106,52 @@ def test_env_sets_reasoning_budget(monkeypatch):
     assert Config.from_env().reasoning_budget == 3000
     monkeypatch.delenv("REASONING_BUDGET", raising=False)
     assert Config.from_env().reasoning_budget == 0
+
+
+# --- preserved thinking: a trimmed history must not fail the turn ---------------
+#
+# Claude Sonnet 5.5 / Opus 5.5 / Haiku 5.5 (and Fable/Mythos 5.1+) bind each
+# thinking block to the conversation that produced it, and think by default. The
+# runner keeps one Agent across a session's turns and Strands' sliding window
+# drops the oldest messages past 40, so a long chat replays thinking blocks whose
+# earlier context is gone. On an account where the check is enforced (created on
+# or after 2026-08-31) that is a 400: `Invalid signature in thinking block. The
+# block is bound to a different conversation`. Measured 2026-11-14 on Sonnet 5.5:
+# the oldest turn removed is a 400 under "error" and a 200 under "drop_block".
+
+DROP_BLOCK = {
+    "thinking": {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "drop_block"},
+    },
+    "anthropic_beta": ["thinking-binding-controls-2026-08-01"],
+}
+
+PRESERVED_THINKING_MODELS = (
+    "global.anthropic.claude-sonnet-5-5",
+    "global.anthropic.claude-opus-5-5",
+    "us.anthropic.claude-haiku-5-5",
+    "anthropic.claude-fable-5-2",
+)
+
+
+def test_preserved_thinking_models_drop_a_block_that_fails_the_check():
+    """With no budget set too: these models think whether or not it is asked for."""
+    for model_id in PRESERVED_THINKING_MODELS:
+        fields, temp = _reasoning_fields(Config(), model_id)
+        assert fields == DROP_BLOCK, model_id
+        assert temp is None, model_id
+
+
+def test_a_reasoning_budget_keeps_the_setting_and_still_forces_temperature():
+    fields, temp = _reasoning_fields(Config(reasoning_budget=2048), "global.anthropic.claude-sonnet-5-5")
+    assert fields == DROP_BLOCK
+    assert temp == 1.0
+
+
+def test_models_without_preserved_thinking_are_sent_nothing_extra():
+    """`block_binding` is beta; older models have no use for it."""
+    for model_id in ("global.anthropic.claude-sonnet-5", "global.anthropic.claude-opus-5",
+                     LEGACY_MODEL, "amazon.nova-pro-v1:0"):
+        fields, _ = _reasoning_fields(Config(), model_id)
+        assert fields is None, model_id

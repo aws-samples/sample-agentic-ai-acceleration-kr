@@ -332,7 +332,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
-    { name = "strands-agents" },
+    { name = "strands-agents", specifier = ">=1.52" },
     { name = "strands-agents-tools" },
 ]
 provides-extras = ["dev"]

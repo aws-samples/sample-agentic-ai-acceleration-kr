@@ -1,4 +1,6 @@
 """Models for the AgentCore Managed Agent Harness."""
+import copy
+import re
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel
@@ -36,6 +38,88 @@ BUILTIN_TOOL_TYPES = [TOOL_BROWSER, TOOL_CODE_INTERPRETER]
 # is used. Kept below the 128K maximum so one runaway reply cannot spend a whole
 # turn's budget by itself.
 HARNESS_MAX_TOKENS = 64000
+
+# Models whose `thinking` signatures are bound to the conversation that produced
+# them ("preserved thinking"): a block replayed after anything before it changed
+# is a 400, `Invalid signature in thinking block. The block is bound to a
+# different conversation`.
+_PRESERVED_THINKING_MODEL = re.compile(
+    r"claude-(?:(?:opus|sonnet|haiku)-5-5|(?:fable|mythos)-5-[12])(?![0-9])"
+)
+
+# The harness loop runs on AWS's side and rebuilds each assistant message from
+# the stream before the next model call. When one response carries two thinking
+# blocks, that rebuild can return the second with a signature the API rejects,
+# and the turn dies mid-loop (seen in chat as `messages.1.content.6: Invalid
+# signature`). The rebuild is not ours to fix, so ask the model to drop such a
+# block and continue. Measured 2026-11-12 in ap-northeast-1 on Claude Sonnet 5.5:
+# the same corrupted history is a 400 under `"error"` and a 200 under
+# `"drop_block"`; the cost is that one block's reasoning, re-derived by the model.
+#
+# `additionalParams` is spread into ConverseStream as top-level arguments
+# (`thinking` there is rejected as an unknown parameter), hence the wrapper.
+PRESERVED_THINKING_PARAMS: Dict[str, Any] = {
+    "additionalModelRequestFields": {
+        "thinking": {
+            "type": "adaptive",
+            "block_binding": {"prefix_mismatch_behavior": "drop_block"},
+        },
+        "anthropic_beta": ["thinking-binding-controls-2026-08-01"],
+    }
+}
+
+
+def harness_model_config(
+    model_id: str,
+    max_tokens: Optional[int] = None,
+    base_model_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """The `bedrockModelConfig` block for CreateHarness, UpdateHarness and an
+    InvokeHarness override.
+
+    All three replace the block wholesale, so everything a harness needs on
+    every model call is assembled here once. `base_model_id` names the model
+    when `model_id` is an application inference profile ARN, which does not.
+    """
+    config: Dict[str, Any] = {
+        "modelId": model_id,
+        "maxTokens": max_tokens or HARNESS_MAX_TOKENS,
+    }
+    if _PRESERVED_THINKING_MODEL.search(base_model_id or model_id):
+        config["additionalParams"] = copy.deepcopy(PRESERVED_THINKING_PARAMS)
+    return config
+
+
+def with_preserved_thinking_params(
+    stored: Dict[str, Any], base_model_id: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """A harness's stored `bedrockModelConfig` with PRESERVED_THINKING_PARAMS
+    added, or None when there is nothing to add.
+
+    For harnesses composed before the setting existed: the chat path sends the
+    result as a per-request model override, so they are covered without anyone
+    migrating them. Everything else in the stored block is kept, because an
+    override replaces the block wholesale.
+    """
+    model_id = stored.get("modelId") or ""
+    if not _PRESERVED_THINKING_MODEL.search(base_model_id or model_id):
+        return None
+
+    ours = PRESERVED_THINKING_PARAMS["additionalModelRequestFields"]
+    params = copy.deepcopy(stored.get("additionalParams") or {})
+    fields = params.setdefault("additionalModelRequestFields", {})
+    thinking = fields.setdefault("thinking", {"type": "adaptive"})
+    # `block_binding` is accepted only with adaptive thinking; with any other
+    # mode (Sonnet 5.5's `between_tools`) sending both is itself a 400.
+    if thinking.get("type") != "adaptive":
+        return None
+    thinking["block_binding"] = copy.deepcopy(ours["thinking"]["block_binding"])
+    betas = fields.setdefault("anthropic_beta", [])
+    betas.extend(b for b in ours["anthropic_beta"] if b not in betas)
+
+    if params == stored.get("additionalParams"):
+        return None
+    return {**stored, "additionalParams": params}
 
 # Categories of the AWS Agent Toolkit skill catalog, offered as glob patterns.
 AWS_SKILL_CATEGORIES = [

@@ -26,7 +26,6 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.harness import ComposeHarnessRequest  # noqa: E402
-from services import harness_service as harness_service_module  # noqa: E402
 from services.harness_service import HarnessService  # noqa: E402
 
 HARNESS_ID = "writer-abc123"
@@ -129,5 +128,7 @@ def test_the_cap_survives_botocore_validation():
 
 def test_the_module_default_is_overridable_without_editing_callers(monkeypatch):
     """The cap is a named constant so a deployment can retune it in one place."""
-    monkeypatch.setattr(harness_service_module, "HARNESS_MAX_TOKENS", 32000)
+    import models.harness as harness_models
+
+    monkeypatch.setattr(harness_models, "HARNESS_MAX_TOKENS", 32000)
     assert model_config(created_with())["maxTokens"] == 32000
