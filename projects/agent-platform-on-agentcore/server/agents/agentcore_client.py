@@ -8,6 +8,7 @@ import random
 import boto3
 import asyncio
 import hashlib
+import re
 import logging
 import traceback
 import time
@@ -20,6 +21,11 @@ from agents.agent_config import AgentConfig
 from agents.formatters.event_formatter import EventFormatter
 
 logger = logging.getLogger(__name__)
+
+# What AgentCore accepts as a runtimeSessionId, and the tail `_session_id` gives
+# every id it had to derive.
+_VALID_SESSION_ID = re.compile(r"^[A-Za-z0-9_-]{33,128}$")
+_DERIVED_SESSION_SUFFIX = re.compile(r"-[0-9a-f]{64}$")
 
 # read_timeout applies to the gap between chunks of a streaming body, not to the
 # whole turn. botocore's 60s default is shorter than a single silent step: an
@@ -358,16 +364,30 @@ class AgentCoreClient(AgentClient):
     @staticmethod
     def _session_id(thread_id: str) -> str:
         """
-        Derive a runtimeSessionId from a thread id.
+        Derive a runtimeSessionId from a thread id, injectively.
 
-        AgentCore requires 33-128 characters, while thread ids are shorter, so
-        short ids are padded deterministically to keep one session per thread.
+        The result is also the Memory session and the scope the built-in tools
+        gateway labels a sandbox with, and the client picks the id of a new
+        thread. Replacing unsupported characters and stopping there let two
+        thread ids share a session: a caller who knew another user's thread id
+        could create one of their own differing only in such a character and
+        reach that user's runtime session and sandbox.
+
+        A thread id that is already a valid session id (33-128 characters of
+        [A-Za-z0-9_-]) is used as is, so existing threads keep the session their
+        memory is stored under. Anything else — too short, too long, or holding
+        another character — carries a SHA-256 of the raw id. An id that already
+        ends like that digest is derived again rather than trusted, so a thread
+        cannot be named after another thread's derived session.
         """
-        session_id = "".join(c if c.isalnum() or c in "-_" else "-" for c in thread_id)
-        if len(session_id) < 33:
-            digest = hashlib.sha256(thread_id.encode("utf-8")).hexdigest()
-            session_id = f"{session_id}-{digest}"[:128]
-        return session_id[:128]
+        if _VALID_SESSION_ID.match(thread_id) and not _DERIVED_SESSION_SUFFIX.search(thread_id):
+            return thread_id
+        sanitized = "".join(
+            c if (c.isascii() and c.isalnum()) or c in "-_" else "-" for c in thread_id
+        )
+        digest = hashlib.sha256(thread_id.encode("utf-8")).hexdigest()
+        # 63 + "-" + 64 hex = 128, the longest AgentCore accepts.
+        return f"{sanitized[:63]}-{digest}"
 
     def _parse_sse_event(self, data_str: str) -> Optional[Dict[str, Any]]:
         """
