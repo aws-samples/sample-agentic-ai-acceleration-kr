@@ -5,7 +5,9 @@ description = "Strands agent deployed to AgentCore Runtime for the agent platfor
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "strands-agents",
+    # Before 1.52 a thinking block's signature leaked into the next one in the
+    # same message, and a preserved-thinking model rejects the replayed block.
+    "strands-agents>=1.52",
     "strands-agents-tools",
     "boto3",
     "bedrock-agentcore",

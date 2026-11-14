@@ -25,7 +25,22 @@ def _fresh_shared_caches():
         insights = sys.modules.get("routes.insights")
         if insights is not None:
             insights._DASHBOARDS.invalidate()
+        harness_client = sys.modules.get("agents.harness_client")
+        if harness_client is not None:
+            harness_client._STORED_OVERRIDES.clear()
 
     clear()
     yield
     clear()
+
+
+@pytest.fixture(autouse=True)
+def _no_harness_control_plane(monkeypatch):
+    """A chat turn reads the harness's stored model block (GetHarness). Tests
+    that drive `HarnessClient` with made-up ARNs must not reach AWS for it; the
+    ones about that read hand the client a stub control client instead."""
+    harness_client = sys.modules.get("agents.harness_client")
+    if harness_client is not None:
+        monkeypatch.setattr(
+            harness_client.HarnessClient, "_new_control_client", lambda self: None
+        )
