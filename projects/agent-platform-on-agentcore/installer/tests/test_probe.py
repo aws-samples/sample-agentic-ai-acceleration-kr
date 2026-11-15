@@ -533,14 +533,18 @@ def test_transaction_search_pending_while_activating():
 
 def test_transaction_search_pending_shows_the_full_cli_recipe():
     """CLI enablement needs the Logs resource policy first; without it the
-    xray call fails with AccessDenied on aws/spans — hit on a real account."""
+    xray call fails with AccessDenied on aws/spans — hit on a real account.
+    The recipe lives in a script the step runs; the detail names it."""
+    from pathlib import Path
+    from installer.core import steps as stepsmod
     sh = FakeShell({"get-trace-segment-destination":
                     (0, '{"Destination":"XRay","Status":"ACTIVE"}')})
     out = run(probe.transaction_search_enabled(ENV, sh))
     assert out.state is State.PENDING
-    assert "put-resource-policy" in out.detail
-    assert "update-trace-segment-destination" in out.detail
-    assert "--region" in out.detail
+    assert "enable_transaction_search.sh" in out.detail
+    script = Path(stepsmod.build_plan(ENV).by_id("transaction_search").action.argv[1]).read_text()
+    assert "put-resource-policy" in script
+    assert "update-trace-segment-destination" in script
 
 
 def test_first_apply_plan_does_not_take_the_state_lock():

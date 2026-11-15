@@ -415,26 +415,11 @@ async def transaction_search_enabled(env: Env, sh: Shell) -> ProbeOutcome:
     if destination == "CloudWatchLogs":
         return ProbeOutcome(State.PENDING, f"활성화 중입니다 (Status: {status}). 잠시 후 r 로 재점검하세요.")
 
-    region = resolve_region(env)
-    cmd = (
-        "# 1) X-Ray 가 스팬을 CloudWatch Logs 에 쓸 수 있도록 리소스 정책을 먼저 둡니다 (CLI 로 켤 때만 필요)\n"
-        "ACCOUNT=$(aws sts get-caller-identity --query Account --output text)\n"
-        f"aws logs put-resource-policy --region {region} --policy-name TransactionSearchXRayAccess \\\n"
-        "  --policy-document '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"TransactionSearchXRayAccess\","
-        "\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"xray.amazonaws.com\"},\"Action\":\"logs:PutLogEvents\","
-        f"\"Resource\":[\"arn:aws:logs:{region}:'$ACCOUNT':log-group:aws/spans:*\","
-        f"\"arn:aws:logs:{region}:'$ACCOUNT':log-group:/aws/application-signals/data:*\"],"
-        f"\"Condition\":{{\"ArnLike\":{{\"aws:SourceArn\":\"arn:aws:xray:{region}:'$ACCOUNT':*\"}},"
-        "\"StringEquals\":{\"aws:SourceAccount\":\"'$ACCOUNT'\"}}}]}'\n"
-        "# 2) 스팬 목적지를 CloudWatch Logs 로 바꾸고 샘플링 비율(과금에 직결)을 정합니다\n"
-        f"aws xray update-trace-segment-destination --destination CloudWatchLogs --region {region}\n"
-        f"aws xray update-indexing-rule --name Default --region {region} \\\n"
-        "  --rule '{\"Probabilistic\":{\"DesiredSamplingPercentage\":10}}'"
-    )
     return ProbeOutcome(
         State.PENDING,
-        f"Transaction Search 를 켜면 trace 패널이 작동합니다.\n\n"
-        f"다른 터미널에서 아래 명령을 실행한 뒤 r 로 재점검하세요:\n\n{cmd}"
+        "Transaction Search 를 켜야 trace 패널이 작동합니다. Enter 로 실행하면 로그 리소스 정책을 두고\n"
+        "스팬 목적지를 CloudWatch Logs 로 바꿉니다 (샘플링 10%, 수집 스팬 수만큼 과금).\n"
+        f"터미널에서 직접: sh installer/scripts/enable_transaction_search.sh {resolve_region(env)}"
     )
 
 

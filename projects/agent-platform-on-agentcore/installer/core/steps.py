@@ -7,6 +7,7 @@ step costs an entry here rather than a screen change.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from installer.core import probe
 from installer.core.env import Env, resolve_project, resolve_region
@@ -133,7 +134,12 @@ def build_plan(env: Env) -> Plan:
             id="transaction_search",
             title="Transaction Search (계정 단위, 한 번만)",
             requires=("preflight",),
-            action=None,
+            # A script, not a pasted command: the policy JSON didn't fit the
+            # detail pane, so users copied a command cut at --policy-document.
+            action=Command(argv=(
+                "sh", str(Path(__file__).resolve().parents[1] / "scripts" / "enable_transaction_search.sh"),
+                resolve_region(env)[0],
+            )),
             probe=probe.transaction_search_enabled,
         ),
         Step(
