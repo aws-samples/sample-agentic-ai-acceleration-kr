@@ -349,3 +349,22 @@ async def test_cached_keys_keep_sessions_alive_while_the_idp_is_down(idp, resolv
     verifier._jwks_fetched_at = time.monotonic() - verifier._jwks_ttl - 1
     assert await get_current_user(_request(token, idp, console=verifier)) is _RESOLVED
     assert idp.jwks_calls == 2
+
+
+async def test_cached_keys_are_not_trusted_forever(idp, resolve):
+    """IdP 가 그사이 키를 폐기했을 수 있다 — 상한을 넘긴 옛 키로는 검증하지 않는다."""
+    verifier = _console_verifier()
+    token = _token(_claims())
+    assert await get_current_user(_request(token, idp, console=verifier)) is _RESOLVED
+    resolve.reset_mock()
+
+    idp.down = True
+    verifier._jwks_fetched_at = time.monotonic() - verifier._jwks_ttl - 1
+    # 대조군 — 상한 안에서는 같은 상황이 통과한다(이게 없으면 "IdP 가 죽어서 503" 과 구분되지 않는다).
+    assert await get_current_user(_request(token, idp, console=verifier)) is _RESOLVED
+    resolve.reset_mock()
+
+    verifier._jwks_fetched_at = time.monotonic() - verifier._jwks_ttl - 1
+    verifier._jwks_loaded_at = time.monotonic() - verifier._MAX_STALE_SECONDS - 1
+    assert await _rejected(_request(token, idp, console=verifier)) == 503
+    resolve.assert_not_awaited()

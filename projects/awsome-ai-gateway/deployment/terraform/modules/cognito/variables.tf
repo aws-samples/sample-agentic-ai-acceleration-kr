@@ -48,9 +48,11 @@ variable "admin_ui_callback_urls" {
 
   validation {
     # Cognito 는 localhost 가 아니면 https 만 받는다. apply 중간에 InvalidParameterException 으로
-    # 죽는 대신 plan 에서 알린다.
+    # 죽는 대신 plan 에서 알린다. 호스트 자리에는 이름과 포트만 받는다 — `user@host` 형태를
+    # 허용하면 `https://admin.example.com@other.example/` 처럼 눈에 보이는 이름과 실제 호스트가
+    # 다른 값이 통과한다.
     condition = alltrue([
-      for u in var.admin_ui_callback_urls : can(regex("^(https://[^/]+|http://localhost(:[0-9]+)?)/", u))
+      for u in var.admin_ui_callback_urls : can(regex("^(https://[A-Za-z0-9.-]+(:[0-9]+)?|http://localhost(:[0-9]+)?)/", u))
     ])
     error_message = "admin_ui_callback_urls 의 각 값은 https:// 로 시작해야 합니다(localhost 만 http 허용). admin-ui 를 평문 HTTP 로만 노출하고 있다면 먼저 HTTPS 를 붙이십시오."
   }

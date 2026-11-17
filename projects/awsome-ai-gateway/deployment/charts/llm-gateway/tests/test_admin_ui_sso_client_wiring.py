@@ -90,6 +90,10 @@ def test_plain_http_callbacks_are_rejected_at_plan_time():
     assert rule.search("http://localhost:3000/api/auth/callback")
     assert not rule.search("http://admin.example.com/api/auth/callback")
     assert not rule.search("http://localhost.evil.example/api/auth/callback")
+    # 호스트 자리에 userinfo 를 끼운 값 — 보이는 이름과 실제 호스트가 다르다.
+    assert not rule.search("https://admin.example.com@other.example/api/auth/callback")
+    assert not rule.search("https://user:pass@admin.example.com/api/auth/callback")
+    assert rule.search("https://admin.example.com:8443/api/auth/callback")
 
 
 def test_the_admin_ui_client_is_a_code_flow_client_without_password_auth(clients):

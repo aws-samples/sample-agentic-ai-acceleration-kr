@@ -54,6 +54,9 @@ class OIDCVerifier:
     _MIN_FORCED_REFRESH_INTERVAL_SECONDS = 30.0
     # TTL 이 지난 뒤 갱신에 실패했을 때, 옛 키로 버티면서 다시 시도하기까지의 간격(초).
     _STALE_RETRY_INTERVAL_SECONDS = 30.0
+    # 옛 키로 버티는 상한(초) — 마지막으로 **성공한** fetch 기준. IdP 가 그사이 키를 폐기했을 수
+    # 있으므로 무한정 믿지 않는다. 이 시간이 지나도 IdP 가 안 닿으면 검증을 멈춘다(503).
+    _MAX_STALE_SECONDS = 24 * 60 * 60.0
 
     def __init__(
         self,
@@ -97,7 +100,10 @@ class OIDCVerifier:
 
         self._jwks_uri: str | None = None
         self._jwks_keys: dict[str, dict] = {}  # kid -> JWK dict
+        # _jwks_fetched_at 은 "다음에 언제 다시 받을까" 의 기준이라 실패 시 재시도 간격만큼
+        # 당겨 쓴다. _jwks_loaded_at 은 지금 들고 있는 키를 **실제로 받은** 시각이다.
         self._jwks_fetched_at: float = 0.0
+        self._jwks_loaded_at: float = 0.0
         # asyncio.Lock (NOT threading.Lock): _ensure_jwks_async 가 lock 을 잡은 채
         # await 한다. blocking lock 이면 두 번째 요청이 OS 스레드를 park 시켜
         # event loop 자체가 멈추고, JWKS 응답을 읽을 수도 없어 복구 불가.
@@ -195,8 +201,9 @@ class OIDCVerifier:
                 # TTL 만료로 인한 정기 갱신이 실패했고 옛 키가 있으면 그 키로 계속 검증한다.
                 # 키 회전은 드물고, IdP 가 잠깐 안 닿는다고 유효한 세션을 전부 503 으로
                 # 떨어뜨릴 이유가 없다. 모르는 kid 로 온 강제 갱신(force)은 그대로 올린다 —
-                # 그때는 옛 키로 답할 수 없다.
-                if force or not self._jwks_keys:
+                # 그때는 옛 키로 답할 수 없다. 옛 키가 상한보다 오래됐을 때도 올린다.
+                too_stale = (time.monotonic() - self._jwks_loaded_at) > self._MAX_STALE_SECONDS
+                if force or not self._jwks_keys or too_stale:
                     raise
                 self._jwks_fetched_at = (
                     time.monotonic() - self._jwks_ttl + self._STALE_RETRY_INTERVAL_SECONDS
@@ -209,7 +216,7 @@ class OIDCVerifier:
                 )
                 return
             self._jwks_keys = keys
-            self._jwks_fetched_at = time.monotonic()
+            self._jwks_fetched_at = self._jwks_loaded_at = time.monotonic()
             logger.info(
                 "oidc_verifier.jwks_loaded",
                 issuer=self._issuer_url,
