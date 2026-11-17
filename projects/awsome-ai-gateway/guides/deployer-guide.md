@@ -175,7 +175,10 @@ User HTTP → ALB → gateway-proxy Pod
 
 ### DEV_LOGIN_ENABLED 주의사항
 
-> `values-eks-fargate-prod.yaml`에 `DEV_LOGIN_ENABLED: "true"`가 남아있을 수 있습니다. 이 설정이 활성화되면 OIDC 인증 없이 dev-login 우회 접근이 가능합니다. **운영 환경에서는 SSO 연동 완료 후 반드시 `"false"`로 변경**하세요.
+> dev 로그인은 **개발 환경 전용**입니다. 서명 없는 토큰을 받아 payload의 role을 그대로 믿기 때문에, 켜져 있으면 관리자 API에 닿는 누구나 ADMIN이 됩니다.
+>
+> - `DEV_LOGIN_ENABLED: "true"`는 `APP_ENV`(= `global.environment`)가 `dev`, `development`, `local`, `test`일 때만 쓸 수 있습니다. 그 밖의 환경에서는 Helm 차트가 렌더를 거부하고, admin-api는 기동하지 않으며, admin-ui는 dev 로그인 폼을 열지 않습니다.
+> - `values-eks-fargate-prod.yaml`은 `"false"`입니다. 운영 환경의 관리 콘솔 로그인은 SSO로 엽니다 — [`07-cognito-onboarding.md` "7. Admin 콘솔 SSO"](../deployment/docs/eks-fargate/07-cognito-onboarding.md#7-admin-콘솔-sso-브라우저-로그인).
 
 ---
 
@@ -560,7 +563,7 @@ On-Prem 배포는 지원되지 않습니다 — 필요하다면 해당 커밋에
 | 항목 | 현재 | 고객 환경에서 |
 |---|---|---|
 | Ingress | HTTP(80), 도메인 없음 (방식 A) | HTTPS(443) + ACM 인증서 + Route53/외부 DNS (방식 B) |
-| `DEV_LOGIN_ENABLED` (admin-api/admin-ui) | `"true"` (SSO 교체 전 우회) | **`"false"`** — 고객 SSO 연동 후 |
+| `DEV_LOGIN_ENABLED` (admin-api/admin-ui) | `"true"` (dev 환경 전용) | **`"false"`** — 개발 환경이 아니면 차트가 렌더를 거부합니다. 관리 콘솔 로그인은 SSO로 엽니다(07-cognito-onboarding.md §7) |
 | `notificationWorkerUser` | `gateway` (단일 user 공유) | 별도 role + 최소 권한 GRANT 권장 |
 | `observability.otel.mode` | `in-cluster` + dummy endpoint | OTel Collector 배포 후 endpoint 교체 (Pod 재시작 불필요 — env only) |
 | Bedrock 모델 | `claude-sonnet-4`, `claude-haiku-4`, `claude-opus-4` | 고객 정책에 맞춰 `bedrockAllowedModels` / `bedrock_allowed_model_arns` 갱신 |

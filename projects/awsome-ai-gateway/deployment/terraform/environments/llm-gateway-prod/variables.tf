@@ -267,6 +267,24 @@ variable "cognito_logout_urls" {
   ]
 }
 
+variable "cognito_admin_ui_callback_urls" {
+  description = "admin-ui(브라우저 SSO) 의 OIDC redirect URI. 채우면 admin-ui 용 Cognito app client 를 만든다. 예: [\"https://admin.example.com/api/auth/callback\"]. 비어 있으면(기본) 만들지 않는다 — 관리 콘솔 SSO 를 쓰지 않는 설치에는 변화가 없다. https 만 받는다(localhost 제외)."
+  type        = list(string)
+  default     = []
+}
+
+variable "cognito_admin_ui_logout_urls" {
+  description = "admin-ui 로그아웃 뒤 돌아올 URI 화이트리스트"
+  type        = list(string)
+  default     = []
+}
+
+variable "cognito_admin_ui_token_validity_hours" {
+  description = "관리 콘솔 세션 길이(시간, 1~12). admin-ui 는 IdP 토큰을 그대로 세션으로 쓴다. 그룹에서 뺀 관리자의 권한은 이 시간이 지나야 사라진다."
+  type        = number
+  default     = 1
+}
+
 variable "cognito_groups" {
   description = "User groups. Claude_<team> 은 Default Department 하위 팀, Claude_<dept>_<team> 은 dept 자동 생성 후 team 매핑, ClaudeAdmin 은 admin 부트스트랩. prod는 dev 검증에서 결정된 깨끗한 셋만 — 빈 팀 잔재(aws-test, S/W-Culture-Office) 미포함."
   type        = list(string)

@@ -622,7 +622,12 @@ adminApi:
   env:
     LOG_LEVEL: "INFO"
     WORKERS: "2"
-    DEV_LOGIN_ENABLED: "false"  # production에선 반드시 false
+    # dev 로그인 — 서명 없는 토큰을 받아 payload 의 role 을 그대로 믿는다(누구나 ADMIN).
+    # "true" 는 **개발 환경에서만** 쓸 수 있다: APP_ENV(= global.environment, 여기서 APP_ENV 로
+    # override 가능)가 dev / development / local / test 가 아니면 차트가 렌더를 거부하고
+    # (templates/_helpers.tpl validateDevLogin), admin-api 도 기동하지 않는다.
+    # adminUi.env.DEV_LOGIN_ENABLED 와 같은 값으로 둔다.
+    DEV_LOGIN_ENABLED: "false"
     DEFAULT_USER_BUDGET_USD: "1000"
     # ── Bedrock invocation log 감사 대조 (기본 OFF) ──
     # 비어 있으면 /admin/audit/invocation-log/* 가 503(미설정)을 반환한다. 켜는 절차와
@@ -646,6 +651,12 @@ adminApi:
     enabled: false  # values-eks-fargate-{dev,prod}.yaml 에서 true 로 override
     issuerUrl: ""              # OIDC_ISSUER_URL — Cognito issuer URL
     audience: ""               # OIDC_AUDIENCE — Cognito 면 빈 값 (access_token 에 aud 없음)
+    # OIDC_ADMIN_UI_CLIENT_ID — admin-ui(브라우저 SSO)의 app client id.
+    # 채우면 admin-ui 가 admin_jwt 쿠키로 보내는 IdP 토큰을 issuer 의 JWKS 로 검증하고,
+    # **이 client 에게 발급된 토큰만** 받는다(키 회전 자동 추종). adminUi.env.OIDC_CLIENT_ID 와
+    # 같은 값이어야 한다. 비우면(기본) 그 경로는 꺼져 있고, IdP 서명키를
+    # auth.admin_jwt_configs 에 PEM 으로 직접 등록한 경우에만 SSO 세션이 통과한다.
+    adminUiClientId: ""
     providerName: "oidc"       # OIDC_PROVIDER_NAME — 예: "oidc:cognito"
     discoveryUrlOverride: ""   # OIDC_DISCOVERY_URL_OVERRIDE — 보통 비워둠
     jwksCacheTtlSeconds: 3600
@@ -785,6 +796,8 @@ adminUi:
     #   hosted UI 도메인 https://<domain>.auth.<region>.amazoncognito.com/oauth2/{authorize,token} 이다.
     #   Keycloak 이면 <issuer>/protocol/openid-connect/{auth,token}.
     #   app client 의 Allowed callback URL 에 https://<admin-ui host>/api/auth/callback 을 등록해야 한다.
+    #   admin-api 가 그 토큰을 받게 하려면 **같은 client id** 를 adminApi.oidc.adminUiClientId 에도 넣는다.
+    #   전체 절차: deployment/docs/eks-fargate/07-cognito-onboarding.md "Admin 콘솔 SSO".
     # OIDC_CLIENT_ID: ""       # 비면 SSO OFF. 채우면 /api/auth/login 이 authorize 로 302.
     # OIDC_AUTHORIZE_URL: ""   # 예: https://<domain>.auth.ap-northeast-2.amazoncognito.com/oauth2/authorize
     # OIDC_TOKEN_URL: ""       # 예: https://<domain>.auth.ap-northeast-2.amazoncognito.com/oauth2/token

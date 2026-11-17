@@ -42,6 +42,12 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     logger.info("app.starting", env=settings.APP_ENV)
 
+    # dev 로그인이 dev 계열이 아닌 환경에서 켜져 있으면 여기서 멈춘다 — 어떤 리소스도 열기 전이다.
+    # 롤링 업데이트에서는 새 파드가 Ready 가 되지 못해 기존 파드가 계속 서빙한다.
+    from app.core.dev_login import refuse_dev_login_outside_dev
+
+    refuse_dev_login_outside_dev()
+
     # ── Initialize resources ──
 
     # DB engine (module-level, but ensure it's created)
@@ -142,6 +148,18 @@ async def lifespan(app: FastAPI):
         )
         app.state.oidc_http = oidc_http
         app.state.oidc_verifier = oidc_verifier
+        # admin-ui SSO 세션 검증기 — 같은 issuer 의 JWKS 를 쓰되 발급 대상 client 가 다르다
+        # (CLI client 가 아니라 admin-ui client). 그래서 인스턴스를 따로 둔다.
+        app.state.console_oidc_verifier = None
+        if settings.OIDC_ADMIN_UI_CLIENT_ID:
+            app.state.console_oidc_verifier = OIDCVerifier(
+                issuer_url=settings.OIDC_ISSUER_URL,
+                audience="",
+                jwks_cache_ttl_seconds=settings.OIDC_JWKS_CACHE_TTL_SECONDS,
+                discovery_url_override=settings.OIDC_DISCOVERY_URL_OVERRIDE or None,
+                required_client_id=settings.OIDC_ADMIN_UI_CLIENT_ID,
+            )
+            logger.info("oidc.console_sso_enabled", client_id=settings.OIDC_ADMIN_UI_CLIENT_ID)
         # Cognito access_token 에는 email claim 이 없어, email 누락 시 AdminGetUser 로
         # enrich 하기 위한 client (best-effort). 풀 미구성 시 None.
         oidc_cognito_client = None
@@ -167,7 +185,14 @@ async def lifespan(app: FastAPI):
         app.state.oidc_service = None
         app.state.oidc_http = None
         app.state.oidc_verifier = None
+        app.state.console_oidc_verifier = None
         logger.info("oidc.disabled", reason="OIDC_ISSUER_URL or OIDC_AUDIENCE empty")
+        if settings.OIDC_ADMIN_UI_CLIENT_ID:
+            # issuer 없이는 JWKS 를 찾을 수 없다. 조용히 넘기면 SSO 가 왜 401 인지 알 수 없다.
+            logger.warning(
+                "oidc.console_sso_ignored",
+                reason="OIDC_ADMIN_UI_CLIENT_ID is set but OIDC_ISSUER_URL is empty",
+            )
 
     # TEAM budget config cold-cache warmup
     # init SQL / alembic 백필로 DB에 삽입된 TEAM 예산이 Redis에 없어

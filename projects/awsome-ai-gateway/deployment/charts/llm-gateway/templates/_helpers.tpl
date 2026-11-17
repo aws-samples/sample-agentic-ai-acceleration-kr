@@ -277,6 +277,11 @@ external-secrets.io/v1beta1
   value: {{ .Values.adminApi.oidc.issuerUrl | quote }}
 - name: OIDC_AUDIENCE
   value: {{ .Values.adminApi.oidc.audience | default "" | quote }}
+{{- /* 값이 있을 때만 렌더한다 — 빈 값을 항상 찍으면 이 기능을 안 쓰는 설치의 파드 스펙이 바뀐다. */}}
+{{- with .Values.adminApi.oidc.adminUiClientId }}
+- name: OIDC_ADMIN_UI_CLIENT_ID
+  value: {{ . | quote }}
+{{- end }}
 - name: OIDC_PROVIDER_NAME
   value: {{ .Values.adminApi.oidc.providerName | quote }}
 - name: OIDC_DISCOVERY_URL_OVERRIDE
@@ -351,4 +356,34 @@ external-secrets.io/v1beta1
 {{- $merged = merge .override $merged -}}
 {{- end -}}
 {{- toYaml $merged -}}
+{{- end -}}
+
+{{/* ------------------------------------------------------------------------
+  dev 로그인은 개발 환경에서만 — **렌더 단계에서** 막는다.
+
+  dev 로그인은 서명 없는 토큰을 받아 payload 의 role 을 그대로 믿는다. 관리자 API 에 닿을
+  수 있는 누구나 ADMIN 이 된다. 예전엔 `DEV_LOGIN_ENABLED=true` + `environment=prod`
+  조합에 NOTES.txt 가 경고만 했다 — 경고는 설치가 **끝난 뒤에** 출력되고, 그때는 이미
+  배포돼 있다. 그래서 여기서 실패시킨다: 잘못된 값은 클러스터에 닿지 않는다.
+
+  판정은 두 컨테이너가 실제로 받는 값과 같다:
+    * 스위치 — `<component>.env.DEV_LOGIN_ENABLED` 가 "true"
+    * 환경   — `<component>.env.APP_ENV` 가 있으면 그것(운영자 override 가 이긴다),
+               없으면 `global.environment`
+  허용 목록은 admin-api `core/dev_login.py`, admin-ui `lib/devLogin.ts` 와 같아야 한다.
+  앱도 같은 조합을 거부하지만(admin-api 는 기동하지 않는다) 그건 파드가 뜬 뒤다.
+
+  호출: templates/common/validation.yaml
+-------------------------------------------------------------------------- */}}
+{{- define "llm-gateway.validateDevLogin" -}}
+{{- $allowed := list "dev" "development" "local" "test" -}}
+{{- range $component := list "adminApi" "adminUi" -}}
+{{- $env := (index $.Values $component).env | default dict -}}
+{{- if eq (toString (index $env "DEV_LOGIN_ENABLED")) "true" -}}
+{{- $appEnv := toString (index $env "APP_ENV" | default $.Values.global.environment) -}}
+{{- if not (has (lower (trim $appEnv)) $allowed) -}}
+{{- fail (printf "values: %s.env.DEV_LOGIN_ENABLED=true 는 개발 환경에서만 쓸 수 있습니다 (지금 APP_ENV=%q, 허용: %s). dev 로그인은 서명 없는 토큰을 받으므로 관리자 API 에 닿는 누구나 ADMIN 이 됩니다. %s.env.DEV_LOGIN_ENABLED 를 \"false\" 로 두고 OIDC 로 로그인하십시오 (adminUi.env.OIDC_CLIENT_ID / OIDC_AUTHORIZE_URL / OIDC_TOKEN_URL, adminApi.oidc.adminUiClientId)." $component $appEnv (join ", " $allowed) $component) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}

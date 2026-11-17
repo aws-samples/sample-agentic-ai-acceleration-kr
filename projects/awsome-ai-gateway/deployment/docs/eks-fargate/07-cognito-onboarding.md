@@ -312,6 +312,78 @@ aws cognito-idp create-group \
 
 ---
 
+## 7. Admin 콘솔 SSO (브라우저 로그인)
+
+관리 콘솔(admin-ui)의 정식 로그인 경로입니다. 선택 사항이지만, **개발 환경이 아니면 이것이 유일한 로그인 방법**입니다. dev 로그인(`DEV_LOGIN_ENABLED`)은 `APP_ENV`가 `dev`, `development`, `local`, `test`일 때만 켤 수 있습니다. 그 밖의 환경에서 켜면 Helm 차트가 렌더를 거부하고 admin-api가 기동하지 않습니다.
+
+### 7.1 전제 — admin-ui가 HTTPS로 노출돼 있어야 합니다
+
+Cognito는 `https://` 콜백만 등록받습니다(localhost 제외). 기본 overlay의 Ingress는 HTTP(80)이므로 먼저 HTTPS를 붙입니다.
+
+- ACM 인증서와 도메인이 있으면 overlay의 주석 처리된 `listen-ports` / `certificate-arn` 줄을 채웁니다.
+- 없으면 admin-ui ALB 앞에 CloudFront를 둡니다. 이 경우 admin-ui가 보는 Host가 공개 주소와 달라지므로 `adminUi.env.OIDC_REDIRECT_URI`를 공개 URL로 명시합니다(7.3). CloudFront와 ALB 사이가 HTTP이면 세션 쿠키에 `Secure` 속성이 붙지 않으므로, 운영 환경에서는 ALB에도 HTTPS를 붙이는 구성을 권장합니다.
+
+### 7.2 admin-ui용 app client 만들기 (terraform)
+
+`terraform.tfvars`에 콜백 URL을 넣고 apply 합니다. 값이 비어 있으면(기본) client를 만들지 않습니다.
+
+```hcl
+cognito_admin_ui_callback_urls = ["https://<admin-ui 공개 주소>/api/auth/callback"]
+cognito_admin_ui_logout_urls   = ["https://<admin-ui 공개 주소>/"]
+```
+
+```bash
+terraform apply
+terraform output cognito_admin_ui_client_id
+terraform output cognito_oauth_authorize_url
+terraform output cognito_oauth_token_url
+```
+
+CLI client(`cognito_client_id`)와 다른 client입니다. admin-api는 관리 콘솔 세션 토큰이 **이 client에게 발급된 것인지** 확인합니다.
+
+### 7.3 Helm 값
+
+`install-eks.sh`는 위 output이 있으면 아래 값을 자동으로 넣습니다. 수동으로 넣을 때는 다음과 같습니다.
+
+```yaml
+adminApi:
+  oidc:
+    adminUiClientId: "<cognito_admin_ui_client_id>"   # admin-api 가 이 client 의 토큰만 받는다
+adminUi:
+  env:
+    OIDC_CLIENT_ID: "<cognito_admin_ui_client_id>"    # 위와 같은 값
+    OIDC_AUTHORIZE_URL: "<cognito_oauth_authorize_url>"
+    OIDC_TOKEN_URL: "<cognito_oauth_token_url>"
+    # CloudFront 등 앞단에서 TLS 를 끝낼 때만:
+    # OIDC_REDIRECT_URI: "https://<admin-ui 공개 주소>/api/auth/callback"
+```
+
+admin-api는 Cognito의 공개키(JWKS)를 issuer에서 직접 받아 토큰을 검증하고 키 회전을 자동으로 따라갑니다. 서명키를 DB(`auth.admin_jwt_configs`)에 따로 등록할 필요가 없습니다.
+
+### 7.4 누가 로그인할 수 있나
+
+- **사용자가 게이트웨이에 등록돼 있어야 합니다.** 관리 콘솔 로그인은 사용자를 새로 만들지 않습니다. 가장 간단한 방법은 gateway-cli로 한 번 로그인해 VK를 발급받는 것입니다(3.3~3.4). 등록되지 않은 사용자는 403(`user_not_provisioned`)을 받습니다.
+- **ADMIN 권한**은 `adminBootstrap.groups`(예: `ClaudeAdmin`) 그룹 멤버이거나 `adminBootstrap.emails`에 있는 사용자에게 주어집니다. 그룹에서 빼면 현재 세션이 끝난 뒤 권한이 사라집니다.
+- **세션 길이**는 토큰 수명과 같습니다. 기본 1시간이고 `cognito_admin_ui_token_validity_hours`(1~12)로 바꿉니다.
+
+### 7.5 확인
+
+```bash
+# 1) 로그인 진입점이 Cognito hosted UI 로 보낸다 (302 + amazoncognito.com)
+curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' "https://<admin-ui 공개 주소>/api/auth/login"
+
+# 2) admin-api 가 관리 콘솔 SSO 검증을 켰다
+kubectl -n llm-gateway logs deploy/llm-gateway-admin-api | grep oidc.console_sso_enabled
+```
+
+브라우저에서 관리 콘솔을 열어 Cognito 로그인 뒤 대시보드가 뜨면 완료입니다.
+
+### 7.6 Cognito가 아닌 IdP
+
+`adminUi.env.OIDC_AUTHORIZE_URL` / `OIDC_TOKEN_URL`을 그 IdP의 엔드포인트로, `OIDC_CLIENT_ID`와 `adminApi.oidc.adminUiClientId`를 그 IdP에 등록한 client id로 넣습니다. confidential client라면 `OIDC_CLIENT_SECRET`을 시크릿 경로로 전달합니다(`values.yaml`의 `adminUi.env` 주석 참조).
+
+---
+
 ## ✅ 완료 체크리스트
 
 - [ ] terraform output 의 cognito_* 값 모두 정상
@@ -320,6 +392,7 @@ aws cognito-idp create-group \
 - [ ] gateway-cli login → JWT 캐시 (mode 0600)
 - [ ] api-key-helper → VK 발급 + DB 의 users 테이블에 provider='oidc:cognito' 행 INSERT
 - [ ] gateway-proxy 호출 → 429 budget_exceeded (정상, deny by default)
+- [ ] (개발 환경이 아니면) 관리 콘솔 SSO — `/api/auth/login` 이 IdP 로 302, 로그인 뒤 대시보드 표시 (7절)
 - [ ] admin UI 에서 budget 활성화 → 200 응답
 
 이 체크리스트가 모두 통과하면 OIDC 흐름이 production 에서 정상 동작.

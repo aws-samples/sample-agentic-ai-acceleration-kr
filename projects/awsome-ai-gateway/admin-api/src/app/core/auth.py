@@ -10,6 +10,8 @@ from fastapi import Depends, HTTPException, Request
 from jose import JWTError, jwt
 
 from app.core.db import AsyncSessionLocal
+from app.core.dev_login import dev_login_enabled
+from app.core.oidc_verifier import OIDCConfigError, OIDCVerifier, OIDCVerifyError
 from app.models.auth import UserRole
 from app.services.service_token_service import (
     SERVICE_TOKEN_PREFIX,
@@ -95,9 +97,9 @@ def _parse_dev_token(token: str) -> dict | None:
     """Parse dev-mode JWT (format: dev.<base64url-payload>.sig). Returns None if not a dev token."""
     import base64
     import json
-    import os
 
-    if not token.startswith("dev.") or os.getenv("DEV_LOGIN_ENABLED") != "true":
+    # 스위치만 보지 않는다 — APP_ENV 가 dev 계열이 아니면 켜져 있어도 받지 않는다(core/dev_login.py).
+    if not token.startswith("dev.") or not dev_login_enabled():
         return None
 
     parts = token.split(".")
@@ -116,10 +118,51 @@ def _parse_dev_token(token: str) -> dict | None:
         return None
 
 
+def _unverified_issuer(token: str) -> str | None:
+    """서명 검증 **전의** ``iss``. 어느 검증기로 보낼지 고르는 데만 쓴다.
+
+    이 값을 믿고 인가하지 않는다 — 고른 검증기가 서명·iss·만료를 다시 확인한다. 공격자가
+    ``iss`` 를 지어내도 얻는 것은 "그 issuer 의 키로 검증받을 기회" 뿐이다.
+    """
+    try:
+        iss = jwt.get_unverified_claims(token).get("iss")
+    except JWTError:
+        return None
+    return iss.rstrip("/") if isinstance(iss, str) else None
+
+
+async def _verify_console_sso_token(request: Request, token: str) -> dict | None:
+    """admin-ui SSO 세션 토큰이면 IdP 의 JWKS 로 검증해 클레임을 돌려준다. 아니면 None.
+
+    admin-ui 는 OIDC 콜백에서 받은 IdP 토큰을 그대로 ``admin_jwt`` 쿠키에 굽는다. 예전엔 그
+    토큰을 검증하려면 운영자가 IdP 서명키를 PEM 으로 바꿔 ``auth.admin_jwt_configs`` 에
+    손으로 넣어야 했다 — IdP 가 키를 바꾸면 관리자 로그인이 전부 끊기고, 원인은 DB 행 하나다.
+    ``OIDC_ADMIN_UI_CLIENT_ID`` 를 채우면 issuer 의 JWKS 를 직접 읽어 검증한다(회전 자동 추종).
+
+    해당 조건 두 가지: 그 설정이 켜져 있고(``console_oidc_verifier``), 토큰의 ``iss`` 가
+    설정된 issuer 다. 조건에 맞으면 **이 경로가 최종 판정**이다 — 실패했다고 아래의 고정 PEM
+    경로로 넘기지 않는다. 한 issuer 의 토큰을 두 군데서 다른 기준으로 받으면 어느 쪽이
+    통과시켰는지 알 수 없다.
+    """
+    verifier = getattr(request.app.state, "console_oidc_verifier", None)
+    if not isinstance(verifier, OIDCVerifier) or _unverified_issuer(token) != verifier.issuer_url:
+        return None
+
+    try:
+        return await verifier.verify_async(token, request.app.state.oidc_http)
+    except OIDCVerifyError:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    except OIDCConfigError as e:
+        # IdP 에 닿지 못해 판정할 수 없다. 401 을 주면 admin-ui 가 쿠키를 지우고 로그인으로
+        # 되돌리는데, IdP 가 죽어 있으니 로그인도 못 한다 — 503 이 사실에 맞다.
+        logger.error("auth.console_sso_idp_unreachable", error=str(e))
+        raise HTTPException(status_code=503, detail="Identity provider is unreachable")
+
+
 async def get_current_user(request: Request) -> CurrentUser:
     token = _extract_token(request)
 
-    # Dev token shortcut (DEV_LOGIN_ENABLED=true only)
+    # Dev token shortcut (DEV_LOGIN_ENABLED=true **and** a dev-like APP_ENV only)
     dev_payload = _parse_dev_token(token)
     if dev_payload is not None:
         return CurrentUser(
@@ -146,6 +189,11 @@ async def get_current_user(request: Request) -> CurrentUser:
             is_service_token=True,
             service_token_id=svc_tok.id,
         )
+
+    # admin-ui SSO 세션(IdP 가 발급한 토큰) — 설정돼 있으면 issuer 의 JWKS 로 검증한다.
+    sso_claims = await _verify_console_sso_token(request, token)
+    if sso_claims is not None:
+        return await _resolve_idp_identity(sso_claims)
 
     verifier: JWTVerifier = request.app.state.jwt_verifier
 

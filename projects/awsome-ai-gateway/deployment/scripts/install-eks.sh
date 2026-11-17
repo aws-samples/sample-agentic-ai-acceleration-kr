@@ -121,6 +121,10 @@ read_tf_outputs() {
     COGNITO_ISSUER_URL=$(echo "$outputs" | jq -r '.cognito_issuer_url.value // empty')
     COGNITO_CLIENT_ID=$(echo "$outputs" | jq -r '.cognito_client_id.value // empty')
     COGNITO_HOSTED_UI=$(echo "$outputs" | jq -r '.cognito_hosted_ui_domain.value // empty')
+    # 관리 콘솔(admin-ui) SSO — cognito_admin_ui_callback_urls 를 채워 app client 를 만든 경우만 값이 있다
+    COGNITO_ADMIN_UI_CLIENT_ID=$(echo "$outputs" | jq -r '.cognito_admin_ui_client_id.value // empty')
+    COGNITO_AUTHORIZE_URL=$(echo "$outputs" | jq -r '.cognito_oauth_authorize_url.value // empty')
+    COGNITO_TOKEN_URL=$(echo "$outputs" | jq -r '.cognito_oauth_token_url.value // empty')
 
     popd >/dev/null
 
@@ -141,6 +145,7 @@ read_tf_outputs() {
     echo "    cognito_issuer_url     : ${COGNITO_ISSUER_URL:-'(없음 — OIDC 비활성)'}"
     echo "    cognito_client_id      : ${COGNITO_CLIENT_ID:-'(없음)'}"
     echo "    cognito_hosted_ui_domain: ${COGNITO_HOSTED_UI:-'(없음)'}"
+    echo "    cognito_admin_ui_client_id: ${COGNITO_ADMIN_UI_CLIENT_ID:-'(없음 — 관리 콘솔 SSO 미설정)'}"
 }
 
 # ---- kubectl context 설정 ----
@@ -450,6 +455,19 @@ helm_install() {
         )
         # 다시 if 로 닫지 않고 dummy true (아래 fi 와 짝 맞춤 위해)
         true
+    fi
+
+    # 관리 콘솔 SSO — terraform 이 admin-ui app client 를 만든 경우만 주입한다.
+    # admin-ui 는 이 세 값으로 로그인을 IdP 로 보내고, admin-api 는 같은 client id 로
+    # 발급된 토큰만 JWKS 로 검증해 받는다. 값이 없으면 아무것도 넣지 않는다(오늘과 같은 렌더).
+    if [ -n "${COGNITO_ISSUER_URL}" ] && [ -n "${COGNITO_ADMIN_UI_CLIENT_ID}" ] \
+        && [ -n "${COGNITO_AUTHORIZE_URL}" ] && [ -n "${COGNITO_TOKEN_URL}" ]; then
+        SET_ARGS+=(
+            --set-string "adminApi.oidc.adminUiClientId=${COGNITO_ADMIN_UI_CLIENT_ID}"
+            --set-string "adminUi.env.OIDC_CLIENT_ID=${COGNITO_ADMIN_UI_CLIENT_ID}"
+            --set-string "adminUi.env.OIDC_AUTHORIZE_URL=${COGNITO_AUTHORIZE_URL}"
+            --set-string "adminUi.env.OIDC_TOKEN_URL=${COGNITO_TOKEN_URL}"
+        )
     fi
 
     # Migration Job 은 pre-install hook 으로 실행됨:

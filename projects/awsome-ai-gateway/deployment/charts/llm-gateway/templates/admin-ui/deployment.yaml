@@ -79,6 +79,10 @@ spec:
                 secretKeyRef:
                   name: {{ include "llm-gateway.fullname" . }}-app
                   key: nextauth_secret
+            {{- /* admin-api 와 같은 환경 이름. dev 로그인은 스위치와 **이 값**을 함께 본다
+                 (src/lib/devLogin.ts) — 개발 환경이 아니면 켜져 있어도 폼을 열지 않는다. */}}
+            - name: APP_ENV
+              value: {{ .Values.global.environment | quote }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: {{ .Values.observability.otel.endpoint | quote }}
             - name: OTEL_EXPORTER_OTLP_PROTOCOL

@@ -130,6 +130,9 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-gateway}:${POSTGRES_PASSWORD:-gateway_dev_password}@postgres:5432/${POSTGRES_DB:-gateway}
       REDIS_URL: redis://redis:6379/0
+      # dev 로그인은 DEV_LOGIN_ENABLED=true 이고 APP_ENV 가 개발 환경일 때만 켜진다
+      # (dev / development / local / test). 그 밖의 값이면 admin-api 가 기동하지 않는다.
+      APP_ENV: ${APP_ENV:-development}
       DEV_LOGIN_ENABLED: ${DEV_LOGIN_ENABLED:-true}
     networks: [control-plane, shared]
     ports:
@@ -158,6 +161,7 @@ services:
       HOSTNAME: "0.0.0.0"
       ADMIN_API_URL: http://admin-api:8080
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-dev-secret-change-in-prod}
+      APP_ENV: ${APP_ENV:-development}  # admin-api 와 같은 값 — dev 로그인 판정에 쓴다
       DEV_LOGIN_ENABLED: ${DEV_LOGIN_ENABLED:-true}
       OTEL_SERVICE_NAME: admin-ui
       OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4318
