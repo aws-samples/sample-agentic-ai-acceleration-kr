@@ -143,6 +143,53 @@ resource "aws_cognito_user_pool_client" "cli" {
 }
 
 # ------------------------------------------------------------------------------
+# App Client — admin-ui (브라우저 SSO), admin_ui_callback_urls 를 채웠을 때만
+# ------------------------------------------------------------------------------
+# CLI client 와 따로 둔다. admin-api 는 관리 콘솔 세션 토큰이 **이 client 에게 발급됐는지**
+# 대조한다(OIDC_ADMIN_UI_CLIENT_ID) — client 를 같이 쓰면 CLI 로 받은 토큰이 그대로
+# 관리 콘솔 세션이 된다.
+resource "aws_cognito_user_pool_client" "admin_ui" {
+  count = length(var.admin_ui_callback_urls) > 0 ? 1 : 0
+
+  name         = "${var.project}-${var.environment}-admin-ui"
+  user_pool_id = aws_cognito_user_pool.this.id
+
+  # Public client + PKCE(S256). admin-ui 가 /api/auth/login 에서 PKCE 를 붙이고
+  # 서버(Next.js route)에서 code 를 교환한다. secret 을 쓰려면 Secrets Manager 로 전달해야
+  # 하므로 기본은 두지 않는다.
+  generate_secret = false
+
+  allowed_oauth_flows                  = ["code"]
+  allowed_oauth_flows_user_pool_client = true
+  allowed_oauth_scopes                 = ["openid", "email", "profile"]
+  supported_identity_providers         = ["COGNITO"]
+
+  callback_urls = var.admin_ui_callback_urls
+  logout_urls   = var.admin_ui_logout_urls
+
+  # admin-ui 는 받은 토큰을 그대로 세션 쿠키로 쓰고 refresh 하지 않는다 — 세션 길이 = 토큰 수명.
+  access_token_validity  = var.admin_ui_token_validity_hours
+  id_token_validity      = var.admin_ui_token_validity_hours
+  refresh_token_validity = 1
+  token_validity_units {
+    access_token  = "hours"
+    id_token      = "hours"
+    refresh_token = "days"
+  }
+
+  enable_token_revocation       = true
+  prevent_user_existence_errors = "ENABLED"
+
+  # Hosted UI 로그인만 쓴다. 비밀번호를 API 로 직접 받는 흐름(USER_PASSWORD_AUTH)은 열지 않는다.
+  explicit_auth_flows = [
+    "ALLOW_USER_SRP_AUTH",
+    "ALLOW_REFRESH_TOKEN_AUTH",
+  ]
+
+  read_attributes = ["email", "email_verified", "name"]
+}
+
+# ------------------------------------------------------------------------------
 # 사용자 그룹 (terraform 으로 미리 생성, admin 이 사용자를 콘솔에서 추가)
 # ------------------------------------------------------------------------------
 resource "aws_cognito_user_group" "groups" {

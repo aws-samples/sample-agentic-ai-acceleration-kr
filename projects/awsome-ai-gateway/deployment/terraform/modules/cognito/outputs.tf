@@ -25,6 +25,21 @@ output "hosted_ui_domain" {
   description = "Hosted UI 도메인. 사용자가 이걸로 로그인 페이지 접근."
 }
 
+output "admin_ui_client_id" {
+  value       = try(aws_cognito_user_pool_client.admin_ui[0].id, null)
+  description = "admin-ui app client id — adminUi.env.OIDC_CLIENT_ID 와 adminApi.oidc.adminUiClientId 에 같은 값을 넣는다. admin_ui_callback_urls 가 비어 있으면 null."
+}
+
+output "oauth_authorize_url" {
+  value       = "https://${aws_cognito_user_pool_domain.this.domain}.auth.${var.aws_region}.amazoncognito.com/oauth2/authorize"
+  description = "Hosted UI authorize 엔드포인트 — adminUi.env.OIDC_AUTHORIZE_URL (issuer URL 이 아니다)"
+}
+
+output "oauth_token_url" {
+  value       = "https://${aws_cognito_user_pool_domain.this.domain}.auth.${var.aws_region}.amazoncognito.com/oauth2/token"
+  description = "Hosted UI token 엔드포인트 — adminUi.env.OIDC_TOKEN_URL"
+}
+
 output "groups" {
   value       = [for g in aws_cognito_user_group.groups : g.name]
   description = "생성된 user groups (admin 이 사용자를 여기 추가)"

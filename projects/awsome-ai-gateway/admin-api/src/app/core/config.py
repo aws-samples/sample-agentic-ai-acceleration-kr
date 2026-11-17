@@ -73,6 +73,11 @@ class Settings(BaseSettings):
     # OIDC_ISSUER_URL 이 비어있으면 OIDC 비활성. 채워지면 활성 (POST /v1/auth/exchange 노출).
     OIDC_ISSUER_URL: str = ""
     OIDC_AUDIENCE: str = ""
+    # admin-ui(브라우저 SSO)의 app client id. 채우면 admin_jwt 로 들어온 IdP 토큰을 issuer 의
+    # JWKS 로 검증하고, **이 client 에게 발급된 토큰만** 받는다(core/auth.py
+    # _verify_console_sso_token). 비어 있으면 그 경로는 꺼져 있고, admin_jwt 는 예전처럼
+    # auth.admin_jwt_configs 에 등록된 고정 PEM 으로만 검증한다. OIDC_ISSUER_URL 이 필요하다.
+    OIDC_ADMIN_UI_CLIENT_ID: str = ""
     # users.provider 컬럼에 들어가는 값. 다중 IDP 운영 시 식별자.
     # 예: 'oidc:keycloak', 'oidc:cognito', 'oidc:identity_center'
     OIDC_PROVIDER_NAME: str = "oidc"

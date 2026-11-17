@@ -3,18 +3,26 @@
 /**
  * Dev-login route — MVP authentication bypass.
  *
- * Disabled in production (DEV_LOGIN_ENABLED !== 'true').
+ * Enabled only when DEV_LOGIN_ENABLED === 'true' **and** APP_ENV is a development
+ * environment (lib/devLogin.ts). Anywhere else the route answers 503.
  * Issues a simple base64-encoded dev JWT (NOT cryptographically signed).
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { devLoginState, DEV_LOGIN_ENVIRONMENTS, type DevLoginState } from '@/lib/devLogin';
 import { redirectRelative } from '@/lib/redirect';
 import { UserRole } from '@/types/enums';
 
 const DEV_COOKIE_MAX_AGE = 60 * 60 * 24; // 24 hours in seconds
 
-function isDisabled(): boolean {
-  return process.env.DEV_LOGIN_ENABLED !== 'true';
+type DisabledState = Extract<DevLoginState, { enabled: false }>;
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 function buildDevToken(role: string): string {
@@ -40,12 +48,36 @@ function buildDevToken(role: string): string {
  * 브라우저에도 서버 로그에도 단서가 0이었다(A3). 상태코드도 404 는 오답이다:
  * 라우트는 존재하고 정책상 비활성일 뿐이라 503 이 맞다.
  */
-const DISABLED_MESSAGE =
-  'Dev login is disabled in this environment (DEV_LOGIN_ENABLED != "true"). ' +
+const SSO_HINT =
   'Use the SSO entry point at /api/auth/login. ' +
   'If SSO is not configured either, /api/auth/login will name the missing OIDC_* variables.';
 
-const DISABLED_HTML = `<!DOCTYPE html>
+/**
+ * 왜 꺼져 있는지를 구분해서 말한다. 스위치는 켰는데 환경 때문에 거부된 경우를
+ * "DEV_LOGIN_ENABLED 가 꺼져 있다" 고 답하면 운영자는 이미 켠 스위치를 다시 켜려고 한다.
+ */
+function disabledMessage(state: DisabledState): string {
+  if (state.reason === 'environment') {
+    return (
+      `Dev login is refused: DEV_LOGIN_ENABLED is "true" but APP_ENV="${state.appEnv}" is not a ` +
+      `development environment (${DEV_LOGIN_ENVIRONMENTS.join(', ')}). ` +
+      SSO_HINT
+    );
+  }
+  return `Dev login is disabled in this environment (DEV_LOGIN_ENABLED != "true"). ${SSO_HINT}`;
+}
+
+function disabledReasonHtml(state: DisabledState): string {
+  if (state.reason === 'environment') {
+    return (
+      `<p><code>DEV_LOGIN_ENABLED=true</code> 이지만 <code>APP_ENV=${escapeHtml(state.appEnv)}</code> 는 ` +
+      `개발 환경(${DEV_LOGIN_ENVIRONMENTS.join(', ')})이 아니므로 개발용 로그인을 거부합니다.</p>`
+    );
+  }
+  return '<p>이 환경은 <code>DEV_LOGIN_ENABLED != "true"</code> 이므로 개발용 로그인이 비활성입니다.</p>';
+}
+
+const disabledHtml = (state: DisabledState): string => `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -62,14 +94,14 @@ const DISABLED_HTML = `<!DOCTYPE html>
 <body>
   <div class="card">
     <h1>Dev login is disabled</h1>
-    <p>이 환경은 <code>DEV_LOGIN_ENABLED != "true"</code> 이므로 개발용 로그인이 비활성입니다.</p>
+    ${disabledReasonHtml(state)}
     <p>SSO 진입점: <a href="/api/auth/login">/api/auth/login</a> — OIDC 가 설정돼 있지 않으면 그 페이지가 <strong>비어 있는 환경변수 이름</strong>을 그대로 알려줍니다.</p>
   </div>
 </body>
 </html>`;
 
-function disabledHtmlResponse(): NextResponse {
-  return new NextResponse(DISABLED_HTML, {
+function disabledHtmlResponse(state: DisabledState): NextResponse {
+  return new NextResponse(disabledHtml(state), {
     status: 503,
     headers: {
       'Content-Type': 'text/html; charset=utf-8',
@@ -112,8 +144,9 @@ const LOGIN_HTML = `<!DOCTYPE html>
 </html>`;
 
 export async function GET(): Promise<NextResponse> {
-  if (isDisabled()) {
-    return disabledHtmlResponse();
+  const state = devLoginState();
+  if (!state.enabled) {
+    return disabledHtmlResponse(state);
   }
 
   return new NextResponse(LOGIN_HTML, {
@@ -123,10 +156,11 @@ export async function GET(): Promise<NextResponse> {
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  if (isDisabled()) {
+  const state = devLoginState();
+  if (!state.enabled) {
     // POST 는 이 파일의 다른 에러들과 같은 JSON 형태를 유지한다(아래 400 들과 동일 idiom).
     return NextResponse.json(
-      { error: DISABLED_MESSAGE, sso_entry_point: '/api/auth/login' },
+      { error: disabledMessage(state), sso_entry_point: '/api/auth/login' },
       { status: 503, headers: { 'Cache-Control': 'no-store' } },
     );
   }

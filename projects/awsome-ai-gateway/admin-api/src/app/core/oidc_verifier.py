@@ -49,6 +49,12 @@ class OIDCVerifier:
 
     _ALLOWED_ALGS = ("RS256", "RS384", "RS512")
 
+    # 모르는 kid 로 강제 갱신하는 최소 간격(초). 검증 전 단계라 누구나 kid 를 지어낼 수 있다 —
+    # 간격이 없으면 요청 하나가 IdP 로의 fetch 하나가 된다.
+    _MIN_FORCED_REFRESH_INTERVAL_SECONDS = 30.0
+    # TTL 이 지난 뒤 갱신에 실패했을 때, 옛 키로 버티면서 다시 시도하기까지의 간격(초).
+    _STALE_RETRY_INTERVAL_SECONDS = 30.0
+
     def __init__(
         self,
         issuer_url: str,
@@ -56,6 +62,7 @@ class OIDCVerifier:
         jwks_cache_ttl_seconds: int = 3600,
         http_timeout_seconds: float = 5.0,
         discovery_url_override: str | None = None,
+        required_client_id: str | None = None,
     ) -> None:
         """
         Parameters
@@ -66,6 +73,11 @@ class OIDCVerifier:
             dev 환경 (docker / 다른 hostname) 처럼 issuer URL 을 직접 fetch 못 하는 경우.
             ``.well-known/openid-configuration`` 가 있는 base URL 을 명시적으로 지정.
             None 이면 ``issuer_url`` 로 fetch.
+        required_client_id:
+            채우면 **이 app client 에게 발급된 토큰만** 통과한다. ``aud`` 가 있으면 그 값과,
+            없으면(Cognito access_token) ``client_id`` claim 과 대조한다. 둘 다 없으면 거부.
+            ``audience`` 와 달리 claim 이 없다고 넘어가지 않는다 — jose 는 토큰에 ``aud`` 가
+            없으면 audience 를 줘도 검사를 건너뛴다.
 
         토큰의 ``iss`` claim 검증은 항상 ``issuer_url`` 과 정확 일치를 요구한다.
         JWKS fetch 만 별도 URL 사용 가능.
@@ -79,6 +91,7 @@ class OIDCVerifier:
         self._issuer_url = issuer_url.rstrip("/")
         self._discovery_base = (discovery_url_override or issuer_url).rstrip("/")
         self._audience = audience or None
+        self._required_client_id = required_client_id or None
         self._jwks_ttl = jwks_cache_ttl_seconds
         self._http_timeout = http_timeout_seconds
 
@@ -89,6 +102,11 @@ class OIDCVerifier:
         # await 한다. blocking lock 이면 두 번째 요청이 OS 스레드를 park 시켜
         # event loop 자체가 멈추고, JWKS 응답을 읽을 수도 없어 복구 불가.
         self._lock = asyncio.Lock()
+
+    @property
+    def issuer_url(self) -> str:
+        """정규화된 issuer. 호출부가 "이 토큰이 이 verifier 의 것인가" 를 가를 때 쓴다."""
+        return self._issuer_url
 
     # ------------------------------------------------------------------
     # Discovery + JWKS
@@ -155,16 +173,41 @@ class OIDCVerifier:
             raise OIDCConfigError("JWKS contains no signing keys (use=sig)")
         return result
 
+    def _jwks_is_fresh(self, force: bool) -> bool:
+        if not self._jwks_keys:
+            return False
+        age = time.monotonic() - self._jwks_fetched_at
+        if force:
+            # 방금 받은 키라면 다시 받아도 같은 답이다 — 지어낸 kid 가 fetch 를 유발하지 못하게 한다.
+            return age < self._MIN_FORCED_REFRESH_INTERVAL_SECONDS
+        return age < self._jwks_ttl
+
     async def _ensure_jwks_async(self, client: httpx.AsyncClient, force: bool = False) -> None:
-        now = time.monotonic()
-        if not force and self._jwks_keys and (now - self._jwks_fetched_at) < self._jwks_ttl:
+        if self._jwks_is_fresh(force):
             return
         async with self._lock:
             # 이중 체크 — lock 진입 사이 다른 호출이 갱신했을 수 있음
-            now = time.monotonic()
-            if not force and self._jwks_keys and (now - self._jwks_fetched_at) < self._jwks_ttl:
+            if self._jwks_is_fresh(force):
                 return
-            keys = await self._fetch_jwks_async(client)
+            try:
+                keys = await self._fetch_jwks_async(client)
+            except OIDCConfigError as e:
+                # TTL 만료로 인한 정기 갱신이 실패했고 옛 키가 있으면 그 키로 계속 검증한다.
+                # 키 회전은 드물고, IdP 가 잠깐 안 닿는다고 유효한 세션을 전부 503 으로
+                # 떨어뜨릴 이유가 없다. 모르는 kid 로 온 강제 갱신(force)은 그대로 올린다 —
+                # 그때는 옛 키로 답할 수 없다.
+                if force or not self._jwks_keys:
+                    raise
+                self._jwks_fetched_at = (
+                    time.monotonic() - self._jwks_ttl + self._STALE_RETRY_INTERVAL_SECONDS
+                )
+                logger.warning(
+                    "oidc_verifier.jwks_refresh_failed_using_stale_keys",
+                    issuer=self._issuer_url,
+                    key_count=len(self._jwks_keys),
+                    error=str(e),
+                )
+                return
             self._jwks_keys = keys
             self._jwks_fetched_at = time.monotonic()
             logger.info(
@@ -242,4 +285,21 @@ class OIDCVerifier:
         if not payload.get("sub"):
             raise OIDCVerifyError("missing 'sub' claim")
 
+        # 6. 발급 대상 client 대조 (required_client_id 를 준 verifier 만)
+        if self._required_client_id is not None and not self._issued_to_required_client(payload):
+            raise OIDCVerifyError("token was not issued to the expected client")
+
         return payload
+
+    def _issued_to_required_client(self, payload: dict) -> bool:
+        """``aud`` 가 있으면 그것으로, 없으면 ``client_id`` 로 발급 대상을 판정한다.
+
+        id_token 은 ``aud`` 에 app client id 를 싣는다. Cognito access_token 은 ``aud`` 가
+        없고 ``client_id`` 에 싣는다. ``aud`` 가 있는데 맞지 않으면 ``client_id`` 로 넘어가지
+        않는다 — 두 claim 중 하나만 맞아도 통과시키면 대조가 느슨해진다.
+        """
+        aud = payload.get("aud")
+        if aud is not None:
+            audiences = aud if isinstance(aud, list) else [aud]
+            return self._required_client_id in audiences
+        return payload.get("client_id") == self._required_client_id

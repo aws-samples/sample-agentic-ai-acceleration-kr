@@ -16,7 +16,8 @@
  * 분기:
  *   1) OIDC 필수 3개(OIDC_CLIENT_ID / OIDC_AUTHORIZE_URL / OIDC_TOKEN_URL)가 모두 채워짐
  *      → provider 의 authorize 엔드포인트로 302 (response_type=code + state + PKCE S256)
- *   2) OIDC 변수가 하나도 없고 DEV_LOGIN_ENABLED=true → dev 폼으로 넘긴다 (dev 무변경)
+ *   2) OIDC 변수가 하나도 없고 dev 로그인이 켜져 있으면 → dev 폼으로 넘긴다 (dev 무변경).
+ *      "켜져 있다" = DEV_LOGIN_ENABLED=true 이고 APP_ENV 가 개발 환경이다(lib/devLogin.ts).
  *   3) 그 외(둘 다 없음 / OIDC 반쪽 설정) → **읽을 수 있는 503**. 어떤 env 가 비었는지
  *      이름으로 찍는다. 본문 없는 404 로는 절대 끝내지 않는다.
  *
@@ -35,6 +36,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { devLoginState, type DevLoginState } from '@/lib/devLogin';
 import { redirectRelative } from '@/lib/redirect';
 
 // 로그인 진입점 — 캐시/정적최적화 금지. 여기서 만든 state/PKCE 가 캐시되면 모든 사용자가
@@ -109,11 +111,20 @@ function escapeHtml(s: string): string {
  * 설정이 안 된 상태를 **읽히게** 만든다. 원래 증상(본문 없는 404)이 다시 나오면
  * 운영자는 브라우저 개발자도구에서조차 아무 단서를 못 얻는다.
  */
-function notConfiguredResponse(missing: readonly string[], devHint: boolean): NextResponse {
+function devLoginBlock(devLogin: DevLoginState): string {
+  if (devLogin.enabled) {
+    return `<p>DEV_LOGIN_ENABLED=true 이므로 개발용 로그인은 <a href="/api/auth/dev-login">/api/auth/dev-login</a> 에서 쓸 수 있습니다.</p>`;
+  }
+  if (devLogin.reason === 'environment') {
+    // 스위치는 켜져 있는데 환경 때문에 거부된 경우 — "꺼져 있다" 고만 하면 원인을 못 찾는다.
+    return `<p><code>DEV_LOGIN_ENABLED=true</code> 이지만 <code>APP_ENV=${escapeHtml(devLogin.appEnv)}</code> 는 개발 환경이 아니어서 개발용 로그인은 거부됩니다. 위 변수를 채우는 것이 유일한 로그인 경로입니다.</p>`;
+  }
+  return `<p>개발용 로그인(<code>DEV_LOGIN_ENABLED</code>)도 꺼져 있습니다. 위 변수를 채우는 것이 유일한 로그인 경로입니다.</p>`;
+}
+
+function notConfiguredResponse(missing: readonly string[], devLogin: DevLoginState): NextResponse {
   const items = missing.map((v) => `<li><code>${escapeHtml(v)}</code></li>`).join('');
-  const devBlock = devHint
-    ? `<p>DEV_LOGIN_ENABLED=true 이므로 개발용 로그인은 <a href="/api/auth/dev-login">/api/auth/dev-login</a> 에서 쓸 수 있습니다.</p>`
-    : `<p>개발용 로그인(<code>DEV_LOGIN_ENABLED</code>)도 꺼져 있습니다. 위 변수를 채우는 것이 유일한 로그인 경로입니다.</p>`;
+  const devBlock = devLoginBlock(devLogin);
 
   const html = `<!DOCTYPE html>
 <html lang="ko">
@@ -152,10 +163,11 @@ function notConfiguredResponse(missing: readonly string[], devHint: boolean): Ne
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const missing = OIDC_REQUIRED_VARS.filter((v) => !env(v));
-  const devLoginEnabled = process.env.DEV_LOGIN_ENABLED === 'true';
+  // 스위치만 보지 않는다 — APP_ENV 가 개발 환경이 아니면 켜져 있어도 dev 폼으로 보내지 않는다.
+  const devLogin = devLoginState();
 
   // (2) OIDC 를 아예 안 건드렸고 dev-login 이 켜져 있으면 dev 폼으로. 오늘과 동일한 동작.
-  if (missing.length === OIDC_REQUIRED_VARS.length && devLoginEnabled) {
+  if (missing.length === OIDC_REQUIRED_VARS.length && devLogin.enabled) {
     const touchedOptional = OIDC_OPTIONAL_VARS.some((v) => env(v));
     if (!touchedOptional) {
       // 같은 오리진 → 상대 Location. nextUrl 은 컨테이너에서 0.0.0.0 으로 푼다(lib/redirect.ts).
@@ -169,7 +181,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   // (3) 반쪽 설정 또는 아무 설정 없음 → 어떤 변수가 비었는지 이름으로 알려준다.
   //     반쪽 설정에서 dev 폼으로 조용히 흘리면 운영자는 SSO 가 왜 안 붙는지 영원히 모른다.
   if (missing.length > 0) {
-    return notConfiguredResponse(missing, devLoginEnabled);
+    return notConfiguredResponse(missing, devLogin);
   }
 
   // (1) 정상 경로 — Authorization Code + PKCE(S256).
@@ -185,7 +197,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     authorizeUrl = new URL(env('OIDC_AUTHORIZE_URL'));
   } catch {
     // 값이 있는데 URL 이 아니면 그것도 설정 오류다 — 크래시(500)가 아니라 읽히는 503.
-    return notConfiguredResponse(['OIDC_AUTHORIZE_URL (유효한 절대 URL 이 아님)'], devLoginEnabled);
+    return notConfiguredResponse(['OIDC_AUTHORIZE_URL (유효한 절대 URL 이 아님)'], devLogin);
   }
 
   authorizeUrl.searchParams.set('response_type', 'code');

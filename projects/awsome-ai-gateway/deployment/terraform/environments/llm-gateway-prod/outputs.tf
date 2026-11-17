@@ -85,6 +85,18 @@ output "cognito_hosted_ui_domain" {
   value       = module.cognito.hosted_ui_domain
   description = "Cognito Hosted UI 도메인 (사용자 로그인 페이지 호스트)"
 }
+output "cognito_admin_ui_client_id" {
+  value       = module.cognito.admin_ui_client_id
+  description = "admin-ui app client id — adminUi.env.OIDC_CLIENT_ID 와 adminApi.oidc.adminUiClientId. cognito_admin_ui_callback_urls 가 비어 있으면 null"
+}
+output "cognito_oauth_authorize_url" {
+  value       = module.cognito.oauth_authorize_url
+  description = "adminUi.env.OIDC_AUTHORIZE_URL 값"
+}
+output "cognito_oauth_token_url" {
+  value       = module.cognito.oauth_token_url
+  description = "adminUi.env.OIDC_TOKEN_URL 값"
+}
 output "cognito_groups" {
   value       = module.cognito.groups
   description = "Cognito user groups — admin 이 이 그룹에 사용자를 추가"

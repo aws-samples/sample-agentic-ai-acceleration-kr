@@ -208,6 +208,10 @@ module "cognito" {
   logout_urls   = var.cognito_logout_urls
   groups        = var.cognito_groups
 
+  admin_ui_callback_urls        = var.cognito_admin_ui_callback_urls
+  admin_ui_logout_urls          = var.cognito_admin_ui_logout_urls
+  admin_ui_token_validity_hours = var.cognito_admin_ui_token_validity_hours
+
   tags = var.tags
 }
 
