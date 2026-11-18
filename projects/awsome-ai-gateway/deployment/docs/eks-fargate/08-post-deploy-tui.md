@@ -78,7 +78,7 @@ echo "Admin UI : $ADMIN_UI_URL"
 
 ## 4. 첫 API 실호출 (dev 빠른 경로)
 
-dev 환경 admin-api 는 인증 없이 VK 를 뽑아주는 `/internal/test/issue-key` 를 제공한다(prod 비활성). Cognito 온보딩 전에 파이프라인이 살아있는지 30초 만에 확인하는 용도:
+dev 환경 admin-api 는 인증 없이 VK 를 뽑아주는 `/internal/test/issue-key` 를 제공한다(`APP_ENV` 가 개발 환경일 때만 — 그 밖에서는 403). Cognito 온보딩 전에 파이프라인이 살아있는지 30초 만에 확인하는 용도:
 
 ```bash
 export VK=$(curl -s -X POST "$ADMIN_API_URL/internal/test/issue-key" \

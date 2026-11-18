@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import require_admin_outside_development
 from app.core.db import get_db_session
 from app.models.usage import GitEvent, GitEventType, ProductivityEvent, ProductivityEventType
 
@@ -37,9 +38,13 @@ class GitWebhookPayload(BaseModel):
 
 
 # ── POST /internal/productivity ──
+#
+# 다른 시스템이 생산성 이벤트를 적재하는 수집 라우트다. 예전에는 인증이 없어서 관리자 API 에
+# 닿는 누구나 임의의 이벤트를 써넣을 수 있었다(ROI 지표가 그대로 오염된다). 개발 환경 밖에서는
+# ADMIN — 보통 서비스 토큰(`Authorization: Bearer svc-...`) — 을 요구한다.
 
 
-@router.post("/internal/productivity")
+@router.post("/internal/productivity", dependencies=[Depends(require_admin_outside_development)])
 async def record_productivity_event(
     request: Request,
     body: ProductivityEventRequest,

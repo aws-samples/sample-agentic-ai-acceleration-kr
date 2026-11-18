@@ -9,8 +9,10 @@ import structlog
 from fastapi import Depends, HTTPException, Request
 from jose import JWTError, jwt
 
+from app.core.config import get_settings
 from app.core.db import AsyncSessionLocal
 from app.core.dev_login import dev_login_enabled
+from app.core.environment import is_development_environment
 from app.core.oidc_verifier import OIDCConfigError, OIDCVerifier, OIDCVerifyError
 from app.models.auth import UserRole
 from app.services.service_token_service import (
@@ -288,6 +290,22 @@ async def _resolve_idp_identity(claims: dict) -> CurrentUser:
 
 
 async def require_admin(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+    if user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Admin role required")
+    return user
+
+
+async def require_admin_outside_development(request: Request) -> CurrentUser | None:
+    """개발 환경에서는 인증 없이 통과하고, 그 밖에서는 ADMIN(서비스 토큰 포함)만 통과한다.
+
+    다른 시스템이 호출하는 수집 라우트(``/internal/productivity``)용이다. 개발 환경에서만 여는
+    ``require_development_environment`` 와 달리 운영 환경에서도 **쓸 수는 있어야** 한다 — 다만
+    인증 없이 열어 두면 관리자 API 에 닿는 누구나 지표를 써넣을 수 있다. 호출자는
+    ``Authorization: Bearer svc-...`` 서비스 토큰을 보낸다.
+    """
+    if is_development_environment(get_settings().APP_ENV):
+        return None
+    user = await get_current_user(request)
     if user.role != UserRole.ADMIN:
         raise HTTPException(status_code=403, detail="Admin role required")
     return user

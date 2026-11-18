@@ -64,7 +64,8 @@
    ⚠ redis.external.host 가 비어 있습니다. 외부 Redis 주입 필수.
 {{- end }}
 {{- if eq (len .Values.aws.allowedIamRoles) 0 }}
-   ⚠ aws.allowedIamRoles 가 비어 있습니다. CLI 인증이 전부 거부됩니다 (FR-2.1a).
+   ⚠ aws.allowedIamRoles 가 비어 있습니다. 허용 계정(aws.allowedAccountIds, 기본: 배포 계정)의
+     모든 IAM principal 이 CLI 로 virtual key 를 받을 수 있습니다. 운영 환경에서는 역할 이름을 지정하세요 (FR-2.1a).
 {{- end }}
 {{- if and (eq .Values.global.deploymentMode "eks-fargate") (eq (len .Values.gatewayProxy.serviceAccount.annotations) 0) }}
    ⚠ EKS Fargate 모드인데 gatewayProxy.serviceAccount.annotations 에 IRSA role-arn 이 없습니다.

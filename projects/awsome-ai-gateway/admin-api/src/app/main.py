@@ -119,6 +119,27 @@ async def lifespan(app: FastAPI):
     key_service = KeyService(encryption=encryption, cache_mgr=cache_mgr)
     app.state.key_service = key_service
     app.state.cli_service = CLIService(key_service=key_service)
+    # CLI(STS) 키 발급이 어느 AWS 계정을 받는지 기동 로그에 남긴다. 값이 틀렸을 때 운영자가
+    # 첫 403 을 받기 전에 알 수 있어야 한다.
+    from app.services.cli_service import allowed_account_ids
+
+    _cli_accounts = allowed_account_ids(settings)
+    if _cli_accounts is None:
+        logger.warning(
+            "cli_auth.aws_accounts_unrestricted",
+            reason="development environment without AWS_ROLE_ARN or ALLOWED_AWS_ACCOUNT_IDS",
+        )
+    elif not _cli_accounts:
+        logger.error(
+            "cli_auth.no_aws_account_allowed",
+            reason="set ALLOWED_AWS_ACCOUNT_IDS; there is no AWS_ROLE_ARN to infer the account from",
+        )
+    else:
+        logger.info(
+            "cli_auth.allowed_aws_accounts",
+            accounts=sorted(_cli_accounts),
+            source="ALLOWED_AWS_ACCOUNT_IDS" if settings.ALLOWED_AWS_ACCOUNT_IDS else "AWS_ROLE_ARN",
+        )
     budget_service = BudgetService(cache_mgr=cache_mgr)
     app.state.budget_service = budget_service
     app.state.model_service = ModelService(cache_mgr=cache_mgr)

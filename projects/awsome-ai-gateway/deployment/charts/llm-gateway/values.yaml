@@ -210,10 +210,21 @@ aws:
   # STS 검증 허용 리전
   allowedStsRegions:
     - "ap-northeast-2"
-  # IAM Identity Center Permission Set 이름 화이트리스트 (FR-2.1a)
-  # 이 값이 비어있으면 CLI 인증 실패. 프로덕션에선 반드시 주입.
+  # CLI(STS) 로 virtual key 를 받을 수 있는 IAM 역할 **이름** 목록 (FR-2.1a,
+  # 예: IAM Identity Center Permission Set 이름).
+  # - 채우면 그 이름의 역할만 통과한다. 역할이 없는 IAM 사용자는 통과하지 못한다.
+  # - 비우면 역할 이름은 제한하지 않는다 — 허용 계정(아래 allowedAccountIds)의 모든 principal 이
+  #   키를 받을 수 있다. 운영 환경에서는 채운다.
   allowedIamRoles: []
   # - Customer-Developer
+  # CLI(STS) 로 virtual key 를 받을 수 있는 AWS 계정 ID 목록 (ALLOWED_AWS_ACCOUNT_IDS).
+  # 역할 이름은 어느 계정에서나 지을 수 있으므로 이름만 대조하면 **아무 AWS 계정**에서 같은
+  # 이름의 역할을 만들어 통과한다. 그래서 계정을 먼저 대조한다.
+  # - 비우면(기본) 게이트웨이가 배포된 계정 하나만 허용한다(admin-api 의 IRSA 역할 ARN 에서 읽는다).
+  # - 다른 계정의 사용자도 받아야 하면 12자리 계정 ID 를 **전부** 적는다(배포 계정 포함).
+  #   --set 으로 줄 때는 숫자로 해석되지 않도록 --set-string 을 쓴다.
+  allowedAccountIds: []
+  # - "111122223333"
 
 # ----------------------------------------------------------------------------
 # 인증 (JWT / VK 암호화)

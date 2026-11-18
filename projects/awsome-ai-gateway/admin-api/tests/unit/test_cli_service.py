@@ -71,7 +71,7 @@ class TestSSRFPrevention:
 
         sts_xml = """<GetCallerIdentityResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">
             <GetCallerIdentityResult>
-                <Arn>arn:aws:sts::123456789:assumed-role/AllowedRole/user@corp.com</Arn>
+                <Arn>arn:aws:sts::123456789012:assumed-role/AllowedRole/user@corp.com</Arn>
             </GetCallerIdentityResult>
         </GetCallerIdentityResponse>"""
 
@@ -80,6 +80,7 @@ class TestSSRFPrevention:
             settings = mock_settings.return_value
             settings.ALLOWED_STS_REGIONS = ["ap-northeast-2"]
             settings.ALLOWED_IAM_ROLES = ["AllowedRole"]
+            settings.ALLOWED_AWS_ACCOUNT_IDS = ["123456789012"]
             settings.DEFAULT_TEAM_ID = str(uuid.uuid4())
             settings.DEFAULT_USER_BUDGET_USD = 100.0
 
@@ -122,7 +123,7 @@ class TestIAMRoleCheck:
 
         sts_xml = """<GetCallerIdentityResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">
             <GetCallerIdentityResult>
-                <Arn>arn:aws:sts::123456789:assumed-role/ForbiddenRole/user</Arn>
+                <Arn>arn:aws:sts::123456789012:assumed-role/ForbiddenRole/user</Arn>
             </GetCallerIdentityResult>
         </GetCallerIdentityResponse>"""
 
@@ -131,6 +132,7 @@ class TestIAMRoleCheck:
             settings = mock_settings.return_value
             settings.ALLOWED_STS_REGIONS = ["ap-northeast-2"]
             settings.ALLOWED_IAM_ROLES = ["AllowedRole"]
+            settings.ALLOWED_AWS_ACCOUNT_IDS = ["123456789012"]
 
             mock_resp = MagicMock()
             mock_resp.status_code = 200
@@ -158,7 +160,7 @@ class TestAutoProvisioning:
 
         sts_xml = """<GetCallerIdentityResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">
             <GetCallerIdentityResult>
-                <Arn>arn:aws:sts::123456789:assumed-role/AllowedRole/newuser@corp.com</Arn>
+                <Arn>arn:aws:sts::123456789012:assumed-role/AllowedRole/newuser@corp.com</Arn>
             </GetCallerIdentityResult>
         </GetCallerIdentityResponse>"""
 
@@ -169,6 +171,7 @@ class TestAutoProvisioning:
             settings = mock_settings.return_value
             settings.ALLOWED_STS_REGIONS = ["ap-northeast-2"]
             settings.ALLOWED_IAM_ROLES = ["AllowedRole"]
+            settings.ALLOWED_AWS_ACCOUNT_IDS = ["123456789012"]
             settings.DEFAULT_TEAM_ID = default_team_id
             settings.DEFAULT_USER_BUDGET_USD = 100.0
 
