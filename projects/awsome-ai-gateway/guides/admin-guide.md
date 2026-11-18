@@ -833,6 +833,7 @@ api-key-helper (STS mode)
     │                                 ├─ presigned URL 전달 ──────────► GetCallerIdentity
     │                                 │                                     │
     │                                 │◄── ARN 반환 ─────────────────────────┘
+    │                                 ├─ AWS 계정 검증 (ALLOWED_AWS_ACCOUNT_IDS)
     │                                 ├─ ALLOWED_IAM_ROLES 검증
     │                                 ├─ User auto-provisioning (신규 시)
     │                                 └─ VK 발급 + Redis 캐시
@@ -846,11 +847,14 @@ Claude Code (Bearer vk-xxx)
 | 변수 | 설명 | 기본값 |
 |------|------|--------|
 | `ALLOWED_STS_REGIONS` | STS URL 허용 리전 (SSRF 방어) | `["ap-northeast-2"]` |
-| `ALLOWED_IAM_ROLES` | VK 발급 허용 IAM Role 이름 목록. **빈 값이면 모든 Role 허용** | `[]` (주의) |
+| `ALLOWED_AWS_ACCOUNT_IDS` | VK 발급 허용 AWS 계정 ID 목록(12자리). **빈 값이면 게이트웨이가 배포된 계정 하나만 허용** (admin-api 의 IRSA 역할 ARN 에서 읽음). Helm: `aws.allowedAccountIds` | `[]` |
+| `ALLOWED_IAM_ROLES` | VK 발급 허용 IAM Role **이름** 목록. 채우면 그 Role 만 통과하고 IAM 사용자는 거부. **빈 값이면 허용 계정의 모든 principal 허용** | `[]` (주의) |
 
 ### Admin 주의사항
 
-- `ALLOWED_IAM_ROLES`이 빈 배열이면 **모든 AWS SSO 사용자**가 VK를 발급받을 수 있습니다. 운영 환경에서는 반드시 허용 Role을 명시하세요.
+- 계정을 먼저 대조합니다. Role 이름은 어느 AWS 계정에서나 지을 수 있으므로, 이름만 보면 다른 계정에서 같은 이름의 Role 을 만든 사람이 통과합니다. 다른 계정의 사용자도 받아야 하면 `ALLOWED_AWS_ACCOUNT_IDS`에 계정 ID 를 **전부**(배포 계정 포함) 적으세요.
+- `ALLOWED_IAM_ROLES`이 빈 배열이면 **허용 계정의 모든 principal**(SSO Role, IAM 사용자)이 VK를 발급받을 수 있습니다. 운영 환경에서는 반드시 허용 Role을 명시하세요. 목록이 있으면 IAM 사용자는 거부됩니다.
+- 허용 계정을 알 수 없으면(IRSA 가 없고 목록도 비어 있음) 개발 환경이 아닌 한 **모든 요청이 거부**됩니다. admin-api 기동 로그의 `cli_auth.allowed_aws_accounts` / `cli_auth.no_aws_account_allowed` 로 확인하세요.
 - STS 경로로 발급된 VK의 TTL은 `min(rotation_policy, SSO 세션 만료)` — SSO 세션이 보통 8~12시간이므로 OIDC(1시간)보다 긴 VK가 발급됩니다.
 - STS 경로의 사용자는 `sso_subject` (ARN)로 식별되며, OIDC 경로의 사용자와 별도 레코드입니다.
 

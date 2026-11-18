@@ -4,3 +4,4 @@ Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Deve
 렌더 단계 검증. 리소스를 만들지 않는다 — 잘못된 values 조합이면 여기서 `fail` 로 멈춘다.
 */ -}}
 {{- include "llm-gateway.validateDevLogin" . -}}
+{{- include "llm-gateway.validateAllowedAccountIds" . -}}

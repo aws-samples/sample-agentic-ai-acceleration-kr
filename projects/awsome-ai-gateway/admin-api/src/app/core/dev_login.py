@@ -25,9 +25,10 @@ from __future__ import annotations
 import os
 
 from app.core.config import get_settings
+from app.core.environment import DEVELOPMENT_ENVIRONMENTS, is_development_environment
 
-# dev 로그인을 켤 수 있는 APP_ENV 값(소문자 비교). APP_ENV 의 기본값은 "development" 다.
-DEV_LOGIN_ENVIRONMENTS = frozenset({"dev", "development", "local", "test"})
+# dev 로그인을 켤 수 있는 APP_ENV 값 — 개발 환경 목록 그대로다(core/environment.py).
+DEV_LOGIN_ENVIRONMENTS = DEVELOPMENT_ENVIRONMENTS
 
 
 class DevLoginNotAllowedError(RuntimeError):
@@ -39,7 +40,7 @@ def dev_login_requested() -> bool:
 
 
 def is_dev_login_environment(app_env: str) -> bool:
-    return app_env.strip().lower() in DEV_LOGIN_ENVIRONMENTS
+    return is_development_environment(app_env)
 
 
 def dev_login_enabled() -> bool:

@@ -230,6 +230,12 @@ external-secrets.io/v1beta1
   value: {{ join "," .Values.aws.allowedStsRegions | quote }}
 - name: ALLOWED_IAM_ROLES
   value: {{ join "," .Values.aws.allowedIamRoles | quote }}
+{{- /* 값이 있을 때만 렌더한다 — 비어 있으면 admin-api 가 자기 계정(IRSA 의 AWS_ROLE_ARN)만 허용한다.
+       빈 값을 항상 찍으면 이 설정을 안 쓰는 설치의 파드 스펙이 바뀐다. */}}
+{{- with .Values.aws.allowedAccountIds }}
+- name: ALLOWED_AWS_ACCOUNT_IDS
+  value: {{ join "," . | quote }}
+{{- end }}
 {{- end -}}
 
 {{/* ---------------------------------------------------------------------------
@@ -384,6 +390,24 @@ external-secrets.io/v1beta1
 {{- if not (has (lower (trim $appEnv)) $allowed) -}}
 {{- fail (printf "values: %s.env.DEV_LOGIN_ENABLED=true 는 개발 환경에서만 쓸 수 있습니다 (지금 APP_ENV=%q, 허용: %s). dev 로그인은 서명 없는 토큰을 받으므로 관리자 API 에 닿는 누구나 ADMIN 이 됩니다. %s.env.DEV_LOGIN_ENABLED 를 \"false\" 로 두고 OIDC 로 로그인하십시오 (adminUi.env.OIDC_CLIENT_ID / OIDC_AUTHORIZE_URL / OIDC_TOKEN_URL, adminApi.oidc.adminUiClientId)." $component $appEnv (join ", " $allowed) $component) -}}
 {{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* ------------------------------------------------------------------------
+  aws.allowedAccountIds 는 **따옴표로 감싼 12자리 문자열**이어야 한다.
+
+  YAML 에서 따옴표 없이 쓰거나 `--set` 으로 주면 숫자로 해석된다. 큰 정수는 렌더할 때
+  지수 표기(1.11122223333e+11)가 되고, 0 으로 시작하는 계정 ID 는 앞자리가 사라진다. 그 값은
+  어떤 계정과도 일치하지 않으므로 CLI 로그인이 전부 거부된다 — 원인을 찾기 어려운 형태로.
+  그래서 렌더 단계에서 멈춘다. (admin-api 도 기동 시 같은 형식을 검사한다.)
+
+  호출: templates/common/validation.yaml
+-------------------------------------------------------------------------- */}}
+{{- define "llm-gateway.validateAllowedAccountIds" -}}
+{{- range $id := .Values.aws.allowedAccountIds -}}
+{{- if not (and (kindIs "string" $id) (regexMatch "^[0-9]{12}$" $id)) -}}
+{{- fail (printf "values: aws.allowedAccountIds 의 각 항목은 따옴표로 감싼 12자리 AWS 계정 ID 여야 합니다 (받은 값: %v). values 파일에서는 \"111122223333\" 처럼 쓰고, 명령줄에서는 --set-string 을 쓰십시오." $id) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

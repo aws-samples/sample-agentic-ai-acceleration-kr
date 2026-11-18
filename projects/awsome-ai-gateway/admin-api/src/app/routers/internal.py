@@ -9,11 +9,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.db import get_db_session
+from app.core.environment import require_development_environment
 
 router = APIRouter(tags=["Internal"])
 
+# `/internal/*` 는 **개발 환경에서만** 열린다 — 인증이 없는 라우트들이고, 그중 하나는 virtual key 를
+# 발급한다. 예전 가드는 라우트마다 `APP_ENV == "production"` 을 비교했는데 Helm 차트는 운영
+# 환경에 "prod" 를 넣으므로 한 번도 동작하지 않았고, `cache/retry` 에는 가드 자체가 없었다.
+#
+# 그래서 가드를 **라우터에** 건다(core/environment.py 의 허용 목록). 여기에 새 라우트를 추가하면
+# 자동으로 같은 가드를 받는다 — 라우트마다 잊지 않고 넣어야 하는 구조로 두지 않는다.
+# `/health*` 는 프로브가 쓰므로 이 라우터에 넣지 않는다.
+internal_router = APIRouter(
+    prefix="/internal",
+    dependencies=[Depends(require_development_environment)],
+)
 
-@router.post("/internal/cache/retry")
+
+@internal_router.post("/cache/retry")
 async def retry_cache_invalidation(
     request: Request,
     session: AsyncSession = Depends(get_db_session),
@@ -26,18 +39,12 @@ async def retry_cache_invalidation(
     return {"resolved": resolved}
 
 
-@router.post("/internal/scheduler/run")
+@internal_router.post("/scheduler/run")
 async def trigger_aggregation(
     request: Request,
     session: AsyncSession = Depends(get_db_session),
 ):
     """Manual trigger for ROI aggregation (testing/debug only)."""
-    settings = get_settings()
-    if settings.APP_ENV == "production":
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=403, detail="Not available in production")
-
     from app.core.usage_filters import current_kst_period
     from app.scheduler.roi_aggregator import aggregate_usage
 
@@ -48,17 +55,13 @@ async def trigger_aggregation(
     return {"status": "ok", "period": period}
 
 
-@router.post("/internal/test/issue-key")
+@internal_router.post("/test/issue-key")
 async def test_issue_key(
     request: Request,
     session: AsyncSession = Depends(get_db_session),
 ):
     """[DEV ONLY] Issue a VK without STS auth — for integration testing."""
     settings = get_settings()
-    if settings.APP_ENV == "production":
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=403, detail="Not available in production")
 
     import uuid
     from datetime import date
@@ -190,3 +193,7 @@ async def readiness_check():
     오히려 burst 에 해로움.
     """
     return {"status": "ready"}
+
+
+# 위에서 정의한 `/internal/*` 를 붙인다. include 는 호출 시점의 라우트를 복사하므로 파일 끝에 둔다.
+router.include_router(internal_router)

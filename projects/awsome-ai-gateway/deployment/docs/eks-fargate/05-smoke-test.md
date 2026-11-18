@@ -85,7 +85,7 @@ ADMIN_UI_URL="https://admin-dev.llm-gateway.mycompany.com"
 
 #### 2.1.2 VK 발급 (dev 전용 엔드포인트)
 
-admin-api 는 dev 환경에서 **인증 없이 바로 VK 를 발급**하는 `/internal/test/issue-key` endpoint 를 제공합니다 (prod 에서는 비활성화됨). 이 endpoint 가 smoke test 전용 가장 빠른 경로:
+admin-api 는 **개발 환경에서만**(`APP_ENV` = `dev`, `development`, `local`, `test`) 인증 없이 바로 VK 를 발급하는 `/internal/test/issue-key` endpoint 를 제공합니다. 그 밖의 환경에서는 `/internal/*` 가 403 을 반환합니다. 이 endpoint 가 smoke test 전용 가장 빠른 경로:
 
 ```bash
 VK_RESPONSE=$(curl -s -X POST "$ADMIN_API_URL/internal/test/issue-key" \
@@ -113,7 +113,7 @@ echo "VK: ${VK:0:30}...    length: ${#VK}"
 
 ✅ `VK` 변수에 `vk-` 로 시작하는 64자+ 문자열이 저장돼야 정상. `length: 4` (= `null`) 이면 endpoint 가 비활성화됐거나 dev 모드 아님.
 
-🐛 `404 Not Found` — admin-api 가 prod 빌드로 돌고 있어 `/internal/*` endpoint 가 숨김 상태. values 에서 `DEV_MODE=true` 또는 빌드 플래그 확인.
+🐛 `403 Forbidden` (`Not available outside development environments`) — admin-api 의 `APP_ENV` 가 개발 환경이 아닙니다. 이 endpoint 는 dev 전용이므로 prod 에서는 정상 동작입니다. dev 인데 403 이면 `global.environment` 값을 확인하세요.
 
 ---
 

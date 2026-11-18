@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @field_validator(
-        "ALLOWED_STS_REGIONS", "ALLOWED_IAM_ROLES", "ADMIN_EMAILS", "ADMIN_GROUPS",
+        "ALLOWED_STS_REGIONS", "ALLOWED_IAM_ROLES", "ALLOWED_AWS_ACCOUNT_IDS", "ADMIN_EMAILS", "ADMIN_GROUPS",
         mode="before",
     )
     @classmethod
@@ -67,7 +67,23 @@ class Settings(BaseSettings):
 
     # ── STS / CLI Auth (legacy, dual-mode 유지) ──
     ALLOWED_STS_REGIONS: Annotated[list[str], NoDecode] = ["ap-northeast-2"]
+    # 역할 **이름** 허용 목록. 비어 있으면 역할 이름은 제한하지 않는다(허용 계정의 모든 principal).
+    # 채워져 있으면 그 이름의 역할만 통과한다 — 역할이 없는 IAM 사용자는 통과하지 못한다.
     ALLOWED_IAM_ROLES: Annotated[list[str], NoDecode] = []
+    # CLI(STS) 로 virtual key 를 받을 수 있는 AWS 계정. 역할 이름은 계정마다 누구나 지을 수 있으므로
+    # 이름만 대조하면 **아무 AWS 계정**에서 같은 이름의 역할을 만들어 통과한다.
+    # 비어 있으면 admin-api 가 떠 있는 계정 하나만 허용한다(IRSA 의 AWS_ROLE_ARN 에서 읽는다).
+    # 다른 계정의 사용자도 받아야 하면 여기에 12자리 계정 ID 를 전부 적는다(자기 계정 포함).
+    ALLOWED_AWS_ACCOUNT_IDS: Annotated[list[str], NoDecode] = []
+
+    @field_validator("ALLOWED_AWS_ACCOUNT_IDS", mode="after")
+    @classmethod
+    def _account_ids_are_twelve_digits(cls, v: list[str]) -> list[str]:
+        """오타 난 계정 ID 는 어떤 요청과도 일치하지 않는다 — 조용히 전부 거부하는 대신 기동에서 알린다."""
+        bad = [a for a in v if not (isinstance(a, str) and len(a) == 12 and a.isdigit())]
+        if bad:
+            raise ValueError(f"ALLOWED_AWS_ACCOUNT_IDS must be 12-digit AWS account IDs, got: {bad}")
+        return v
 
     # ── OIDC Auth (신규) ──
     # OIDC_ISSUER_URL 이 비어있으면 OIDC 비활성. 채워지면 활성 (POST /v1/auth/exchange 노출).

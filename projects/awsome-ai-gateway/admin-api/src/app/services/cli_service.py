@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import uuid
 from datetime import date
@@ -14,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import CurrentUser
 from app.core.config import get_settings
+from app.core.environment import is_development_environment
 from app.core.exceptions import ForbiddenError, STSVerificationError
 from app.models.auth import User, UserRole
 from app.models.budget import BudgetConfig, BudgetPolicy, BudgetScope, PeriodType
@@ -27,8 +29,35 @@ logger = structlog.get_logger()
 # IAM Arn patterns:
 #   SSO:      arn:aws:sts::{account}:assumed-role/{role_name}/{session_name}
 #   IAM user: arn:aws:iam::{account}:user/{user_name}
-ARN_ASSUMED_ROLE = re.compile(r"arn:aws:sts::\d+:assumed-role/([^/]+)/(.+)")
-ARN_IAM_USER = re.compile(r"arn:aws:iam::\d+:user/(.+)")
+ARN_ASSUMED_ROLE = re.compile(r"arn:aws:sts::(\d+):assumed-role/([^/]+)/(.+)")
+ARN_IAM_USER = re.compile(r"arn:aws:iam::(\d+):user/(.+)")
+# IRSA 가 파드에 넣는 역할 ARN — 그 계정 ID 가 "admin-api 가 떠 있는 계정" 이다.
+_ROLE_ARN_ACCOUNT = re.compile(r"^arn:aws[a-z-]*:iam::(\d{12}):role/")
+
+
+def own_account_id() -> str | None:
+    """admin-api 가 떠 있는 AWS 계정. IRSA 가 없으면(로컬 실행 등) None."""
+    match = _ROLE_ARN_ACCOUNT.match(os.environ.get("AWS_ROLE_ARN", ""))
+    return match.group(1) if match else None
+
+
+def allowed_account_ids(settings) -> frozenset[str] | None:
+    """CLI 로 virtual key 를 받을 수 있는 AWS 계정들. ``None`` 은 "대조하지 않는다".
+
+    1. ``ALLOWED_AWS_ACCOUNT_IDS`` 가 있으면 그 목록.
+    2. 없으면 admin-api 자신의 계정 하나(``AWS_ROLE_ARN``).
+    3. 둘 다 없으면 — 개발 환경에서는 대조하지 않는다(IRSA 없는 로컬 실행에는 "자기 계정" 이
+       없다). 그 밖의 환경에서는 **빈 집합**이다: 어느 계정을 믿을지 모르면 아무도 믿지 않는다.
+    """
+    configured = frozenset(settings.ALLOWED_AWS_ACCOUNT_IDS)
+    if configured:
+        return configured
+    own = own_account_id()
+    if own:
+        return frozenset({own})
+    if is_development_environment(settings.APP_ENV):
+        return None
+    return frozenset()
 
 
 class CLIService:
@@ -91,16 +120,29 @@ class CLIService:
         match_user = ARN_IAM_USER.match(arn)
 
         if match_role:
-            role_name = match_role.group(1)
-            session_name = match_role.group(2)
+            account_id = match_role.group(1)
+            role_name = match_role.group(2)
+            session_name = match_role.group(3)
         elif match_user:
+            account_id = match_user.group(1)
             role_name = None  # IAM users don't have a role name
-            session_name = match_user.group(1)
+            session_name = match_user.group(2)
         else:
             raise STSVerificationError(f"Unexpected Arn format: {arn}")
 
-        if settings.ALLOWED_IAM_ROLES and role_name and role_name not in settings.ALLOWED_IAM_ROLES:
-            raise ForbiddenError(f"IAM role not allowed: {role_name}")
+        # 계정 대조가 먼저다. 역할 이름은 어느 계정에서나 지을 수 있으므로, 이름만 보면 남의
+        # 계정에서 같은 이름의 역할을 만든 사람이 그대로 통과한다. ARN 은 STS 가 서명을 검증하고
+        # 돌려준 값이라 계정 ID 를 믿을 수 있다.
+        allowed_accounts = allowed_account_ids(settings)
+        if allowed_accounts is not None and account_id not in allowed_accounts:
+            logger.warning("cli.aws_account_not_allowed", account_id=account_id, arn=arn)
+            raise ForbiddenError(f"AWS account not allowed: {account_id}")
+
+        # 역할 허용 목록이 있으면 **그 역할만** 통과한다. IAM 사용자는 역할이 없으므로 통과하지
+        # 못한다 — 예전에는 role_name 이 None 이면 이 검사를 건너뛰어, 목록을 아무리 좁혀도
+        # IAM 사용자는 그냥 들어왔다.
+        if settings.ALLOWED_IAM_ROLES and role_name not in settings.ALLOWED_IAM_ROLES:
+            raise ForbiddenError(f"IAM role not allowed: {role_name or 'IAM user (no role)'}")
 
         # ── Auto-provisioning ──
         user_repo = UserRepository(session)

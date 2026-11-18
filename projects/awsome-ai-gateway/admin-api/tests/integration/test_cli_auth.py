@@ -44,7 +44,7 @@ class TestCLIVirtualKeyIssuance:
     async def test_cli_virtual_key_success(self, client: AsyncClient):
         sts_xml = """<GetCallerIdentityResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">
             <GetCallerIdentityResult>
-                <Arn>arn:aws:sts::123456789:assumed-role/AllowedRole/user@corp.com</Arn>
+                <Arn>arn:aws:sts::123456789012:assumed-role/AllowedRole/user@corp.com</Arn>
             </GetCallerIdentityResult>
         </GetCallerIdentityResponse>"""
 
@@ -60,6 +60,7 @@ class TestCLIVirtualKeyIssuance:
             settings = mock_settings.return_value
             settings.ALLOWED_STS_REGIONS = ["ap-northeast-2"]
             settings.ALLOWED_IAM_ROLES = ["AllowedRole"]
+            settings.ALLOWED_AWS_ACCOUNT_IDS = ["123456789012"]
             settings.DEFAULT_TEAM_ID = default_team_id
             settings.DEFAULT_USER_BUDGET_USD = 100.0
 

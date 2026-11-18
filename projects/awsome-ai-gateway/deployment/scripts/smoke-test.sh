@@ -164,10 +164,11 @@ except Exception as e:
 #    $0.0001 미만). 그래서 반드시 명시적 --with-bedrock 에서만 돈다.
 #
 # ⚠️ prod 에서 POST /internal/test/issue-key 를 절대 쓰지 않는다:
-#    그 엔드포인트의 가드는 `settings.APP_ENV == "production"` 인데
-#    (admin-api/src/app/routers/internal.py:58) prod 는 APP_ENV="prod" 라
-#    가드가 통과된다. 즉 prod 에서 호출되면 실 prod DB 에 user/budget_config/
-#    virtual_key 행이 실제로 생긴다. → 앱 경로 검사는 "APP_ENV 가 dev 계열"이라는
+#    그 엔드포인트는 실 DB 에 user/budget_config/virtual_key 행을 만든다. admin-api 는
+#    `/internal/*` 를 개발 환경(APP_ENV = dev/development/local/test)에서만 열고 그 밖에서는
+#    403 을 준다(admin-api/src/app/core/environment.py). 예전 가드는 "production" 문자열만
+#    봤고 prod 는 APP_ENV="prod" 라 그대로 통과했다 — 그 버전의 이미지가 남아 있을 수 있으므로
+#    이 스크립트도 서버 가드에 기대지 않는다. 앱 경로 검사는 "APP_ENV 가 dev 계열"이라는
 #    양성(positive) 신호가 있을 때만 추가로 돈다. prod 신호의 부재로 판단하지 않는다.
 # ==============================================================================
 
@@ -431,8 +432,8 @@ test_bedrock_app_path() {
     fi
 
     # 배포된 컨테이너의 APP_ENV 를 읽어 **양성 dev 신호**로만 판단한다.
-    # (prod 는 APP_ENV="prod" 인데 issue-key 가드는 "production" 을 보므로,
-    #  "production 아님" = dev 로 판단하면 prod DB 를 오염시킨다.)
+    # ("prod 가 아님" = dev 로 판단하지 않는다 — 예전 이미지의 issue-key 가드는 "production"
+    #  문자열만 봐서 APP_ENV="prod" 인 운영 환경에서도 열려 있었다.)
     local app_env=""
     app_env=$(kc get deploy -n "$NAMESPACE" "${RELEASE_NAME}-admin-api" \
                  --request-timeout=30s -o json 2>/dev/null \

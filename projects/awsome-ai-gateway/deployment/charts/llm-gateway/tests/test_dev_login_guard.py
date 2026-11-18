@@ -160,9 +160,12 @@ def test_the_allow_list_is_the_same_in_chart_admin_api_and_admin_ui():
     chart = re.search(r'define "llm-gateway\.validateDevLogin".*?\$allowed := list ([^\n]*?) -}}', helpers, re.S)
     assert chart, "차트 허용 목록을 찾지 못했다"
 
-    api_src = (PROJECT / "admin-api" / "src" / "app" / "core" / "dev_login.py").read_text(encoding="utf-8")
-    api = re.search(r"DEV_LOGIN_ENVIRONMENTS = frozenset\(\{([^}]*)\}\)", api_src)
+    # admin-api 는 목록을 core/environment.py 한 곳에 두고 dev 로그인과 /internal/* 가드가 함께 쓴다.
+    api_src = (PROJECT / "admin-api" / "src" / "app" / "core" / "environment.py").read_text(encoding="utf-8")
+    api = re.search(r"DEVELOPMENT_ENVIRONMENTS = frozenset\(\{([^}]*)\}\)", api_src)
     assert api, "admin-api 허용 목록을 찾지 못했다"
+    dev_login_src = (PROJECT / "admin-api" / "src" / "app" / "core" / "dev_login.py").read_text(encoding="utf-8")
+    assert "DEV_LOGIN_ENVIRONMENTS = DEVELOPMENT_ENVIRONMENTS" in dev_login_src, "dev 로그인이 다른 목록을 쓴다"
 
     ui_src = (PROJECT / "admin-ui" / "src" / "lib" / "devLogin.ts").read_text(encoding="utf-8")
     ui = re.search(r"DEV_LOGIN_ENVIRONMENTS[^=]*= \[([^\]]*)\]", ui_src)
