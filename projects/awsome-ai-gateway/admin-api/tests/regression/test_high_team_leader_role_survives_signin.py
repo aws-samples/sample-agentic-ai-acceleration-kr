@@ -14,6 +14,9 @@ IdP 토큰으로 실측). 교환과 동기화가 둘 다 ``derive_role`` 값을 
 같은 시나리오를 세 진입점(교환·``sync_all``·``sync_user``)에 똑같이 돌린다. 사용자·팀은 진짜 ORM
 객체다. 대신하는 것은 저장소(메모리)·토큰 검증·Cognito API·키 발급·``transfer_user``(팀만 옮긴다 —
 실물도 역할을 건드리지 않는다)뿐이다.
+
+불변식은 하나다 — **저장된 역할이 TEAM_LEADER 이면 그 사람이 속한 팀이 그를 리더로 가리킨다.** 그래서 교환의
+팀 이동이 실패한 경우와 리더 지정(``set_team_leader``: 구성원만, 예전 리더는 바로 DEVELOPER)도 여기서 본다.
 """
 
 from __future__ import annotations
@@ -28,12 +31,15 @@ import pytest
 from structlog.testing import capture_logs
 
 from app.core import oidc_identity
+from app.core.auth import CurrentUser
 from app.core.config import get_settings
+from app.core.exceptions import NotFoundError, ValidationError
 from app.core.oidc_identity import reconcile_role
 from app.models.auth import Department, Organization, Team, User, UserRole
-from app.services import cognito_sync_service, oidc_service
+from app.services import cognito_sync_service, oidc_service, user_team_service
 from app.services.cognito_sync_service import CognitoSyncService
 from app.services.oidc_service import OIDCService
+from app.services.user_team_service import UserTeamService
 from tests.session_double import wire_savepoint
 
 ADMIN_GROUP = "GatewayAdmin"
@@ -71,7 +77,13 @@ class _Directory:
         self.default_team = self.team("Default", team_id=uuid.UUID(settings.DEFAULT_TEAM_ID))
 
     def team(self, name: str, *, team_id: uuid.UUID | None = None) -> Team:
-        team = Team(id=team_id or uuid.uuid4(), dept_id=self.dept.id, name=name, leader_user_id=None)
+        team = Team(
+            id=team_id or uuid.uuid4(),
+            dept_id=self.dept.id,
+            name=name,
+            leader_user_id=None,
+            created_at=datetime.now(timezone.utc),  # 읽어 온 행처럼(서버 기본값) — TeamResponse 가 요구한다
+        )
         self.teams[team.id] = team
         return team
 
@@ -132,6 +144,21 @@ class _Repo:
 
     async def list_all_teams(self):
         return list(self._d.teams.values())
+
+    async def set_leader(self, team_id, user_id):
+        team = self._d.teams.get(team_id)
+        if team is not None:
+            team.leader_user_id = user_id
+        return team
+
+    async def get_user(self, user_id):
+        return next((u for u in self._d.users if u.id == user_id), None)
+
+    async def update_user_role(self, user_id, role):
+        user = await self.get_user(user_id)
+        if user is not None:
+            user.role = role
+        return user
 
     async def get_by_sso_subject(self, sub):
         return self._d.by_sub(sub)
@@ -229,16 +256,16 @@ def _cognito(d: _Directory, people: list[tuple]) -> tuple[CognitoSyncService, As
     return svc, session
 
 
-async def _exchange(d: _Directory, who, groups: list[str]) -> None:
+async def _exchange(d: _Directory, who, groups: list[str], *, transfers=None):
     claims = {"sub": who.sso_subject, "email": who.email, "name": who.display_name, "groups": list(groups)}
     issued = SimpleNamespace(virtual_key="vk-test", expires_at=datetime.now(timezone.utc))
     svc = OIDCService(
         verifier=_Verified(claims),
         key_service=MagicMock(issue_key=AsyncMock(return_value=issued)),
-        user_team_service=_Transfers(d),
+        user_team_service=transfers or _Transfers(d),
         http_client=None,
     )
-    await svc.exchange_jwt_for_vk(AsyncMock(), redis=None, token="idp-token", device_name="cli")
+    return await svc.exchange_jwt_for_vk(AsyncMock(), redis=None, token="idp-token", device_name="cli")
 
 
 async def _sync_all(d: _Directory, who, groups: list[str]) -> None:
@@ -440,3 +467,194 @@ async def test_exchange_logs_a_role_change_only_when_the_stored_role_changes(d):
     assert _role_changes(stayed) == []
     assert _role_changes(moved) == [("TEAM_LEADER", "DEVELOPER")]
     assert lee.team_id == b.id
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. 교환 — 팀 이동(transfer_user)이 실패했을 때
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class _FailingTransfers:
+    """``transfer_user`` 가 실패한다. ``after_move`` 면 팀을 옮긴 **뒤에** 실패한다(캐시·감사 단계의 실패 형상)."""
+
+    def __init__(self, d: _Directory, *, after_move: bool) -> None:
+        self._d = d
+        self._after_move = after_move
+
+    async def transfer_user(self, session, *, user_id, new_team_id, actor, ip_address="", request_id=""):
+        if self._after_move:
+            next(u for u in self._d.users if u.id == user_id).team_id = new_team_id
+        raise RuntimeError("transfer_user failed")
+
+
+async def test_failed_team_move_keeps_the_old_teams_leader_a_leader(d):
+    """역할은 옮겨 갈 팀(B) 기준으로 먼저 정해진다. 옮기지 못했으면 남은 팀(A — 그를 가리킨다) 기준이어야 한다."""
+    a = d.team("A")
+    d.team("B")  # 옮겨 갈 팀. 이동은 실패한다.
+    lee = d.user("lee", team=a, role=UserRole.TEAM_LEADER)
+    a.leader_user_id = lee.id
+    issued = await _exchange(d, lee, ["Claude_B"], transfers=_FailingTransfers(d, after_move=False))
+    assert (lee.team_id, lee.role) == (a.id, UserRole.TEAM_LEADER)
+    assert (issued.virtual_key, issued.team_id) == ("vk-test", str(a.id))  # 로그인은 그래도 된다
+
+
+async def test_failed_team_move_does_not_make_the_destinations_designee_a_leader_in_the_old_team(d):
+    """B 가 kim 을 리더로 가리키지만 kim 은 아직 A 에 있다(관리자가 옮긴 예전 리더 등) — 인가는 그를 A 의
+    리더로 읽으므로 TEAM_LEADER 가 되면 안 된다."""
+    a, b = d.team("A"), d.team("B")
+    kim = d.user("kim", team=a, role=UserRole.DEVELOPER)
+    b.leader_user_id = kim.id
+    issued = await _exchange(d, kim, ["Claude_B"], transfers=_FailingTransfers(d, after_move=False))
+    assert (kim.team_id, kim.role) == (a.id, UserRole.DEVELOPER)
+    assert issued.virtual_key == "vk-test"
+
+
+async def test_failure_after_the_move_keeps_the_role_for_the_team_the_user_ended_up_in(d):
+    """옮긴 뒤에 실패했다면 남은 팀은 B 다. 옛 팀(A 는 그를 가리킨다) 기준으로 되돌리면 안 된다."""
+    a, b = d.team("A"), d.team("B")
+    lee = d.user("lee", team=a, role=UserRole.TEAM_LEADER)
+    a.leader_user_id = lee.id
+    issued = await _exchange(d, lee, ["Claude_B"], transfers=_FailingTransfers(d, after_move=True))
+    assert (lee.team_id, lee.role) == (b.id, UserRole.DEVELOPER)
+    assert issued.virtual_key == "vk-test"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. 리더 지정 — PUT /admin/teams/{id}/leader → set_team_leader
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def designate(d, monkeypatch):
+    """``set_team_leader`` 를 메모리 저장소로 돌린다. 감사 로그는 호출만 기록한다."""
+    audit = MagicMock(log=AsyncMock())
+    monkeypatch.setattr(user_team_service, "UserRepository", lambda session: _Repo(d))
+    monkeypatch.setattr(user_team_service, "audit_logger", audit)
+    svc = UserTeamService(cache_mgr=MagicMock(), key_service=MagicMock())
+    admin = CurrentUser(user_id=uuid.uuid4(), email="admin@example.com", role=UserRole.ADMIN, team_id=None)
+
+    async def run(team: Team, user_id: uuid.UUID):
+        return await svc.set_team_leader(AsyncMock(), team_id=team.id, user_id=user_id, actor=admin)
+
+    return run, audit
+
+
+def _state(d: _Directory) -> tuple:
+    return (
+        {t.id: t.leader_user_id for t in d.teams.values()},
+        {u.id: (u.role, u.team_id, u.is_active) for u in d.users},
+    )
+
+
+async def test_designating_a_member_promotes_them(d, designate):
+    run, audit = designate
+    a = d.team("A")
+    park = d.user("park", team=a, role=UserRole.DEVELOPER)
+    resp = await run(a, park.id)
+    assert (a.leader_user_id, park.role, resp.leader_user_id) == (park.id, UserRole.TEAM_LEADER, str(park.id))
+    audit.log.assert_awaited_once()
+    assert audit.log.await_args.kwargs["changes"] == {
+        "before": {"leader_user_id": None},
+        "after": {"leader_user_id": str(park.id)},
+    }
+
+
+async def test_replacing_the_leader_demotes_the_previous_one_at_once(d, designate):
+    """예전엔 예전 리더가 다음 CLI 로그인·동기화까지 — 콘솔만 쓰면 끝까지 — TEAM_LEADER 로 남았다."""
+    run, audit = designate
+    a = d.team("A")
+    lee = d.user("lee", team=a, role=UserRole.TEAM_LEADER)
+    park = d.user("park", team=a, role=UserRole.DEVELOPER)
+    a.leader_user_id = lee.id
+    await run(a, park.id)
+    assert (a.leader_user_id, lee.role, park.role) == (park.id, UserRole.DEVELOPER, UserRole.TEAM_LEADER)
+    assert audit.log.await_args.kwargs["changes"] == {
+        "before": {"leader_user_id": str(lee.id), "previous_leader_role": "TEAM_LEADER"},
+        "after": {"leader_user_id": str(park.id), "previous_leader_role": "DEVELOPER"},
+    }
+
+
+async def test_previous_leader_who_is_an_admin_stays_admin(d, designate):
+    run, audit = designate
+    a = d.team("A")
+    lee = d.user("lee", team=a, role=UserRole.ADMIN)
+    park = d.user("park", team=a, role=UserRole.DEVELOPER)
+    a.leader_user_id = lee.id
+    await run(a, park.id)
+    assert (lee.role, park.role) == (UserRole.ADMIN, UserRole.TEAM_LEADER)
+    assert audit.log.await_args.kwargs["changes"]["before"] == {"leader_user_id": str(lee.id)}
+
+
+async def test_designating_an_admin_keeps_them_admin(d, designate):
+    """지정은 남기되 역할은 낮추지 않는다. IdP 에서 관리자가 아니게 되면 그때 TEAM_LEADER 가 된다(reconcile_role)."""
+    run, _ = designate
+    a = d.team("A")
+    lee = d.user("lee", team=a, role=UserRole.ADMIN)
+    await run(a, lee.id)
+    assert (lee.role, a.leader_user_id) == (UserRole.ADMIN, lee.id)
+    assert reconcile_role(UserRole.DEVELOPER, leads_own_team=a.leader_user_id == lee.id) == UserRole.TEAM_LEADER
+
+
+async def test_previous_leader_who_has_moved_to_another_team_is_left_alone(d, designate):
+    """lee 는 이제 B 에 있고 B 가 그를 가리킨다. A 에 남은 옛 지정만 보고 강등하면 B 의 리더를 잃는다."""
+    run, _ = designate
+    a, b = d.team("A"), d.team("B")
+    lee = d.user("lee", team=b, role=UserRole.TEAM_LEADER)
+    a.leader_user_id = b.leader_user_id = lee.id
+    park = d.user("park", team=a, role=UserRole.DEVELOPER)
+    await run(a, park.id)
+    assert (lee.role, b.leader_user_id, a.leader_user_id) == (UserRole.TEAM_LEADER, lee.id, park.id)
+
+
+async def test_designating_the_current_leader_again_changes_no_roles(d, designate):
+    run, audit = designate
+    a = d.team("A")
+    lee = d.user("lee", team=a, role=UserRole.TEAM_LEADER)
+    park = d.user("park", team=a, role=UserRole.DEVELOPER)
+    a.leader_user_id = lee.id
+    await run(a, lee.id)
+    assert (a.leader_user_id, lee.role, park.role) == (lee.id, UserRole.TEAM_LEADER, UserRole.DEVELOPER)
+    assert audit.log.await_args.kwargs["changes"] == {
+        "before": {"leader_user_id": str(lee.id)},
+        "after": {"leader_user_id": str(lee.id)},
+    }
+
+
+async def _refused(d: _Directory, designate, team: Team, user_id: uuid.UUID) -> Exception:
+    """거부된 지정은 아무것도 쓰지 않는다 — 리더 지정도, 누구의 역할도. 감사 로그도 남기지 않는다."""
+    run, audit = designate
+    before = _state(d)
+    with pytest.raises((ValidationError, NotFoundError)) as refused:
+        await run(team, user_id)
+    assert _state(d) == before
+    audit.log.assert_not_awaited()
+    return refused.value
+
+
+async def test_a_member_of_another_team_is_refused(d, designate):
+    """예전엔 받아서 kim 이 TEAM_LEADER 가 됐고, 인가는 그를 A 가 아니라 **B** 의 리더로 읽었다."""
+    a, b = d.team("A"), d.team("B")
+    lee = d.user("lee", team=a, role=UserRole.TEAM_LEADER)
+    a.leader_user_id = lee.id
+    kim = d.user("kim", team=b, role=UserRole.DEVELOPER)
+    err = await _refused(d, designate, a, kim.id)
+    assert (type(err), err.message) == (ValidationError, f"User {kim.id} is not a member of team {a.id}")
+
+
+async def test_an_unknown_user_is_refused(d, designate):
+    a = d.team("A")
+    lee = d.user("lee", team=a, role=UserRole.TEAM_LEADER)
+    a.leader_user_id = lee.id
+    ghost = uuid.uuid4()
+    err = await _refused(d, designate, a, ghost)
+    assert (type(err), err.message) == (NotFoundError, f"User not found: {ghost}")
+
+
+async def test_a_deactivated_member_is_refused(d, designate):
+    a = d.team("A")
+    lee = d.user("lee", team=a, role=UserRole.TEAM_LEADER)
+    a.leader_user_id = lee.id
+    park = d.user("park", team=a, role=UserRole.DEVELOPER)
+    park.is_active = False
+    err = await _refused(d, designate, a, park.id)
+    assert (type(err), err.message) == (ValidationError, f"User {park.id} is deactivated")

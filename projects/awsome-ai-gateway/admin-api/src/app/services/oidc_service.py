@@ -184,6 +184,21 @@ class OIDCService:
                     new_team_id=str(team_id),
                 )
                 # 실패해도 인증은 진행 (다음 로그인 때 재시도)
+                # ⚠️ 6단계는 역할을 옮겨 갈 팀(team_id) 기준으로 정했다. 옮기지 못했으면 남은 팀 기준으로 다시
+                #    정한다 — 안 그러면 옛 팀의 리더가 DEVELOPER 가 되고, 옮겨 갈 팀의 리더로 지정된 사람은 옛 팀에
+                #    앉은 채 TEAM_LEADER 가 된다(인가는 그를 옛 팀의 리더로 읽는다). 실패가 DB 오류였다면
+                #    트랜잭션이 이미 깨져 이 조회도, 아래 키 발급도 실패한다 — 그때는 아무것도 커밋되지 않는다.
+                if user.team_id != team_id:
+                    kept_leader_id = await UserRepository(session).get_team_leader_id(user.team_id)
+                    kept_role = reconcile_role(role, leads_own_team=kept_leader_id == user.id)
+                    if user.role != kept_role:
+                        logger.info(
+                            "oidc.user_role_changed",
+                            user_id=str(user.id),
+                            old_role=user.role.value,
+                            new_role=kept_role.value,
+                        )
+                        user.role = kept_role
 
         if not user.is_active:
             raise OIDCNotProvisionableError("user_deactivated")

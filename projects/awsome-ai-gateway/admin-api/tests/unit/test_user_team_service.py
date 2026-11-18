@@ -40,6 +40,11 @@ class TestSetTeamLeader:
         with patch("app.services.user_team_service.UserRepository") as MockRepo, \
              patch("app.services.user_team_service.audit_logger") as mock_audit:
             repo = MockRepo.return_value
+            # 쓰기 전에 팀과 대상을 읽는다 — 대상은 이 팀의 활성 구성원이어야 한다.
+            repo.get_team = AsyncMock(return_value=team)
+            repo.get_user = AsyncMock(
+                return_value=MagicMock(spec=User, id=user_id, team_id=team_id, is_active=True, role=UserRole.DEVELOPER)
+            )
             repo.set_leader = AsyncMock(return_value=team)
             repo.update_user_role = AsyncMock()
             mock_audit.log = AsyncMock()
@@ -55,7 +60,8 @@ class TestSetTeamLeader:
         self, user_team_service: UserTeamService, mock_session: AsyncMock, admin_user: CurrentUser
     ):
         with patch("app.services.user_team_service.UserRepository") as MockRepo:
-            MockRepo.return_value.set_leader = AsyncMock(return_value=None)
+            # 팀이 없다는 판정은 쓰기 전의 조회에서 나온다.
+            MockRepo.return_value.get_team = AsyncMock(return_value=None)
 
             with pytest.raises(NotFoundError):
                 await user_team_service.set_team_leader(
