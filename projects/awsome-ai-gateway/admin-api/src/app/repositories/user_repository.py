@@ -81,6 +81,15 @@ class UserRepository:
     async def get_team(self, team_id: uuid.UUID) -> Team | None:
         return await self._session.get(Team, team_id)
 
+    async def get_team_leader_id(self, team_id: uuid.UUID) -> uuid.UUID | None:
+        """팀의 리더 지정(``leader_user_id``)만 읽는다. 팀이 없거나 지정이 없으면 None.
+
+        로그인 hot path 용이다. ``get_team`` 은 모델의 ``lazy="selectin"`` 때문에 팀 구성원 전체를
+        함께 읽는다 — 기본 팀처럼 큰 팀에 속한 사용자의 로그인마다 그 비용을 낼 이유가 없다.
+        """
+        stmt = select(Team.leader_user_id).where(Team.id == team_id)
+        return (await self._session.execute(stmt)).scalar_one_or_none()
+
     async def get_team_by_dept_and_name(
         self, dept_id: uuid.UUID, name: str
     ) -> Team | None:

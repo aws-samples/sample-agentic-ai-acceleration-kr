@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import CurrentUser
 from app.core.config import get_settings
 from app.core.exceptions import ForbiddenError
-from app.core.oidc_identity import derive_role
+from app.core.oidc_identity import derive_role, reconcile_role
 from app.core.oidc_verifier import OIDCConfigError, OIDCVerifier, OIDCVerifyError
 from app.models.auth import Department, Team, User, UserRole
 from app.models.budget import BudgetConfig, BudgetPolicy, BudgetScope, PeriodType
@@ -466,13 +466,18 @@ class OIDCService:
         if existing.email != email and (not incoming_is_synthetic or existing_is_synthetic):
             existing.email = email
         existing.display_name = display_name
+        # ⚠️ role(derive_role)은 ADMIN 아니면 DEVELOPER 다 — 그대로 쓰면 지정된 팀 리더가 CLI 의 매시간
+        #    교환에서 DEVELOPER 로 돌아간다(실측). 리더 지정은 이 로그인이 정한 팀(team_id — 7단계
+        #    transfer_user 가 옮겨 갈 팀)의 것을 본다. 지금 행의 팀을 보면 옮겨진 리더가 역할을 들고 간다.
+        leader_id = await repo.get_team_leader_id(team_id)
+        stored_role = reconcile_role(role, leads_own_team=leader_id == existing.id)
         # role 변경은 admin 권한 변동이므로 명시 로그
-        if existing.role != role:
+        if existing.role != stored_role:
             logger.info(
                 "oidc.user_role_changed",
                 user_id=str(existing.id),
                 old_role=existing.role.value,
-                new_role=role.value,
+                new_role=stored_role.value,
             )
-            existing.role = role
+            existing.role = stored_role
         return existing, False, team_changed
