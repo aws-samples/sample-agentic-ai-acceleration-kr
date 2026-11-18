@@ -363,7 +363,7 @@ admin-api는 Cognito의 공개키(JWKS)를 issuer에서 직접 받아 토큰을 
 ### 7.4 누가 로그인할 수 있나
 
 - **사용자가 게이트웨이에 등록돼 있어야 합니다.** 관리 콘솔 로그인은 사용자를 새로 만들지 않습니다. 가장 간단한 방법은 gateway-cli로 한 번 로그인해 VK를 발급받는 것입니다(3.3~3.4). 등록되지 않은 사용자는 403(`user_not_provisioned`)을 받습니다.
-- **화면은 관리자 그룹 멤버만 열 수 있습니다.** 관리 콘솔은 IdP 토큰의 그룹으로 역할을 정하므로 `adminBootstrap.groups`(예: `ClaudeAdmin`)의 그룹에 속해야 합니다. `adminBootstrap.emails`로만 지정한 관리자와 팀 리더는 로그인은 되지만 모든 페이지가 403입니다. 그룹에서 빼면 현재 세션이 끝난 뒤 화면이 열리지 않습니다.
+- **화면에서 열리는 범위는 Admin API가 허용하는 범위와 같습니다.** 관리 콘솔은 로그인할 때 Admin API에 그 사람의 역할과 팀을 묻습니다. 관리자 그룹(`adminBootstrap.groups`, 예: `ClaudeAdmin`) 멤버와 `adminBootstrap.emails`의 사용자는 관리자 화면을, 팀 리더로 지정된 사용자는 대시보드와 자기 팀의 예산 화면을 엽니다. 역할이 바뀌면 다음 로그인부터 반영됩니다.
 - **세션 길이**는 토큰 수명과 같습니다. 기본 1시간이고 `cognito_admin_ui_token_validity_hours`(1~12)로 바꿉니다.
 
 환경별 로그인 절차와 로그인이 안 될 때의 확인 방법은 [`guides/admin-guide.md` 2절](../../../guides/admin-guide.md#2-admin-ui-접속)에 있습니다.
