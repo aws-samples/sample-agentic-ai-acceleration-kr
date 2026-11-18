@@ -1417,8 +1417,8 @@ table { font-size: 15px; } td, th { padding: 8px 10px; } li { font-size: 15px; }
       ↓
 [3] gateway-cli setup --gateway-url <GW> --admin-api-url <ADMIN>
       ↓  설정 자동 기록
-[4] macOS: /etc/claude-code/managed-settings.d/gateway.json  (sudo)
-           또는  ~/.config/Claude/settings.json
+[4] macOS: /Library/Application Support/ClaudeCode/managed-settings.d/50-gateway.json  (sudo)
+           또는  ~/.claude/settings.json
       ↓
 [5] Claude Code 재시작 → 이후 `claude` 실행만 (apiKeyHelper 가 VK 매 요청 자동 첨부)
       ↓

@@ -138,9 +138,11 @@ gateway-cli logout          # VK 캐시 삭제(설치본에 명령이 있으면)
 ```
 그리고 `gateway-cli setup` 이 기록한 설정을 되돌린다:
 ```bash
-# managed-settings.d 에 기록된 경우 — 해당 항목 제거
-ls ~/.config/Claude/ 2>/dev/null
-ls /Library/Application\ Support/ClaudeCode/managed-settings.d/ 2>/dev/null   # (경로는 환경마다 다름)
+# 수동으로 넣은 경우 — 사용자 설정 파일
+ls ~/.claude/settings.json 2>/dev/null
+# managed-settings.d 에 기록된 경우 — 해당 항목 제거 (macOS / Linux·WSL)
+ls /Library/Application\ Support/ClaudeCode/managed-settings.d/ 2>/dev/null
+ls /etc/claude-code/managed-settings.d/ 2>/dev/null
 # gateway 관련 settings.json(apiKeyHelper/ANTHROPIC_BASE_URL) 을 지우거나 백업본으로 교체
 ```
 
