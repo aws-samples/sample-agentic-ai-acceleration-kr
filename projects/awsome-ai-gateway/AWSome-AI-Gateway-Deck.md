@@ -1428,7 +1428,7 @@ table { font-size: 15px; } td, th { padding: 8px 10px; } li { font-size: 15px; }
 `근거: guides/user-guide.md §5 · 부록A 명령어 요약`
 
 <!--
-claude-code 는 가장 매끄러운 경로입니다. 핵심은 gateway-cli setup 한 줄이 Claude Code 가 읽는 설정 파일에 apiKeyHelper(키 자동 주입 헬퍼) 경로와 접속 주소(ANTHROPIC_BASE_URL)를 자동으로 써준다는 것입니다. 우선순위는 회사 관리 설정(managed-settings.d, 가장 강함)이 개인 설정(~/.config/Claude/settings.json)보다 우선이며, setup 은 전자에 쓰려 하므로 sudo(본인 PC 로그인 암호)를 물을 수 있습니다. 권한이 없으면 수동으로 개인 설정에 apiKeyHelper+env 블록을 넣는 방법도 user-guide §5.2 에 있습니다. Windows 는 관리 설정 경로가 다르지만 개념은 동일하고, 실무에선 운영자 MDM(단말 원격관리) 배포(.reg)로 관리하는 것이 깔끔합니다. 강조: 설정 후엔 개발자가 그냥 claude 를 실행하면 되고 VK(임시 출입증)는 매 요청 자동 주입·갱신됩니다. 되돌리려면 gateway-cli disable 한 줄이면 직접 API 로 복귀합니다 — 이 "쉬운 원복"이 도입 저항을 낮춥니다. 근거: 소스 slide 44.
+claude-code 는 가장 매끄러운 경로입니다. 핵심은 gateway-cli setup 한 줄이 Claude Code 가 읽는 설정 파일에 apiKeyHelper(키 자동 주입 헬퍼) 경로와 접속 주소(ANTHROPIC_BASE_URL)를 자동으로 써준다는 것입니다. 우선순위는 회사 관리 설정(managed-settings.d, 가장 강함)이 개인 설정(~/.claude/settings.json)보다 우선이며, setup 은 전자에 쓰려 하므로 sudo(본인 PC 로그인 암호)를 물을 수 있습니다. 권한이 없으면 수동으로 개인 설정에 apiKeyHelper+env 블록을 넣는 방법도 user-guide §5.2 에 있습니다. Windows 는 관리 설정 경로가 다르지만 개념은 동일하고, 실무에선 운영자 MDM(단말 원격관리) 배포(.reg)로 관리하는 것이 깔끔합니다. 강조: 설정 후엔 개발자가 그냥 claude 를 실행하면 되고 VK(임시 출입증)는 매 요청 자동 주입·갱신됩니다. 되돌리려면 gateway-cli disable 한 줄이면 직접 API 로 복귀합니다 — 이 "쉬운 원복"이 도입 저항을 낮춥니다. 근거: 소스 slide 44.
 -->
 
 ---
