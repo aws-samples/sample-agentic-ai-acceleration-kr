@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from typing import Annotated
 
@@ -80,7 +81,9 @@ class Settings(BaseSettings):
     @classmethod
     def _account_ids_are_twelve_digits(cls, v: list[str]) -> list[str]:
         """오타 난 계정 ID 는 어떤 요청과도 일치하지 않는다 — 조용히 전부 거부하는 대신 기동에서 알린다."""
-        bad = [a for a in v if not (isinstance(a, str) and len(a) == 12 and a.isdigit())]
+        # str.isdigit() 는 ASCII 가 아닌 숫자(예: 아랍-인도 숫자)도 받는다. STS 는 ASCII 로만 돌려주므로
+        # 그런 값은 어떤 요청과도 일치하지 않는다 — Helm 차트의 검사(^[0-9]{12}$)와 같은 기준으로 맞춘다.
+        bad = [a for a in v if not (isinstance(a, str) and re.fullmatch(r"[0-9]{12}", a))]
         if bad:
             raise ValueError(f"ALLOWED_AWS_ACCOUNT_IDS must be 12-digit AWS account IDs, got: {bad}")
         return v

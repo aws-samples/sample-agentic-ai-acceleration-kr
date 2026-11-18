@@ -240,6 +240,7 @@ def test_account_ids_are_validated_when_settings_load():
     assert ok.ALLOWED_AWS_ACCOUNT_IDS == [GATEWAY_ACCOUNT, OTHER_ACCOUNT]
     assert Settings(_env_file=None).ALLOWED_AWS_ACCOUNT_IDS == []
 
-    for bad in ("12345", "11112222333a", f"{GATEWAY_ACCOUNT},1234"):
+    # 마지막 값은 ASCII 가 아닌 숫자 12자리다 — str.isdigit() 는 받지만 STS 가 돌려주는 값과는 절대 일치하지 않는다.
+    for bad in ("12345", "11112222333a", f"{GATEWAY_ACCOUNT},1234", "١٢٣٤٥٦٧٨٩٠١٢"):
         with pytest.raises(ValueError, match="12-digit"):
             Settings(_env_file=None, ALLOWED_AWS_ACCOUNT_IDS=bad)
