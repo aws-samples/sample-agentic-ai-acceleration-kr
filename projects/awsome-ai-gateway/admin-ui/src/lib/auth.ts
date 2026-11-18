@@ -147,6 +147,7 @@ export async function resolveSession(token: string, roleCookie?: string): Promis
   if (session.role) return session;
   const remembered = await readRoleCookie(roleCookie, token);
   if (!remembered) return { ...session, role: undefined as unknown as UserRole };
+  // `??` 가 아니라 `||` 다 — 빈 문자열 team_id 클레임이 기억해 둔 팀을 가리지 않게.
   return { ...session, role: remembered.role, team_id: session.team_id || remembered.teamId };
 }
 

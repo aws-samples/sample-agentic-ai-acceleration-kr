@@ -30,7 +30,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { redirectRelative } from '@/lib/redirect';
-import { parseJWT, isSessionExpired } from '@/lib/auth';
+import { parseJWT, isSessionExpired, checkPagePermission } from '@/lib/auth';
 import { fetchIdentity, type IdentityResult } from '@/lib/identity';
 import { ROLE_COOKIE_NAME, encodeRoleCookie } from '@/lib/roleCookie';
 
@@ -359,9 +359,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   // 없으면 이런 무한 루프가 실제로 난다(적대적 검증에서 재현):
   //   `OIDC_COOKIE_TOKEN=access_token` + access_token 이 불투명한 IdP(Okta org 서버),
   //   또는 scope 에 `openid` 가 없어 id_token 이 안 와서 access_token 으로 폴백 →
-  //   그 문자열을 admin_jwt 로 굽는다 → 브라우저가 `/` 요청 → middleware 의 parseJWT 가
-  //   throw → catch 에서 쿠키 제거 + `/api/auth/login` 리다이렉트 → IdP 세션이 아직
-  //   살아 있으니 즉시 콜백으로 되돌아옴 → 다시 같은 쿠키 → **영원히 반복**.
+  //   그 문자열을 admin_jwt 로 굽는다 → 브라우저가 `/` 요청 → middleware 의 resolveSession
+  //   (안에서 parseJWT)이 throw → catch 에서 쿠키 제거 + `/api/auth/login` 리다이렉트 →
+  //   IdP 세션이 아직 살아 있으니 즉시 콜백으로 되돌아옴 → 다시 같은 쿠키 → **영원히 반복**.
   //   화면에는 아무 진단도 안 나온다 — 이 라우트가 애초에 없애려던 그 막다른 길이다.
   //
   // 그래서 실패는 루프가 아니라 원인이 적힌 페이지로 끝낸다. 검증은 서명 검증이 아니라
@@ -403,11 +403,19 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const identity = await fetchIdentity(cookieToken);
   if (identity.kind === 'denied') {
     const { title, detail } = deniedMessage(identity);
-    return failure(403, title, detail, secure);
+    const refused = failure(403, title, detail, secure);
+    // 앞 세션의 admin_jwt·admin_role 도 지운다 — 남기면 방금 거절된 사람에게 그 세션이 계속 화면을 연다.
+    // ⚠️ 여기서만 지운다: state·PKCE 검증을 통과한 뒤라 이 브라우저 자신의 로그인이다. 위의 다른 실패
+    //    페이지는 위조된 콜백 URL 로도 닿아, 거기서 지우면 남을 로그아웃시키는 수단이 된다.
+    for (const name of ['admin_jwt', ROLE_COOKIE_NAME]) {
+      refused.cookies.set(name, '', { httpOnly: true, sameSite: 'lax', path: '/', maxAge: 0, secure });
+    }
+    return refused;
   }
   if (identity.kind === 'unavailable' && !parsedSession.role) {
     // 토큰이 역할을 주면 오늘처럼 들여보낸다 — 옛 admin-api(404)나 장애가 관리자 그룹 구성원을
     // 잠그면 안 된다. 역할을 모르는 사람은 들여보내도 모든 화면이 /403 이라 여기서 끝낸다.
+    // 계정에 대한 판정이 아니라 일시 장애이므로 앞 세션은 건드리지 않는다.
     return failure(
       503,
       'Could not confirm your role',
@@ -419,9 +427,15 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   const maxAge = cookieMaxAge(cookieToken, tokens.expires_in);
 
+  // 첫 화면은 권한표로 고른다 — `/` 를 못 여는 역할(DEVELOPER)은 첫 화면이 /403 이었다. 역할은
+  // middleware 가 볼 것과 같다: 토큰의 역할이 먼저, 없으면 admin-api 가 답한 역할(lib/auth.ts resolveSession).
+  const role = parsedSession.role || (identity.kind === 'ok' ? identity.role : undefined);
+  const landing =
+    role && !checkPagePermission('/', role) && checkPagePermission('/my', role) ? '/my' : '/';
+
   // 303 — POST/GET 구분 없이 GET 으로 이동시킨다(logout/route.ts:19 와 같은 이유).
   // 상대 Location — CloudFront/ALB 뒤에서 Host 헤더가 내부 오리진일 수 있다(lib/redirect.ts).
-  const res = redirectRelative('/');
+  const res = redirectRelative(landing);
   // admin_role 은 admin_jwt 와 수명·속성이 같다 — 토큰보다 오래 남을 이유가 없다.
   const sessionCookie = { httpOnly: true, sameSite: 'lax' as const, path: '/', maxAge, secure };
   res.cookies.set('admin_jwt', cookieToken, sessionCookie);

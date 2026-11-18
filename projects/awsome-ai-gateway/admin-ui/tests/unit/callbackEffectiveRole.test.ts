@@ -9,7 +9,9 @@
  *
  * 여기서 고정하는 것:
  *   1. ok — admin_jwt 와 같은 속성·수명의 admin_role(역할과 팀)을 굽고, 그 값은 **그 토큰**으로만 읽힌다.
- *   2. denied(401/403) — admin_jwt 도 admin_role 도 굽지 않고, 무엇을 고칠지 적힌 403 페이지.
+ *      첫 화면은 권한표로 고른다 — `/` 를 못 여는 역할(DEVELOPER)은 `/my`.
+ *   2. denied(401/403) — 세션을 만들지 않고 **앞 세션의 admin_jwt·admin_role 도 지운** 403 페이지.
+ *      다른 실패 페이지(위조된 콜백 URL 로도 닿는다)와 503 은 앞 세션을 건드리지 않는다.
  *   3. unavailable — 토큰이 역할을 주면 오늘처럼 들여보내고(역할 쿠키 없이), 못 주면 503 페이지.
  *   4. 순서 — 토큰 형식·만료 검사를 통과한 뒤에만 묻는다.
  *
@@ -123,12 +125,23 @@ function stubUpstreams(idToken: string, me: () => Response | Promise<Response>) 
   return { urls, meCalls };
 }
 
-function callback(headers: Record<string, string> = {}): Promise<Response> {
-  const r = new NextRequest(`http://admin.test/api/auth/callback?code=CODE&state=${STATE}`, {
+/** 같은 브라우저에 남아 있는 앞 세션(다른 계정일 수도 있다). 콜백은 이 쿠키를 읽지 않는다. */
+const OLDER_SESSION = {
+  admin_jwt: idpToken({ sub: 'earlier-subject', email: 'earlier@example.com' }),
+  admin_role: 'ADMIN.aaaaaaaaaaaaaaaaaaaaaa',
+};
+
+function callback(
+  headers: Record<string, string> = {},
+  browserCookies: Record<string, string> = {},
+  query = `code=CODE&state=${STATE}`,
+): Promise<Response> {
+  const r = new NextRequest(`http://admin.test/api/auth/callback?${query}`, {
     headers: { host: 'admin.test', ...headers },
   });
   r.cookies.set('oidc_state', STATE);
   r.cookies.set('oidc_verifier', VERIFIER);
+  for (const [k, v] of Object.entries(browserCookies)) r.cookies.set(k, v);
   return callbackGET(r);
 }
 
@@ -157,13 +170,34 @@ function pageRequest(path: string, jar: Record<string, string>): NextRequest {
   return r;
 }
 
-function expectNoSession(res: Response): void {
-  const jar = setCookies(res);
-  expect(jar['admin_jwt']).toBeUndefined();
-  expect(jar['admin_role']).toBeUndefined();
+function expectTempCookiesCleared(jar: Record<string, string>): void {
   // 임시 쿠키는 실패 경로에서도 정리된다(failure() 가 하던 그대로).
   expect(jar['oidc_state']).toMatch(/Max-Age=0/i);
   expect(jar['oidc_verifier']).toMatch(/Max-Age=0/i);
+}
+
+/** admin_jwt·admin_role 을 굽지도 지우지도 않았다 — 앞 세션이 그대로 남는다. */
+function expectSessionUntouched(res: Response): void {
+  const jar = setCookies(res);
+  expect(jar['admin_jwt']).toBeUndefined();
+  expect(jar['admin_role']).toBeUndefined();
+  expectTempCookiesCleared(jar);
+}
+
+/** admin_jwt·admin_role 을 구울 때와 같은 속성으로 지웠다(Max-Age=0). */
+function expectSessionCleared(res: Response, secure = false): void {
+  const jar = setCookies(res);
+  for (const name of ['admin_jwt', 'admin_role']) {
+    expect(jar[name], `${name} 를 지우지 않았다`).toBeDefined();
+    expect(cookieValue(jar[name])).toBe('');
+    expect(jar[name]).toMatch(/Max-Age=0/);
+    expect(jar[name]).toMatch(/HttpOnly/i);
+    expect(jar[name]).toMatch(/SameSite=Lax/i);
+    expect(jar[name]).toMatch(/Path=\//);
+    if (secure) expect(jar[name]).toMatch(/Secure/i);
+    else expect(jar[name]).not.toMatch(/Secure/i);
+  }
+  expectTempCookiesCleared(jar);
 }
 
 // ───────────────────────── 1. ok ─────────────────────────
@@ -301,25 +335,32 @@ describe('callback — admin-api 가 거절하면 세션을 만들지 않는다'
       'This account is deactivated',
       [],
     ],
-  ])('%s', async (_label, me, title, hints) => {
+  ])('%s → 403 페이지, 앞 세션의 admin_jwt·admin_role 도 지운다', async (_label, me, title, hints) => {
     stubUpstreams(NO_ROLE_TOKEN, me);
 
-    const res = await callback();
+    const res = await callback({}, OLDER_SESSION);
 
     expect(res.status).toBe(403);
     expect(res.headers.get('content-type')).toContain('text/html');
     const html = await res.text();
     expect(html).toContain(`<h1>${title}</h1>`);
     for (const hint of hints) expect(html).toContain(hint);
-    expectNoSession(res);
+    expectSessionCleared(res);
+  });
+
+  it('https 종단이면 지우는 쿠키에도 Secure 가 붙는다 (구울 때와 같은 속성)', async () => {
+    stubUpstreams(NO_ROLE_TOKEN, () => envelope(403, 'forbidden', 'user_deactivated'));
+    const res = await callback({ 'x-forwarded-proto': 'https' }, OLDER_SESSION);
+    expect(res.status).toBe(403);
+    expectSessionCleared(res, true);
   });
 
   it('토큰이 스스로 ADMIN(관리자 그룹)이어도 거절이 이긴다', async () => {
     // admin-api 가 받지 않는 토큰으로 세션을 만들면 모든 호출이 401/403 인 화면만 남는다.
     stubUpstreams(ADMIN_GROUP_TOKEN, () => envelope(401, 'unauthorized', 'Invalid or expired token'));
-    const res = await callback();
+    const res = await callback({}, OLDER_SESSION);
     expect(res.status).toBe(403);
-    expectNoSession(res);
+    expectSessionCleared(res);
   });
 
   it('거절 코드는 escape 된다', async () => {
@@ -327,6 +368,89 @@ describe('callback — admin-api 가 거절하면 세션을 만들지 않는다'
     const html = await (await callback()).text();
     expect(html).not.toContain('<img src=x');
     expect(html).toContain('&lt;img src=x');
+  });
+});
+
+describe('callback — 다른 실패 페이지와 503 은 앞 세션을 건드리지 않는다', () => {
+  // 위조된 콜백 URL 로도 닿는 실패에서 세션을 지우면 남을 로그아웃시키는 수단이 된다.
+  it('state 불일치', async () => {
+    const { urls } = stubUpstreams(NO_ROLE_TOKEN, () => identity('ADMIN'));
+    const res = await callback({}, OLDER_SESSION, 'code=CODE&state=ATTACKER');
+    expect(res.status).toBe(400);
+    expect(urls).toHaveLength(0);
+    expectSessionUntouched(res);
+  });
+
+  it('provider error', async () => {
+    const { urls } = stubUpstreams(NO_ROLE_TOKEN, () => identity('ADMIN'));
+    const res = await callback({}, OLDER_SESSION, 'error=access_denied&error_description=cancelled');
+    expect(res.status).toBe(400);
+    expect(urls).toHaveLength(0);
+    expectSessionUntouched(res);
+  });
+
+  it('token 교환 실패', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => json(400, { error: 'invalid_grant' })),
+    );
+    const res = await callback({}, OLDER_SESSION);
+    expect(res.status).toBe(502);
+    expect(await res.text()).toContain('invalid_grant');
+    expectSessionUntouched(res);
+  });
+
+  it('503 Could not confirm your role (일시 장애 — 계정 판정이 아니다)', async () => {
+    stubUpstreams(NO_ROLE_TOKEN, () => envelope(503, 'service_unavailable', 'Identity provider is unreachable'));
+    const res = await callback({}, OLDER_SESSION);
+    expect(res.status).toBe(503);
+    expect(await res.text()).toContain('<h1>Could not confirm your role</h1>');
+    expectSessionUntouched(res);
+  });
+});
+
+// ───────────────────────── 첫 화면 ─────────────────────────
+
+describe('callback — 첫 화면은 권한표로 고른다', () => {
+  const ROLE_CLAIM = (role: string) => idpToken({ sub: `claim-${role}`, role });
+
+  const notFound = () => json(404, { detail: 'Not Found' });
+
+  it.each([
+    ['DEVELOPER (admin-api)', '/my', NO_ROLE_TOKEN, () => identity('DEVELOPER')],
+    ['TEAM_LEADER (admin-api)', '/', NO_ROLE_TOKEN, () => identity('TEAM_LEADER')],
+    ['ADMIN (admin-api)', '/', NO_ROLE_TOKEN, () => identity('ADMIN')],
+    ['관리자 그룹 토큰 + 조회 불가', '/', ADMIN_GROUP_TOKEN, notFound],
+    ['관리자 그룹 토큰 + admin-api DEVELOPER (토큰이 먼저)', '/', ADMIN_GROUP_TOKEN, () => identity('DEVELOPER')],
+    ['role 클레임 DEVELOPER + 조회 불가', '/my', ROLE_CLAIM('DEVELOPER'), notFound],
+    ['role 클레임 DEVELOPER + admin-api ADMIN (토큰이 먼저)', '/my', ROLE_CLAIM('DEVELOPER'), () => identity('ADMIN')],
+    ['role 클레임 TEAM_LEADER + admin-api DEVELOPER (토큰이 먼저)', '/', ROLE_CLAIM('TEAM_LEADER'), () => identity('DEVELOPER')],
+    ['role 클레임 ADMIN', '/', ROLE_CLAIM('ADMIN'), () => identity('ADMIN')],
+  ])('%s → %s', async (_label, landing, token, me) => {
+    stubUpstreams(token, me);
+    const res = await callback();
+    expect(res.status).toBe(303);
+    expect(res.headers.get('location')).toBe(landing);
+  });
+
+  it.each(['DEVELOPER', 'TEAM_LEADER', 'ADMIN'])(
+    '%s 가 도착하는 화면은 그 세션으로 middleware 가 연다',
+    async (role) => {
+      stubUpstreams(NO_ROLE_TOKEN, () => identity(role));
+      const res = await callback();
+      const jar = setCookies(res);
+
+      const landing = await middleware(pageRequest(res.headers.get('location')!, jar));
+      expect(landing.status).toBe(200);
+      expect(landing.headers.get('location')).toBeNull();
+    },
+  );
+
+  it('대조군: DEVELOPER 세션으로 `/` 는 /403 이다 (예전 도착 화면)', async () => {
+    stubUpstreams(NO_ROLE_TOKEN, () => identity('DEVELOPER'));
+    const jar = setCookies(await callback());
+    const root = await middleware(pageRequest('/', jar));
+    expect(new URL(root.headers.get('location')!).pathname).toBe('/403');
   });
 });
 
@@ -374,7 +498,7 @@ describe('callback — admin-api 의 판정을 못 받았을 때', () => {
     const html = await res.text();
     expect(html).toContain('<h1>Could not confirm your role</h1>');
     expect(html).toContain('admin-api');
-    expectNoSession(res);
+    expectSessionUntouched(res);
   });
 
   it('503 페이지에 원인이 적힌다', async () => {
