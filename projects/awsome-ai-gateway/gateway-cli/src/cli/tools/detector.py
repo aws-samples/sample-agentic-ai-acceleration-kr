@@ -25,9 +25,10 @@ def _home() -> str:
 
 
 def _claude_code_paths() -> list[str]:
-    if sys.platform == "win32":
-        appdata = os.environ.get("APPDATA", "")
-        return [os.path.join(appdata, "Claude", "settings.json")] if appdata else []
+    # Claude Code 의 사용자 설정은 모든 OS 에서 `~/.claude/settings.json` 이고, Windows 에서
+    # `~` 는 %USERPROFILE% 이다(https://code.claude.com/docs/en/settings.md). Windows 의
+    # os.path.expanduser("~") 가 바로 USERPROFILE 이라 OS 분기가 필요 없다 — 예전 Windows
+    # 분기가 보던 %APPDATA%\Claude\settings.json 은 문서에 없는 위치였다.
     return [os.path.join(_home(), ".claude", "settings.json")]
 
 

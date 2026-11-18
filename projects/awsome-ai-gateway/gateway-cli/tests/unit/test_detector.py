@@ -6,13 +6,14 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from cli.config import AuthMode, ToolType
-from cli.tools.detector import _check_is_configured, detect_tools
+from cli.tools.detector import _check_is_configured, _claude_code_paths, detect_tools
 
 
 class TestCheckIsConfigured:
@@ -147,3 +148,27 @@ class TestDetectTools:
         ):
             tools = detect_tools()
         assert tools == []
+
+
+class TestClaudeCodePaths:
+    """Claude Code 사용자 설정 파일 위치 — https://code.claude.com/docs/en/settings.md 기준.
+
+    문서: 사용자 설정은 `~/.claude/settings.json` 이고 "On Windows, `~/.claude` means
+    `%USERPROFILE%\\.claude`". 예전 구현은 Windows 에서만 `%APPDATA%\\Claude\\settings.json`
+    을 봤는데, 문서에 없는 위치다.
+    """
+
+    @pytest.mark.parametrize("platform", ["darwin", "linux"])
+    def test_posix_reads_home_dot_claude(self, platform, monkeypatch, isolated_home) -> None:
+        monkeypatch.setattr(sys, "platform", platform)
+        expected = os.path.join(str(isolated_home), ".claude", "settings.json")
+        assert _claude_code_paths() == [expected]
+
+    def test_windows_reads_userprofile_dot_claude(self, monkeypatch, isolated_home) -> None:
+        # 실제 Windows 처럼 APPDATA 를 USERPROFILE 아래 별도 경로로 둔다(conftest 는 같은 값).
+        monkeypatch.setenv("APPDATA", str(isolated_home / "AppData" / "Roaming"))
+        monkeypatch.setattr(sys, "platform", "win32")
+        # Windows 의 os.path.expanduser("~") 는 USERPROFILE 을 쓴다. conftest 가 HOME 과
+        # USERPROFILE 을 같은 tmp 홈으로 맞춰 두었으므로 이 POSIX 호스트에서도 같은 값이다.
+        expected = os.path.join(os.environ["USERPROFILE"], ".claude", "settings.json")
+        assert _claude_code_paths() == [expected]

@@ -110,9 +110,16 @@ def setup(
 ) -> None:
     """Enable LLM Gateway for Claude Code.
 
-    Writes managed settings to /etc/claude-code/managed-settings.d/
-    which takes highest priority in Claude Code's config hierarchy.
-    Requires sudo on Linux/WSL.
+    Writes managed settings (50-gateway.json) to Claude Code's
+    managed-settings.d, which takes highest priority in Claude Code's
+    config hierarchy:
+
+    \b
+      macOS:      /Library/Application Support/ClaudeCode/managed-settings.d/
+      Linux/WSL:  /etc/claude-code/managed-settings.d/
+      Windows:    C:\\Program Files\\ClaudeCode\\managed-settings.d\\
+
+    Requires sudo on macOS/Linux/WSL, an administrator shell on Windows.
     """
     _ = ctx.obj.get("_", lambda s: s)
 
@@ -168,7 +175,7 @@ def setup(
     click.echo("")
 
     try:
-        path = write_gateway_settings(
+        written = write_gateway_settings(
             gateway_url=config.gateway_url,
             admin_api_url=admin_api_url,
             api_key_helper_path=helper_path,
@@ -178,7 +185,14 @@ def setup(
             oidc_client_id=oidc_client or None,
             oidc_audience=audience or os.environ.get("OIDC_AUDIENCE") or None,
         )
-        click.secho(f"  Gateway enabled: {path}", fg="green")
+        click.secho(f"  Gateway enabled: {written.path}", fg="green")
+        if written.legacy_removed is not None:
+            # 사용자 모르게 시스템 파일이 사라지지 않도록, 지운 경로와 이유를 남긴다.
+            click.secho(
+                f"  이전 위치의 파일 삭제: {written.legacy_removed}"
+                " (macOS 의 Claude Code 는 이 위치를 읽지 않음)",
+                fg="yellow",
+            )
         click.echo("")
         click.echo(_("Restart Claude Code to apply changes."))
     except Exception as exc:

@@ -10,14 +10,14 @@
 
 `disable`/`status` 는 이전까지 통합 커버리지가 아예 없었다.
 
-managed-settings 경로를 tmp 로 돌려서 실제 /etc/claude-code 를 건드리지 않고
+managed-settings 경로를 tmp 로 돌려서 실제 시스템 디렉터리를 건드리지 않고
 read/exists 경로를 진짜로 태운다. 쓰기(`write_gateway_settings`)와
 삭제(`remove_gateway_settings`)만 sudo 를 쓰므로 그 둘은 패치한다.
 
 ⚠️ 패치 지점은 `_managed_file` 이 아니라 `cli.managed._managed_dir` 이다.
 `cli/status.py` 가 `from cli.managed import _managed_file` 로 이름을 자기 모듈에
 바인딩하므로, `cli.managed._managed_file` 만 패치하면 status 가 화면에 찍는
-경로는 여전히 실제 /etc/claude-code 다(실측: 이 파일 첫 실행에서 그 단정이
+경로는 여전히 실제 시스템 디렉터리다(실측: 이 파일 첫 실행에서 그 단정이
 깨졌다). 한 단계 더 아래인 `_managed_dir` 은 오직 `cli.managed` 의 전역
 조회로만 불리므로, 여기를 돌리면 어느 모듈이 어떻게 import 했든 전부 따라온다.
 """
@@ -39,7 +39,12 @@ def managed_file(tmp_path: Path):
     """managed-settings.d 를 tmp 로 돌린다 — 실제 시스템 경로 대신."""
     managed_dir = tmp_path / "managed-settings.d"
     managed_dir.mkdir(parents=True, exist_ok=True)
-    with patch("cli.managed._managed_dir", return_value=managed_dir):
+    with patch("cli.managed._managed_dir", return_value=managed_dir), patch(
+        # macOS 에서 돌리면 status/disable 이 이전 버전의 /etc/claude-code 파일도 찾아본다.
+        # 개발자 Mac 에 그 파일이 실제로 있으면 결과가 머신마다 달라지므로 여기서는 끈다
+        # (legacy 처리 자체는 test_managed_settings_location.py 가 검증한다).
+        "cli.managed._legacy_managed_file", return_value=None
+    ):
         yield managed_dir / GATEWAY_SETTINGS_FILENAME
 
 
