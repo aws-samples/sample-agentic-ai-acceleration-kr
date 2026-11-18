@@ -1,9 +1,8 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
-import { cookies } from 'next/headers';
 import { getTranslations } from 'next-intl/server';
 import { adminAPI } from '@/lib/api-client';
-import { parseJWT } from '@/lib/auth';
+import { getServerSession } from '@/lib/serverSession';
 import type { BudgetSummaryItem, ModelListItem, TeamBudgetAllocation } from '@/types/entities';
 import { BudgetSummaryTable } from '@/components/budgets/BudgetSummaryTable';
 import { TeamAllocationView } from '@/components/budgets/TeamAllocationView';
@@ -13,9 +12,7 @@ import { currentCalendarMonth } from '@/lib/utils/period';
 
 export default async function BudgetsPage() {
   const t = await getTranslations('budgets');
-  const cookieStore = cookies();
-  const jwt = cookieStore.get('admin_jwt')?.value;
-  const session = jwt ? parseJWT(jwt) : null;
+  const session = await getServerSession();
   const isAdmin = session?.role === 'ADMIN';
 
   // KST 월(§59). ⚠️ `new Date().getMonth()` 는 Next 서버(pod)의 로컬 시간 = UTC 라서 매월 1일

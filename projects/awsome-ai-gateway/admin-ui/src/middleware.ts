@@ -8,8 +8,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { parseJWT } from '@/lib/auth';
+import { resolveSession } from '@/lib/auth';
 import { checkPagePermission, isSessionExpired } from '@/lib/auth';
+import { ROLE_COOKIE_NAME } from '@/lib/roleCookie';
 
 export const config = {
   matcher: ['/((?!_next/static|_next/image|favicon\\.ico).*)'],
@@ -32,7 +33,7 @@ function applySecurityHeaders(response: NextResponse): NextResponse {
 }
 
 /**
- * 로그인 화면으로 되돌린다. `clearCookie` 면 남아 있는 admin_jwt 도 지운다.
+ * 로그인 화면으로 되돌린다. `clearCookie` 면 남아 있는 admin_jwt 와 admin_role 도 지운다.
  *
  * ⚠️ 목적지가 `/api/auth/dev-login` 이 아니라 `/api/auth/login` 인 이유(A3):
  *    dev-login 라우트는 DEV_LOGIN_ENABLED !== 'true' 이면 본문 없는 404 를 준다. prod 는
@@ -68,6 +69,8 @@ function redirectToLogin(request: NextRequest, clearCookie: boolean): NextRespon
     // 만료/손상된 자격증명은 응답에서 즉시 제거한다 — 안 지우면 다음 요청도 같은 쿠키로
     // 다시 이 분기를 타고, 사용자는 못 쓰는 쿠키를 계속 들고 다닌다.
     redirectResponse.cookies.delete('admin_jwt');
+    // 역할 쿠키는 그 토큰에 묶인 값이다 — 토큰과 함께 버린다.
+    redirectResponse.cookies.delete(ROLE_COOKIE_NAME);
   }
   applySecurityHeaders(redirectResponse);
   return redirectResponse;
@@ -100,7 +103,11 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
 
   // JWT present — parse, check expiry, then check permissions
   try {
-    const session = parseJWT(jwtCookie.value);
+    // 토큰이 역할을 못 주면(IdP 토큰) 로그인 때 admin-api 에서 받아 둔 역할 쿠키를 본다.
+    const session = await resolveSession(
+      jwtCookie.value,
+      request.cookies.get(ROLE_COOKIE_NAME)?.value,
+    );
 
     // ⚠️ 만료 검사. 예전엔 이 분기가 아예 없어서 만료된 admin_jwt 로도 페이지가 열렸고,
     //    서버 컴포넌트의 모든 admin-api 호출만 401 이 됐다 — 화면 전체가 '—' 와

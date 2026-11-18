@@ -116,10 +116,25 @@ function jwtWithExp(expSeconds: number | null, extraClaims: Record<string, unkno
   return `header.${b64}.sig`;
 }
 
-/** token 엔드포인트 스텁. 호출 인자를 캡처해서 PKCE/Basic 을 검증한다. */
+/** 콜백이 쿠키를 굽기 전에 역할을 묻는 admin-api 경로(lib/identity.ts). 기본값 그대로다. */
+const ADMIN_ME_URL = 'http://admin-api:8080/admin/me';
+
+/**
+ * token 엔드포인트 스텁. 호출 인자를 캡처해서 PKCE/Basic 을 검증한다.
+ *
+ * `/admin/me` 는 `calls` 에 넣지 않고 jwtWithExp 의 role 클레임과 같은 ADMIN 으로 답한다 —
+ * 여기 단정들은 token 교환만 센다. 역할 확인 자체는 callbackEffectiveRole.test.ts 가 본다.
+ */
 function stubTokenEndpoint(body: unknown, status = 200) {
   const calls: Array<{ url: string; init: RequestInit }> = [];
   const spy = vi.fn(async (url: string | URL, init?: RequestInit) => {
+    if (String(url) === ADMIN_ME_URL) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ user_id: 'u-1', email: 'sso@example.com', role: 'ADMIN', team_id: null }),
+      } as unknown as Response;
+    }
     calls.push({ url: String(url), init: init ?? {} });
     return {
       ok: status >= 200 && status < 300,

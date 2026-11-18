@@ -19,7 +19,8 @@ vi.mock('next/headers', () => ({
   cookies: () => ({ get: () => ({ value: 'jwt' }), toString: () => '' }),
 }));
 vi.mock('next-intl/server', () => ({ getTranslations: async () => (key: string) => key }));
-vi.mock('@/lib/auth', () => ({ parseJWT: () => ({ role: 'ADMIN', team_id: null }) }));
+// 페이지는 lib/serverSession.ts → resolveSession 으로 세션을 읽는다(역할 쿠키 포함).
+vi.mock('@/lib/auth', () => ({ resolveSession: async () => ({ role: 'ADMIN', team_id: null }) }));
 
 const get = vi.fn();
 vi.mock('@/lib/api-client', () => ({ adminAPI: { get: (...a: unknown[]) => get(...a) } }));

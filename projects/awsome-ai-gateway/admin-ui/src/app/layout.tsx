@@ -16,13 +16,12 @@ const pretendard = localFont({
   display: 'swap',
   weight: '45 920', // variable axis 범위
 });
-import { parseJWT } from '@/lib/auth';
+import { getServerSession } from '@/lib/serverSession';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Header } from '@/components/layout/Header';
 import { ToastProvider } from '@/components/common/ToastProvider';
 import { ThemeProvider } from '@/components/common/ThemeProvider';
 import { ChatShell } from '@/components/chat/ChatShell';
-import type { AdminSession } from '@/types/entities';
 
 export const metadata: Metadata = {
   title: 'AWSome AI Gateway Admin',
@@ -34,18 +33,9 @@ export default async function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
-  // Read JWT cookie — session may be null if unauthenticated (middleware handles redirect)
+  // Session may be null if unauthenticated or malformed (middleware handles redirect)
   const cookieStore = cookies();
-  const token = cookieStore.get('admin_jwt')?.value;
-
-  let session: AdminSession | null = null;
-  if (token) {
-    try {
-      session = parseJWT(token);
-    } catch {
-      // Malformed token — middleware will redirect to login
-    }
-  }
+  const session = await getServerSession();
 
   const messages = await getMessages();
   const locale = cookieStore.get('locale')?.value || 'ko';
