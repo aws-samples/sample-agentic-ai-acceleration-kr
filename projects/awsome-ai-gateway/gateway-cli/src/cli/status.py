@@ -7,7 +7,12 @@ from __future__ import annotations
 import click
 import structlog
 
-from cli.managed import _managed_file, is_gateway_enabled, read_gateway_settings
+from cli.managed import (
+    _managed_file,
+    find_legacy_gateway_settings,
+    is_gateway_enabled,
+    read_gateway_settings,
+)
 
 log = structlog.get_logger(component="cli")
 
@@ -21,6 +26,9 @@ def status(ctx: click.Context) -> None:
     enabled = is_gateway_enabled()
     settings = read_gateway_settings() if enabled else None
     managed_path = _managed_file()
+    # macOS 에서 이전 버전이 /etc/claude-code 에 남긴 파일. Claude Code 는 그 위치를 읽지
+    # 않으므로 ON/OFF 판정에는 쓰지 않고, 남아 있다는 사실과 할 일만 알린다.
+    legacy = find_legacy_gateway_settings()
 
     click.echo("")
     click.echo("Gateway CLI Status")
@@ -56,9 +64,23 @@ def status(ctx: click.Context) -> None:
                 " (login 후 실행 시 자동 감지)",
                 fg="yellow",
             )
+        if legacy is not None:
+            click.secho(f"    Legacy file:     {legacy}", fg="yellow")
+            click.secho(
+                "                     macOS 의 Claude Code 는 읽지 않는 위치라 무시됩니다"
+                " ('gateway-cli setup' 재실행 시 삭제)",
+                fg="yellow",
+            )
     else:
         click.secho("  Gateway: [OFF]", fg="red", bold=True)
         click.echo("    Claude Code uses direct API access.")
+        if legacy is not None:
+            click.secho(f"    이전 버전이 기록한 파일이 남아 있습니다: {legacy}", fg="yellow")
+            click.secho(
+                "    macOS 의 Claude Code 는 이 위치를 읽지 않습니다."
+                " 'gateway-cli setup' 을 다시 실행하세요.",
+                fg="yellow",
+            )
 
     click.echo("")
     click.echo("=" * 50)

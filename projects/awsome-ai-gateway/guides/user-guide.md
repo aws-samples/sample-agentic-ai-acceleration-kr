@@ -186,9 +186,9 @@ gateway-cli setup \
   --admin-api-url https://admin-api.llm-gateway.example.com
 ```
 
-> Password 입력창이 뜰 경우: 시스템 디렉토리(`/etc/claude-code/managed-settings.d/`)에 쓰기 위해 `sudo` 권한이 필요합니다. 본인 PC 로그인 패스워드를 입력하세요.
+> Password 입력창이 뜰 경우: 시스템 디렉토리(macOS `/Library/Application Support/ClaudeCode/managed-settings.d/`, Linux·WSL `/etc/claude-code/managed-settings.d/`)에 쓰기 위해 `sudo` 권한이 필요합니다. 본인 PC 로그인 패스워드를 입력하세요. Windows에서는 관리자 권한 PowerShell에서 실행하세요.
 
-출력:
+출력 (macOS):
 ```
   Gateway URL:     https://gateway.llm-gateway.example.com
   Admin API URL:   https://admin-api.llm-gateway.example.com
@@ -196,12 +196,20 @@ gateway-cli setup \
   OIDC Issuer:     https://login.microsoftonline.com/<TENANT>/v2.0  (from login cache)
   OIDC Client ID:  <CLIENT_ID>
 
-  Gateway enabled: /etc/claude-code/managed-settings.d/50-gateway.json
+  Gateway enabled: /Library/Application Support/ClaudeCode/managed-settings.d/50-gateway.json
 
 Restart Claude Code to apply changes.
 ```
 
-이 명령은 `/etc/claude-code/managed-settings.d/50-gateway.json`에 설정을 기록합니다. Claude Code는 이 경로를 최우선으로 읽습니다.
+이 명령은 Claude Code의 관리 설정(managed settings) 디렉토리에 `50-gateway.json`을 기록합니다. 위치는 OS마다 다르며, Claude Code는 이 위치를 최우선으로 읽습니다:
+
+| OS | 기록 위치 |
+|----|-----------|
+| macOS | `/Library/Application Support/ClaudeCode/managed-settings.d/50-gateway.json` |
+| Linux·WSL | `/etc/claude-code/managed-settings.d/50-gateway.json` |
+| Windows | `C:\Program Files\ClaudeCode\managed-settings.d\50-gateway.json` |
+
+> **Mac에서 업그레이드한 경우**: 이전 버전은 macOS에서도 `/etc/claude-code/`에 기록했는데, macOS의 Claude Code는 이 위치를 읽지 않습니다. 업그레이드 후 `gateway-cli setup`을 다시 실행하세요. 새 위치에 기록하고 예전 파일은 지웁니다.
 
 **OIDC 값은 4단계(`gateway-cli login`)의 토큰 캐시에서 자동으로 감지됩니다.** 따로 지정하려면
 `--issuer-url` / `--client-id` 옵션이나 `OIDC_ISSUER_URL` / `OIDC_CLIENT_ID` 환경변수를 쓰세요.
@@ -219,11 +227,13 @@ Restart Claude Code to apply changes.
 
 ### 5.2 수동 설정 (gateway-cli setup을 사용할 수 없는 경우)
 
-managed-settings.d에 쓰기 권한이 없거나 직접 제어하고 싶을 때 사용합니다:
+managed-settings.d에 쓰기 권한이 없거나 직접 제어하고 싶을 때 사용합니다. Claude Code의 개인 설정 파일 `~/.claude/settings.json`(Windows: `%USERPROFILE%\.claude\settings.json`)에 기록합니다:
+
+> ⚠️ 이 파일은 Claude Code가 테마·권한 규칙 같은 다른 개인 설정에도 쓰는 파일이라 이미 있을 수 있습니다. 이미 있으면 아래 명령으로 덮어쓰지 말고 `apiKeyHelper`와 `env` 두 키만 기존 JSON에 추가하세요.
 
 ```bash
-mkdir -p ~/.config/Claude
-cat > ~/.config/Claude/settings.json <<'EOF'
+mkdir -p ~/.claude
+cat > ~/.claude/settings.json <<'EOF'
 {
   "apiKeyHelper": "/usr/local/bin/api-key-helper",
   "env": {
@@ -243,7 +253,7 @@ EOF
 "apiKeyHelper": "/path/to/.venv/bin/api-key-helper"
 ```
 
-> **참고**: `gateway-cli setup`은 managed-settings.d에, 수동 설정은 `~/.config/Claude/settings.json`에 기록됩니다. 경로는 다르지만 Claude Code가 둘 다 인식합니다. 두 곳에 동시 설정하면 managed-settings.d가 우선합니다.
+> **참고**: `gateway-cli setup`은 관리 설정 디렉토리(5.1의 표, managed-settings.d)에, 수동 설정은 개인 설정 `~/.claude/settings.json`에 기록됩니다. 경로는 다르지만 Claude Code가 둘 다 인식합니다. 두 곳에 동시 설정하면 managed-settings.d가 우선합니다.
 
 ### 5.3 Claude Code 시작
 
@@ -285,11 +295,11 @@ claude
 gateway-cli status
 ```
 
-출력:
+출력 (macOS — 다른 OS는 5.1 표의 경로가 표시됩니다):
 ```
 Gateway CLI Status
 ==================================================
-  Managed settings: /etc/claude-code/managed-settings.d/50-gateway.json
+  Managed settings: /Library/Application Support/ClaudeCode/managed-settings.d/50-gateway.json
 
   Gateway: [ON]
     Base URL:        https://gateway.llm-gateway.example.com

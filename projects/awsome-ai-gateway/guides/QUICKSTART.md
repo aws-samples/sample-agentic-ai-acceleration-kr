@@ -67,7 +67,12 @@ gateway-cli setup --gateway-url "$ANTHROPIC_BASE_URL" --admin-api-url "$ADMIN_AP
 
 claude            # 이제 그냥 실행하면 게이트웨이로 감 (Bearer VK 자동 주입)
 ```
-- 기록 위치: macOS `/etc/claude-code/managed-settings.d/gateway.json`(sudo) 또는 개인 `~/.config/Claude/settings.json`.
+- 기록 위치: Claude Code 관리 설정(우선순위 최상, sudo · Windows 는 관리자 권한). OS 마다 다르다.
+  - macOS: `/Library/Application Support/ClaudeCode/managed-settings.d/50-gateway.json`
+  - Linux·WSL: `/etc/claude-code/managed-settings.d/50-gateway.json`
+  - Windows: `C:\Program Files\ClaudeCode\managed-settings.d\50-gateway.json`
+  - 권한이 없으면 개인 설정 `~/.claude/settings.json`(Windows `%USERPROFILE%\.claude\settings.json`)에 직접 넣는다 — [user-guide.md](user-guide.md) §5.2.
+- **Mac 업그레이드 시**: 이전 버전은 macOS 에서도 `/etc/claude-code/` 에 기록했는데, macOS 의 Claude Code 는 이 위치를 읽지 않는다. 업그레이드 후 `gateway-cli setup` 을 한 번 더 실행하면 새 위치에 쓰고 예전 파일은 지운다.
 - **원복**: `gateway-cli disable` → 직접 API 로 복귀.
 
 ### 2-B. Codex (OpenAI Codex CLI)
@@ -134,7 +139,7 @@ CLI 가 아니라 앱 config 파일을 편집한다.
 수작업 대신 **MDM 관리형 프로파일**로 배포한다.
 - macOS: `.mobileconfig` · Windows: `.reg`
 - Admin UI 의 **Export** 버튼이 생성(§ `docs/guides/COWORK-GATEWAY-SETUP.md`).
-- Claude Code 는 `/etc/claude-code/managed-settings.d/`(우선순위 최상)로 배포하면 개인 설정보다 우선 적용.
+- Claude Code 는 OS 별 관리 설정 디렉터리의 `managed-settings.d/`(우선순위 최상)로 배포하면 개인 설정보다 우선 적용 — macOS `/Library/Application Support/ClaudeCode/`, Linux·WSL `/etc/claude-code/`, Windows `C:\Program Files\ClaudeCode\`.
 
 ---
 

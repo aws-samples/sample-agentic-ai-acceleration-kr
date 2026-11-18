@@ -16,7 +16,8 @@ managed-settings.d 에 파일 하나(`50-gateway.json`)를 쓴다(`cli/managed.p
 중복하지 않고, 그 함수들에 무엇이 전달되는지 / URL 파생 / 경고 / 실패 경로를 본다.
 
 `write_gateway_settings` 는 항상 패치한다 — 실제 구현은 `sudo tee` 로
-/etc/claude-code 에 쓰기 때문에 테스트가 호스트를 건드리면 안 된다.
+시스템 관리 설정 디렉터리(`/etc/claude-code`, macOS 는 `/Library/...`)에 쓰기 때문에
+테스트가 호스트를 건드리면 안 된다.
 """
 from __future__ import annotations
 
@@ -26,11 +27,12 @@ from unittest.mock import patch
 from click.testing import CliRunner
 
 from cli.main import cli
+from cli.managed import GatewayWriteResult
 
 
 def _invoke(args: list[str], **patches):
     """setup 을 호출하고, write_gateway_settings 가 받은 kwargs 를 함께 돌려준다."""
-    written = Path("/etc/claude-code/managed-settings.d/50-gateway.json")
+    written = GatewayWriteResult(Path("/etc/claude-code/managed-settings.d/50-gateway.json"))
     with patch("cli.setup.write_gateway_settings", return_value=written) as write, patch(
         "cli.setup.is_gateway_enabled", return_value=patches.pop("already_enabled", False)
     ), patch(
@@ -223,7 +225,7 @@ class TestSetupFromConfigFile:
             encoding="utf-8",
         )
 
-        written = Path("/etc/claude-code/managed-settings.d/50-gateway.json")
+        written = GatewayWriteResult(Path("/etc/claude-code/managed-settings.d/50-gateway.json"))
         with patch("cli.setup.write_gateway_settings", return_value=written) as write, patch(
             "cli.setup.is_gateway_enabled", return_value=False
         ), patch(
