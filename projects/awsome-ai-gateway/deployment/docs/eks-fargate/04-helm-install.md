@@ -305,7 +305,7 @@ curl -i "http://$GATEWAY_ALB/health"
 ⚠️ **방식 A 제약**:
 - HTTP 평문 전송 — 사용자에게 공개 금지, 내부 검증 전용
 - 매 apply 마다 ALB DNS가 바뀔 수 있음 (기본적으론 유지되지만 재생성 시 변경)
-- NextAuth cookie 의 `secure` 제약으로 admin UI 로그인이 일부 동작 안 할 수 있음 → 브라우저 시크릿 모드로 우회
+- Admin UI 로그인은 dev 로그인만 가능 (개발 환경 전용). SSO 는 IdP 가 `https://` 콜백만 등록받으므로 방식 B 가 필요 → [07-cognito-onboarding.md 7절](./07-cognito-onboarding.md#7-admin-콘솔-sso-브라우저-로그인)
 
 ### 방식 B: 도메인 있음
 

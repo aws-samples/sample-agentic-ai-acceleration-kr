@@ -179,6 +179,7 @@ User HTTP → ALB → gateway-proxy Pod
 >
 > - `DEV_LOGIN_ENABLED: "true"`는 `APP_ENV`(= `global.environment`)가 `dev`, `development`, `local`, `test`일 때만 쓸 수 있습니다. 그 밖의 환경에서는 Helm 차트가 렌더를 거부하고, admin-api는 기동하지 않으며, admin-ui는 dev 로그인 폼을 열지 않습니다.
 > - `values-eks-fargate-prod.yaml`은 `"false"`입니다. 운영 환경의 관리 콘솔 로그인은 SSO로 엽니다 — [`07-cognito-onboarding.md` "7. Admin 콘솔 SSO"](../deployment/docs/eks-fargate/07-cognito-onboarding.md#7-admin-콘솔-sso-브라우저-로그인).
+> - 환경별 로그인 절차(dev 로그인, SSO)와 로그인이 안 될 때의 확인 방법은 [`admin-guide.md` "2. Admin UI 접속"](admin-guide.md#2-admin-ui-접속)에 있습니다.
 
 ---
 

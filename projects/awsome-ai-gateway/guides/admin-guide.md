@@ -75,19 +75,147 @@
 https://admin-ui.llm-gateway.example.com
 ```
 
-### 2.2 인증
+URL을 모르면 admin-ui Ingress의 `ADDRESS`를 확인합니다. 도메인을 연결하지 않은 설치에서는 `http://<ADDRESS>`가 Admin UI URL입니다.
 
-OIDC 로그인 (Cognito Hosted UI):
-1. Admin UI 접속 → "Sign In" 클릭
-2. IDP 로그인 페이지로 리디렉션
-3. 이메일 + 패스워드 입력
-4. Admin UI 대시보드로 복귀
+```bash
+kubectl -n llm-gateway get ingress llm-gateway-admin-ui
+```
 
-**Admin 권한 조건** (아래 중 하나):
-- `ADMIN_EMAILS` 환경변수에 본인 이메일 포함
-- `ADMIN_GROUPS` 에 지정된 IDP 그룹 (예: `ClaudeAdmin`) 소속
+### 2.2 로그인 방식
 
-### 2.3 페이지 구성 (사이드바 메뉴)
+로그인 방식은 환경에 따라 둘 중 하나입니다. 로그인하지 않은 브라우저는 어느 페이지로 들어와도 `/api/auth/login`으로 이동하고, 이 진입점이 배포 설정에 맞는 방식으로 연결합니다.
+
+| | 개발 환경 (dev) | 운영 환경 (prod) |
+|---|---|---|
+| 방식 | **dev 로그인**: 역할만 고르면 들어갑니다 | **SSO**: IdP(Cognito 등) 계정으로 로그인합니다 |
+| 켜지는 조건 | `adminApi.env`와 `adminUi.env`의 `DEV_LOGIN_ENABLED`가 `"true"`이고, `global.environment`가 `dev`, `development`, `local`, `test` 중 하나 | admin-ui에 `OIDC_CLIENT_ID`, `OIDC_AUTHORIZE_URL`, `OIDC_TOKEN_URL`이 설정됨 |
+| 기본 overlay | `values-eks-fargate-dev.yaml`에 켜져 있습니다 | `values-eks-fargate-prod.yaml`에는 없습니다. 배포자가 연결해야 합니다 |
+| 들어올 수 있는 사람 | Admin UI 주소에 닿는 누구나 | IdP의 관리자 그룹 멤버 |
+| 세션 길이 | 24시간 | IdP 토큰 수명 (기본 1시간) |
+| 절차 | [2.3](#23-개발-환경에서-로그인-dev-로그인) | [2.4](#24-운영-환경에서-로그인-sso) |
+
+dev 로그인은 운영 환경에서 켤 수 없습니다. `global.environment`가 위 네 이름이 아닌데 `DEV_LOGIN_ENABLED: "true"`를 넣으면 Helm 차트가 렌더를 거부하고 admin-api가 기동하지 않습니다.
+
+배포가 지금 어느 상태인지는 다음 명령으로 확인합니다.
+
+```bash
+curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' "<Admin UI URL>/api/auth/login"
+```
+
+| 출력 | 상태 |
+|---|---|
+| `307 <Admin UI URL>/api/auth/dev-login` | dev 로그인 |
+| `302 https://<IdP 주소>/...` | SSO |
+| `503` | 로그인 경로가 설정되지 않았습니다. 브라우저로 열면 비어 있는 설정 이름이 표시됩니다 ([2.7](#27-로그인이-안-될-때)) |
+
+### 2.3 개발 환경에서 로그인 (dev 로그인)
+
+1. Admin UI URL을 엽니다. **Dev Login** 화면이 나옵니다.
+2. **Role**에서 `ADMIN`을 선택하고 **Sign in**을 누릅니다.
+3. 대시보드가 열립니다. 헤더에 `Dev Admin`(`admin@dev.local`)과 역할이 표시됩니다.
+
+계정과 패스워드가 없는 방식이므로 다음을 알고 써야 합니다.
+
+- **Admin UI 주소에 닿는 누구나 ADMIN이 됩니다.** Admin API도 같은 방식의 토큰을 받으므로 Admin API 주소도 마찬가지입니다. 실제 사용자 데이터가 있는 환경에는 쓰지 말고, 두 Ingress에 접근할 수 있는 대역을 제한하세요.
+
+  ```yaml
+  ingress:
+    adminUi:
+      annotations:
+        alb.ingress.kubernetes.io/inbound-cidrs: "<허용할 CIDR>"
+    adminApi:
+      annotations:
+        # gateway-cli 도 Admin API 를 호출합니다. 사용자 PC 가 있는 대역을 포함하세요.
+        alb.ingress.kubernetes.io/inbound-cidrs: "<허용할 CIDR>"
+  ```
+
+- 로그인한 사용자는 IdP 계정이 아닌 가상 사용자 하나입니다. 여러 사람이 로그인해도 모두 같은 사용자로 기록됩니다.
+- `TEAM_LEADER`는 팀 리더에게 보이는 메뉴를 확인하는 용도입니다. 소속 팀이 없는 가상 사용자여서 팀 예산 목록은 비어 있고, 관리자 전용 수치는 표시되지 않습니다.
+- 세션은 24시간입니다. 만료되면 Dev Login 화면으로 돌아갑니다.
+- 같은 환경에 SSO도 연결했다면 Admin UI는 SSO로 이동합니다. 이때 Dev Login 화면은 `<Admin UI URL>/api/auth/dev-login`에서 엽니다.
+
+### 2.4 운영 환경에서 로그인 (SSO)
+
+**준비**
+
+| 대상 | 필요한 것 | 방법 |
+|---|---|---|
+| 배포 (환경마다 한 번) | Admin UI의 HTTPS 주소, 관리 콘솔용 IdP app client, Helm 값 연결 | [`07-cognito-onboarding.md` 7절](../deployment/docs/eks-fargate/07-cognito-onboarding.md#7-admin-콘솔-sso-브라우저-로그인) |
+| 관리자 계정 | IdP의 **관리자 그룹**(`adminBootstrap.groups`, 예: `ClaudeAdmin`) 멤버 | [3.2 IDP 작업](#32-idp-작업-cognito-기준)의 `admin-add-user-to-group` |
+| 관리자 계정 (한 번) | 게이트웨이 사용자 등록 | `gateway-cli login` 후 VK를 한 번 발급받습니다 ([`user-guide.md` 4절](user-guide.md#4-첫-로그인)). 관리 콘솔 로그인은 사용자를 새로 만들지 않습니다 |
+
+**로그인**
+
+1. Admin UI URL을 엽니다. IdP 로그인 화면(Cognito는 Hosted UI)으로 이동합니다.
+2. 이메일과 패스워드를 입력합니다. 임시 패스워드로 처음 로그인하면 새 패스워드를 설정합니다.
+3. 대시보드로 돌아옵니다. 헤더에 이메일과 관리자 역할이 표시됩니다.
+
+**화면을 쓸 수 있는 사람**
+
+- 관리 콘솔은 IdP 토큰에 담긴 그룹으로 역할을 정합니다. **관리자 그룹 멤버만 페이지가 열립니다.**
+- `adminBootstrap.emails`에만 넣은 관리자는 Admin API에서는 ADMIN이지만, 화면에서는 모든 페이지가 `403 접근 권한 없음`입니다. 화면을 쓸 사람은 관리자 그룹에 추가하세요.
+- 팀 리더(`TEAM_LEADER`)도 SSO 로그인으로는 화면이 열리지 않습니다. IdP 토큰에 팀 리더 여부가 담기지 않기 때문입니다.
+- 관리자 그룹에서 제외한 사용자는 현재 세션이 끝나면(기본 1시간 이내) 화면이 열리지 않습니다.
+
+### 2.5 세션과 로그아웃
+
+- **로그아웃**: 헤더의 **로그아웃** 버튼을 누릅니다. 세션 쿠키가 지워지고 로그인 진입점으로 돌아갑니다.
+- **세션 만료**: dev 로그인은 24시간, SSO는 IdP 토큰 수명입니다(기본 1시간, Cognito는 terraform 변수 `cognito_admin_ui_token_validity_hours`로 1~12시간). 만료된 뒤 페이지를 열면 로그인으로 돌아갑니다.
+- **SSO에서 다른 계정으로 로그인**: Admin UI에서 로그아웃해도 IdP의 로그인 세션은 남아 있습니다. 그동안 Admin UI를 다시 열면 패스워드를 묻지 않고 같은 계정으로 들어옵니다. 계정을 바꾸려면 IdP에서도 로그아웃합니다. Cognito는 다음 주소를 엽니다. `logout_uri`에는 app client에 등록한 로그아웃 URL(`cognito_admin_ui_logout_urls`)을 넣습니다.
+
+  ```
+  https://<domain>.auth.<region>.amazoncognito.com/logout?client_id=<관리 콘솔 client id>&logout_uri=<등록한 로그아웃 URL>
+  ```
+
+### 2.6 브라우저 없이 Admin API 호출 (서비스 토큰)
+
+스크립트나 외부 시스템은 서비스 토큰(`svc-...`)으로 Admin API를 호출합니다. 서비스 토큰은 ADMIN 권한을 갖습니다.
+
+발급과 폐기는 로그인한 관리자만 할 수 있고, 서비스 토큰으로는 할 수 없습니다. 발급 화면은 없습니다. 관리 콘솔에 로그인한 브라우저의 개발자 도구에서 `admin_jwt` 쿠키 값을 복사해 호출합니다.
+
+```bash
+# 발급: 응답의 token 은 이때 한 번만 표시됩니다
+curl -X POST "$ADMIN_API_URL/admin/service-tokens" \
+  -H "Authorization: Bearer <admin_jwt 쿠키 값>" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "budget-report", "expiry_days": 30}'
+
+# 사용
+curl "$ADMIN_API_URL/admin/users" -H "Authorization: Bearer svc-..."
+
+# 목록과 폐기
+curl "$ADMIN_API_URL/admin/service-tokens" -H "Authorization: Bearer <admin_jwt 쿠키 값>"
+curl -X DELETE "$ADMIN_API_URL/admin/service-tokens/<id>" -H "Authorization: Bearer <admin_jwt 쿠키 값>"
+```
+
+### 2.7 로그인이 안 될 때
+
+| 증상 | 원인 | 조치 |
+|---|---|---|
+| `SSO (OIDC) is not configured` (503) | SSO가 연결되지 않았고 dev 로그인도 꺼져 있습니다. 운영 overlay를 SSO 설정 없이 설치하면 이 상태입니다 | 배포자가 SSO를 연결합니다 ([`07-cognito-onboarding.md` 7절](../deployment/docs/eks-fargate/07-cognito-onboarding.md#7-admin-콘솔-sso-브라우저-로그인)) |
+| `Dev login is disabled` (503) | dev 로그인이 꺼져 있거나 개발 환경이 아닙니다 | `<Admin UI URL>/api/auth/login`으로 들어갑니다 |
+| 로그인했는데 모든 페이지가 `403 접근 권한 없음` | IdP 토큰에 관리자 그룹이 없습니다 | 계정을 관리자 그룹에 추가하고 다시 로그인합니다. 그룹에 있는데도 403이면 [부록 B](#admin-권한이-안-들어옴)를 확인합니다 |
+| 화면은 열리는데 수치 자리에 `집계 실패`가 표시됨 | Admin API가 요청을 거부하고 있습니다 | 아래 명령으로 응답을 확인합니다 |
+| `Invalid sign-in state` | IdP 로그인 화면에서 10분 넘게 머물렀거나 브라우저가 쿠키를 막았습니다 | Admin UI URL을 다시 엽니다 |
+| IdP 화면에서 오류가 나고 Admin UI로 돌아오지 않음 | IdP에 등록한 콜백 URL 또는 client id가 Admin UI 설정과 다릅니다 | app client의 콜백 URL이 `https://<Admin UI 공개 주소>/api/auth/callback`인지 확인합니다. 앞단(CloudFront 등)에서 TLS를 끝내면 `adminUi.env.OIDC_REDIRECT_URI`도 같은 값이어야 합니다 |
+| `Identity provider rejected the sign-in` | IdP가 로그인 요청을 거절했습니다. 화면에 IdP가 보낸 사유가 표시됩니다 | 표시된 사유에 따라 app client 설정(허용 flow, scope)을 확인합니다 |
+| `Token exchange failed` | 인증 코드를 토큰으로 바꾸는 단계에서 IdP가 거절했습니다 | app client의 콜백 URL과 client 종류(secret 유무)가 Admin UI 설정과 맞는지 확인합니다 |
+| `http://` 주소가 브라우저에서 열리지 않음 | 브라우저가 평문 HTTP 접속을 막는 설정(HTTPS 우선)일 수 있습니다 | Ingress에 HTTPS를 연결합니다 ([`04-helm-install.md` 방식 B](../deployment/docs/eks-fargate/04-helm-install.md#방식-b-도메인-있음)) |
+
+화면은 열리는데 데이터가 나오지 않으면 같은 세션 토큰으로 Admin API를 직접 호출해 거부 사유를 확인합니다.
+
+```bash
+curl -s "$ADMIN_API_URL/admin/users" -H "Authorization: Bearer <admin_jwt 쿠키 값>"
+```
+
+| 응답 | 원인 | 조치 |
+|---|---|---|
+| 403 `user_not_provisioned` | 게이트웨이에 등록되지 않은 사용자입니다 | `gateway-cli login` 후 VK를 한 번 발급받습니다 |
+| 403 `user_deactivated` | IdP에서 삭제되거나 비활성화되어 Cognito 동기화가 비활성 처리한 사용자입니다 | IdP에서 계정을 활성화한 뒤 다른 관리자가 [Cognito 동기화](#33-cognito-동기화)를 실행합니다 |
+| 403 `required_group_missing` | `adminApi.oidc.requiredGroup`에 지정한 그룹의 멤버가 아닙니다 | IdP에서 그 그룹에 추가합니다 |
+| 401 `Invalid or expired token` | 세션이 만료됐거나, admin-api가 관리 콘솔 app client의 토큰으로 인정하지 않습니다 | 다시 로그인합니다. 계속되면 `adminApi.oidc.adminUiClientId`가 `adminUi.env.OIDC_CLIENT_ID`와 같은지 확인합니다 |
+
+### 2.8 페이지 구성 (사이드바 메뉴)
 
 | 메뉴 | 기능 | 접근 권한 |
 |------|------|-----------|
@@ -585,12 +713,12 @@ print(r.keys('budget:*'))
 
 모든 Admin UI 작업은 아래 API로도 수행 가능합니다. 자동화/스크립팅이 필요하면 이 엔드포인트를 활용하세요.
 
-**인증**: 모든 요청에 OIDC 토큰을 `Authorization: Bearer` 헤더로 전달합니다.
+**인증**: 모든 요청의 `Authorization: Bearer` 헤더에 서비스 토큰(`svc-...`) 또는 관리 콘솔 세션 토큰(`admin_jwt` 쿠키 값)을 전달합니다. 발급 방법은 [2.6](#26-브라우저-없이-admin-api-호출-서비스-토큰)을 참고하세요.
 
 **curl 예시** (팀 예산 설정):
 ```bash
 curl -X PUT "$ADMIN_API_URL/admin/budgets/team/<team_id>" \
-  -H "Authorization: Bearer <OIDC_ACCESS_TOKEN>" \
+  -H "Authorization: Bearer <서비스 토큰>" \
   -H "Content-Type: application/json" \
   -d '{
     "max_budget_usd": 5000,
@@ -803,6 +931,15 @@ kubectl exec -n llm-gateway deploy/llm-gateway-admin-api -- \
 ```
 
 해결: Helm values `adminApi.adminBootstrap.emails` 또는 `.groups` 수정 후 `helm upgrade`
+
+관리 콘솔 화면은 **그룹만** 봅니다. `emails`로만 지정한 관리자는 Admin API에서는 ADMIN이지만 화면에서는 모든 페이지가 403입니다([2.4](#24-운영-환경에서-로그인-sso)). 화면을 쓸 사람은 `groups`에 지정한 IdP 그룹에 추가하세요.
+
+그룹에 속해 있는데도 화면이 403이면 admin-ui가 받은 값을 확인합니다. `ADMIN_GROUPS`는 IdP 그룹 이름과 정확히 같아야 하고, `OIDC_GROUPS_CLAIM`은 IdP 토큰에서 그룹이 담기는 claim 이름이어야 합니다(Cognito는 `cognito:groups`). 두 값은 `adminApi.adminBootstrap.groups`와 `adminApi.oidc.groupsClaim`에서 옵니다.
+
+```bash
+kubectl exec -n llm-gateway deploy/llm-gateway-admin-ui -- \
+  env | grep -E "ADMIN_GROUPS|OIDC_GROUPS_CLAIM"
+```
 
 ---
 
