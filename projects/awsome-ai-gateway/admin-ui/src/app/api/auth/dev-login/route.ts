@@ -11,6 +11,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { devLoginState, DEV_LOGIN_ENVIRONMENTS, type DevLoginState } from '@/lib/devLogin';
 import { redirectRelative } from '@/lib/redirect';
+import { ROLE_COOKIE_NAME } from '@/lib/roleCookie';
 import { UserRole } from '@/types/enums';
 
 const DEV_COOKIE_MAX_AGE = 60 * 60 * 24; // 24 hours in seconds
@@ -202,6 +203,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     maxAge: DEV_COOKIE_MAX_AGE,
     // secure: true 로 하면 HTTP 환경에선 브라우저가 쿠키를 저장하지 못해 무한 리다이렉트.
     // NODE_ENV 대신 실제 연결 scheme 을 보는 게 정확 — ALB 가 HTTP 종단이면 'http'.
+    secure: proto === 'https',
+  });
+  // dev 토큰은 role 클레임이 있어 역할 쿠키를 보지 않는다. 앞 세션의 쿠키는 남기지 않는다.
+  redirectResponse.cookies.set(ROLE_COOKIE_NAME, '', {
+    httpOnly: true,
+    sameSite: 'lax',
+    path: '/',
+    maxAge: 0,
     secure: proto === 'https',
   });
 

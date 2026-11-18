@@ -1,7 +1,7 @@
 // Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 
 /**
- * Logout route — clears the admin_jwt cookie and redirects to '/'.
+ * Logout route — clears the admin_jwt and admin_role cookies and redirects to '/'.
  *
  * Mirrors the proto/host handling in dev-login/route.ts so the Set-Cookie
  * `secure` flag matches the actual connection scheme (HTTP vs HTTPS) and
@@ -15,6 +15,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { redirectRelative } from '@/lib/redirect';
+import { ROLE_COOKIE_NAME } from '@/lib/roleCookie';
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   // host 는 더 필요 없다 — 리다이렉트가 상대 경로다(lib/redirect.ts). proto 는 쿠키의
@@ -23,12 +24,16 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   // 상대 Location — Host 헤더가 CloudFront 뒤에서 ALB 이름일 수 있다(lib/redirect.ts).
   const response = redirectRelative('/');
-  response.cookies.set('admin_jwt', '', {
-    httpOnly: true,
-    sameSite: 'lax',
-    path: '/',
-    maxAge: 0,
-    secure: proto === 'https',
-  });
+  // 역할 쿠키(lib/roleCookie.ts)도 같이 지운다 — 토큰에 묶여 있어 남아도 쓰이지 않지만
+  // 들고 다닐 이유가 없다.
+  for (const name of ['admin_jwt', ROLE_COOKIE_NAME]) {
+    response.cookies.set(name, '', {
+      httpOnly: true,
+      sameSite: 'lax',
+      path: '/',
+      maxAge: 0,
+      secure: proto === 'https',
+    });
+  }
   return response;
 }

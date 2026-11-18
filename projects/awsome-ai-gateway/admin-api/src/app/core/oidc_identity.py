@@ -84,6 +84,22 @@ def derive_role(email: str, groups: list[str]) -> UserRole:
     return UserRole.DEVELOPER
 
 
+def reconcile_role(derived: UserRole, *, leads_own_team: bool) -> UserRole:
+    """로그인·동기화가 **기존** 사용자에게 저장할 역할. ``derived`` 는 ``derive_role`` 의 값이다.
+
+    IdP 는 팀 리더를 모른다 — ``derive_role`` 은 ADMIN 아니면 DEVELOPER 다. 그 값을 그대로 저장하던
+    동안 관리자가 지정한 팀 리더가 CLI 의 매시간 교환 한 번에 DEVELOPER 로 돌아갔다(실측).
+
+    ⚠️ 저장돼 있던 TEAM_LEADER 를 그냥 남기지 않고, 사용자가 **이번에 속하게 된 팀**의 리더 지정
+       (``teams.leader_user_id``)을 본다. 인가는 ``role == TEAM_LEADER`` 와 ``users.team_id`` 를 "그
+       팀의 리더" 로 읽는다 — IdP 그룹이 바뀌어 다른 팀으로 옮겨진 리더가 역할을 들고 가면 아무도
+       지정하지 않은 팀의 리더가 된다. ADMIN 은 지금처럼 IdP 가 양방향으로 정한다.
+    """
+    if derived == UserRole.ADMIN:
+        return UserRole.ADMIN
+    return UserRole.TEAM_LEADER if leads_own_team else UserRole.DEVELOPER
+
+
 def required_group_missing(groups: list[str]) -> str | None:
     """``OIDC_REQUIRED_GROUP`` 게이트. 통과면 None, 막히면 없는 그룹 이름.
 

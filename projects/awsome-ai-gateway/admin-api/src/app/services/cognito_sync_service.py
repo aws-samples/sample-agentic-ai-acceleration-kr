@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 import structlog
 
 from app.core.config import get_settings
+from app.core.oidc_identity import reconcile_role
 from app.models.auth import Department, Team, User, UserRole
 from app.repositories.user_repository import UserRepository
 
@@ -33,7 +34,8 @@ def _needs_update(
     snap: dict, *, email: str, name: str, team_id, role, enabled: bool
 ) -> bool:
     """prefetch gate 판정. _upsert_one_user 의 update 분기와 1:1 동일 조건이어야 한다.
-    (email 이 truthy 이고 다르면) OR display_name/team_id/role/is_active 변경."""
+    (email 이 truthy 이고 다르면) OR display_name/team_id/role/is_active 변경.
+    role 은 _upsert_one_user 가 저장할 값(reconcile_role 을 거친 값)이어야 한다."""
     return (
         (bool(email) and snap["email"] != email)
         or snap["display_name"] != name
@@ -61,6 +63,8 @@ class _TeamCache:
     """sync_all 진입 시 1회 구축하는 팀/부서 인덱스. expunge 후에도 안전하도록
     ORM 객체가 아니라 PK(uuid)만 보유한다."""
     teams: dict[tuple[uuid.UUID, str], uuid.UUID] = field(default_factory=dict)
+    #: 팀 id → teams.leader_user_id (리더가 지정된 팀만). 역할 판정에 쓴다 — 사용자마다 팀을 다시 읽지 않는다.
+    leaders: dict[uuid.UUID, uuid.UUID] = field(default_factory=dict)
     depts_by_name: dict[str, uuid.UUID] = field(default_factory=dict)
     default_dept_id: uuid.UUID | None = None
     org_id: uuid.UUID | None = None
@@ -189,13 +193,17 @@ class CognitoSyncService:
             # 유저를 잘못 비활성화하지 않도록 (불변식).
             seen_sso_subjects.add(sub)
             role = self._derive_role(email, user_groups)
+            leader_id = cache.leaders.get(team_id)
 
             # gate: 확실히 안 바뀐 기존 유저는 upsert 를 건너뜀 (DB 왕복 0).
             # snap None(신규/재생성 새 sub)은 절대 skip 하지 않는다 — email reconcile
             # 규약(_upsert_one_user 내부)이 보존돼야 하므로 항상 upsert 경로로.
+            # ⚠️ role 은 _upsert_one_user 가 저장할 값과 비교한다. derive_role 값(ADMIN/DEVELOPER)과
+            #    비교하면 팀 리더는 언제나 '바뀜' 이라 동기화마다 upsert 를 다시 탄다.
             snap = existing_snaps.get(sub)
             if snap is not None and not _needs_update(
-                snap, email=email, name=name, team_id=team_id, role=role, enabled=enabled
+                snap, email=email, name=name, team_id=team_id,
+                role=reconcile_role(role, leads_own_team=leader_id == snap["id"]), enabled=enabled,
             ):
                 continue
 
@@ -206,7 +214,7 @@ class CognitoSyncService:
                 async with session.begin_nested():
                     await self._upsert_one_user(
                         repo, sub=sub, email=email, name=name, enabled=enabled,
-                        team_id=team_id, role=role, result=result,
+                        team_id=team_id, role=role, team_leader_id=leader_id, result=result,
                     )
             except Exception as e:
                 result.errors.append(f"Failed to sync user {email}: {e}")
@@ -269,11 +277,13 @@ class CognitoSyncService:
 
     async def _upsert_one_user(
         self, repo: UserRepository, *, sub: str, email: str, name: str,
-        enabled: bool, team_id: uuid.UUID, role: UserRole, result: SyncResult,
+        enabled: bool, team_id: uuid.UUID, role: UserRole,
+        team_leader_id: uuid.UUID | None, result: SyncResult,
     ) -> User:
         """단일 사용자 upsert. sync_all 의 163-217 블록과 동일 규약(get_by_sso_subject
         → get_by_email fallback(재생성 시 새 sub 재조정) → 없으면 create).
 
+        ``role`` 은 derive_role 값, ``team_leader_id`` 는 ``team_id`` 팀의 leader_user_id 다(없으면 None).
         upsert 된(생성/갱신) User 를 반환한다 — sync_user 가 응답 user_id 확보용."""
         settings = get_settings()
         # Track whether this call mutated an existing row. We flush ONCE at the
@@ -313,6 +323,8 @@ class CognitoSyncService:
             if existing.team_id != team_id:
                 existing.team_id = team_id
                 updated = True
+            # IdP 는 팀 리더를 모른다 — 이 동기화가 정한 팀이 이 사람을 리더로 가리킬 때만 TEAM_LEADER 다.
+            role = reconcile_role(role, leads_own_team=team_leader_id == existing.id)
             if existing.role != role:
                 existing.role = role
                 updated = True
@@ -414,7 +426,7 @@ class CognitoSyncService:
         try:
             user = await self._upsert_one_user(
                 repo, sub=sub, email=email, name=name, enabled=enabled,
-                team_id=team_id, role=role, result=result,
+                team_id=team_id, role=role, team_leader_id=cache.leaders.get(team_id), result=result,
             )
             result.user_id = str(user.id)
         except Exception as e:
@@ -516,7 +528,7 @@ class CognitoSyncService:
                 await self._upsert_one_user(
                     repo, sub=sub, email=email, name=name, enabled=enabled,
                     team_id=team_id, role=self._derive_role(email, [group_name]),
-                    result=result,
+                    team_leader_id=cache.leaders.get(team_id), result=result,
                 )
             except Exception as e:
                 result.errors.append(f"Failed to upsert member {email or sub}: {e}")
@@ -675,6 +687,8 @@ class CognitoSyncService:
             cache.depts_by_name[d.name] = d.id
         for t in await repo.list_teams_lite():
             cache.teams[(t.dept_id, t.name)] = t.id
+            if t.leader_user_id is not None:
+                cache.leaders[t.id] = t.leader_user_id
         # 신규 부서 생성 시 배치할 org id 를 1회 확보(멤버 그래프 미로드).
         cache.org_id = await repo.get_first_org_id()
         try:

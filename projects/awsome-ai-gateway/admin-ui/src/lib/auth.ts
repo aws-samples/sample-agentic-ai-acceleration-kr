@@ -3,6 +3,7 @@
 import type { AdminSession } from '@/types/entities';
 import type { UserRole } from '@/types/enums';
 import { PAGE_PERMISSIONS } from './permissions';
+import { readRoleCookie } from './roleCookie';
 
 /**
  * admin-api 와 **같은 이름**의 env 를 읽는다 — 한 Helm 값이 둘을 동시에 먹여야 한다.
@@ -45,7 +46,9 @@ function envList(name: string): string[] {
  *      (서명 검증은 admin-api 몫이고, 여기서 뒤집으면 두 판정이 갈린다).
  *   2. 그룹 매핑 — IdP id_token 에는 `role` 이 **없고** groups 만 있다. groups claim
  *      이름은 IdP 마다 다르므로(Cognito 는 `cognito:groups`) 설정으로 읽는다.
- *   3. 둘 다 없으면 undefined — checkPagePermission 이 거부한다(fail-closed).
+ *   3. 둘 다 없으면 undefined. 그때 resolveSession 이 로그인 때 admin-api 에서 받아 둔 역할
+ *      쿠키(lib/roleCookie.ts)를 본다 — 이메일 관리자와 DB 역할(TEAM_LEADER 등)은 토큰에 드러나지
+ *      않는다. 그것도 없으면 checkPagePermission 이 거부한다(fail-closed).
  *
  * ⚠️ 2번이 없던 동안 IdP 로그인은 **항상** 관리자 잠김이었다. id_token 에 `role` 이
  *    없으니 role 이 undefined 가 되고, checkPagePermission 은 등재되지 않은 역할을
@@ -128,6 +131,24 @@ export function parseJWT(token: string): AdminSession {
     // 폴백이 없으면 dev 토큰의 24h 만료가 어디에서도 읽히지 않아 사실상 무기한이 된다.
     expires_at: String(payload['exp'] ?? payload['expires_at'] ?? ''),
   };
+}
+
+/**
+ * parseJWT 에 로그인 때 기억해 둔 역할 쿠키(lib/roleCookie.ts)를 더한다.
+ *
+ * 토큰이 먼저다 — 토큰이 역할을 주면(dev 로그인·내부 토큰·관리자 그룹 구성원) 쿠키는 보지 않으므로
+ * 예전과 똑같다(team_id 도 토큰 것). 토큰이 역할을 못 줄 때만 **이 토큰에 묶인** 쿠키를 보고, 토큰에
+ * team_id 가 없으면 쿠키의 팀을 쓴다 — IdP 토큰에는 팀이 없어 팀 리더의 예산 화면이 비었다.
+ *
+ * @throws parseJWT 와 같다 — 토큰을 못 읽으면 던진다(middleware 는 로그인으로 보낸다).
+ */
+export async function resolveSession(token: string, roleCookie?: string): Promise<AdminSession> {
+  const session = parseJWT(token);
+  if (session.role) return session;
+  const remembered = await readRoleCookie(roleCookie, token);
+  if (!remembered) return { ...session, role: undefined as unknown as UserRole };
+  // `??` 가 아니라 `||` 다 — 빈 문자열 team_id 클레임이 기억해 둔 팀을 가리지 않게.
+  return { ...session, role: remembered.role, team_id: session.team_id || remembered.teamId };
 }
 
 /**

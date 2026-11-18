@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import CurrentUser
 from app.core.config import get_settings
 from app.core.exceptions import ForbiddenError
-from app.core.oidc_identity import derive_role
+from app.core.oidc_identity import derive_role, reconcile_role
 from app.core.oidc_verifier import OIDCConfigError, OIDCVerifier, OIDCVerifyError
 from app.models.auth import Department, Team, User, UserRole
 from app.models.budget import BudgetConfig, BudgetPolicy, BudgetScope, PeriodType
@@ -184,6 +184,21 @@ class OIDCService:
                     new_team_id=str(team_id),
                 )
                 # 실패해도 인증은 진행 (다음 로그인 때 재시도)
+                # ⚠️ 6단계는 역할을 옮겨 갈 팀(team_id) 기준으로 정했다. 옮기지 못했으면 남은 팀 기준으로 다시
+                #    정한다 — 안 그러면 옛 팀의 리더가 DEVELOPER 가 되고, 옮겨 갈 팀의 리더로 지정된 사람은 옛 팀에
+                #    앉은 채 TEAM_LEADER 가 된다(인가는 그를 옛 팀의 리더로 읽는다). 실패가 DB 오류였다면
+                #    트랜잭션이 이미 깨져 이 조회도, 아래 키 발급도 실패한다 — 그때는 아무것도 커밋되지 않는다.
+                if user.team_id != team_id:
+                    kept_leader_id = await UserRepository(session).get_team_leader_id(user.team_id)
+                    kept_role = reconcile_role(role, leads_own_team=kept_leader_id == user.id)
+                    if user.role != kept_role:
+                        logger.info(
+                            "oidc.user_role_changed",
+                            user_id=str(user.id),
+                            old_role=user.role.value,
+                            new_role=kept_role.value,
+                        )
+                        user.role = kept_role
 
         if not user.is_active:
             raise OIDCNotProvisionableError("user_deactivated")
@@ -466,13 +481,18 @@ class OIDCService:
         if existing.email != email and (not incoming_is_synthetic or existing_is_synthetic):
             existing.email = email
         existing.display_name = display_name
+        # ⚠️ role(derive_role)은 ADMIN 아니면 DEVELOPER 다 — 그대로 쓰면 지정된 팀 리더가 CLI 의 매시간
+        #    교환에서 DEVELOPER 로 돌아간다(실측). 리더 지정은 이 로그인이 정한 팀(team_id — 7단계
+        #    transfer_user 가 옮겨 갈 팀)의 것을 본다. 지금 행의 팀을 보면 옮겨진 리더가 역할을 들고 간다.
+        leader_id = await repo.get_team_leader_id(team_id)
+        stored_role = reconcile_role(role, leads_own_team=leader_id == existing.id)
         # role 변경은 admin 권한 변동이므로 명시 로그
-        if existing.role != role:
+        if existing.role != stored_role:
             logger.info(
                 "oidc.user_role_changed",
                 user_id=str(existing.id),
                 old_role=existing.role.value,
-                new_role=role.value,
+                new_role=stored_role.value,
             )
-            existing.role = role
+            existing.role = stored_role
         return existing, False, team_changed

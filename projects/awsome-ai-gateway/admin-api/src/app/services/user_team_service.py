@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.audit import audit_logger
 from app.core.auth import CurrentUser
 from app.core.cache_invalidation import CacheInvalidationManager
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import NotFoundError, ValidationError
 from app.models.auth import Department, Team, User, UserRole
 from app.models.budget import BudgetScope
 from app.models.model import RateLimitScope
@@ -135,12 +135,37 @@ class UserTeamService:
     ) -> TeamResponse:
         repo = UserRepository(session)
 
-        team = await repo.set_leader(team_id, user_id)
+        # 거부는 전부 쓰기 전에 — 거부된 요청은 리더 지정도 누구의 역할도 바꾸지 않는다.
+        team = await repo.get_team(team_id)
         if team is None:
             raise NotFoundError("Team", str(team_id))
+        user = await repo.get_user(user_id)
+        if user is None:
+            raise NotFoundError("User", str(user_id))
+        # ⚠️ 인가는 role == TEAM_LEADER 와 그 사용자의 team_id 를 "그 팀의 리더" 로 읽는다. 예전엔 아무 사용자나
+        #    받아서, 다른 팀 사람을 지정하면 이 팀이 아니라 그 사람 **자기 팀**의 리더가 됐다.
+        if user.team_id != team_id:
+            raise ValidationError(f"User {user_id} is not a member of team {team_id}")
+        if not user.is_active:
+            raise ValidationError(f"User {user_id} is deactivated")
 
-        # Update user role to TEAM_LEADER
-        await repo.update_user_role(user_id, UserRole.TEAM_LEADER)
+        # 리더를 바꾸면 예전 리더는 지금 DEVELOPER 가 된다. 다음 CLI 로그인·동기화를 기다리면 콘솔만 쓰는
+        # 사람은 끝까지 리더로 남는다. ADMIN 이거나 이미 다른 팀으로 옮긴 사람은 건드리지 않는다.
+        previous_id = team.leader_user_id
+        before: dict = {"leader_user_id": str(previous_id) if previous_id else None}
+        after: dict = {"leader_user_id": str(user_id)}
+        if previous_id is not None and previous_id != user_id:
+            previous = await repo.get_user(previous_id)
+            if previous is not None and previous.role == UserRole.TEAM_LEADER and previous.team_id == team_id:
+                await repo.update_user_role(previous_id, UserRole.DEVELOPER)
+                before["previous_leader_role"] = UserRole.TEAM_LEADER.value
+                after["previous_leader_role"] = UserRole.DEVELOPER.value
+
+        await repo.set_leader(team_id, user_id)
+        # ADMIN 은 그대로 둔다 — 리더 지정이 관리자를 TEAM_LEADER 로 낮추면, 저장된 역할만으로 관리자인
+        # 사람은 되돌릴 길이 없다. 지정은 남으므로 IdP 에서 관리자가 아니게 되면 다음 로그인에 TEAM_LEADER 다.
+        if user.role != UserRole.ADMIN:
+            await repo.update_user_role(user_id, UserRole.TEAM_LEADER)
 
         await audit_logger.log(
             session,
@@ -149,7 +174,7 @@ class UserTeamService:
             action="SET_TEAM_LEADER",
             resource_type="Team",
             resource_id=str(team_id),
-            changes={"after": {"leader_user_id": str(user_id)}},
+            changes={"before": before, "after": after},
             ip_address=ip_address,
             request_id=request_id,
         )

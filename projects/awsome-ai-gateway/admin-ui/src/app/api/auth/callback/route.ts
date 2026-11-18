@@ -14,9 +14,15 @@
  * ⚠️ 쿠키에 넣는 토큰: 기본 id_token(사용자 표시용 email/name 클레임을 갖고 있고,
  *    admin-ui/src/lib/auth.ts:44 의 parseJWT 가 그것을 읽는다). provider 가 id_token 을
  *    안 주면 access_token 으로 폴백하고, OIDC_COOKIE_TOKEN=access_token 으로 강제도 된다.
- *    admin-api 쪽 검증 경로는 admin-api/src/app/core/auth.py:151 의 JWTVerifier —
- *    `auth.admin_jwt_configs` 에 IdP 서명키(issuer/audience/PEM) 행이 등록돼 있어야 하고
- *    토큰에 `sub`/`role` 클레임이 있어야 한다. 그 등록은 운영자 작업이며 이 파일 밖이다.
+ *    admin-api 는 Helm `adminApi.oidc.adminUiClientId` 가 이 콘솔의 OIDC_CLIENT_ID 와 같으면
+ *    그 토큰을 issuer 의 JWKS 로 검증한다(admin-api/src/app/core/auth.py
+ *    `_verify_console_sso_token`). 비어 있으면 `auth.admin_jwt_configs` 에 IdP 서명키(PEM)를
+ *    직접 등록한 경우에만 통과한다.
+ *
+ * ⚠️ 쿠키를 굽기 전에 admin-api `GET /admin/me` 로 실효 역할과 팀을 묻고 `admin_role` 쿠키로 기억한다
+ *    (lib/identity.ts, lib/roleCookie.ts). IdP 토큰에는 role 클레임이 없어서, 이게 없던 동안 이메일
+ *    관리자와 팀 리더는 API 는 통과하는데 모든 화면이 /403 이었다. admin-api 가 거절하면(401/403)
+ *    세션을 만들지 않고 고칠 방법을 적은 페이지로 끝낸다.
  *
  * ⚠️ request.url 대신 request.nextUrl / Host 헤더를 쓴다 — dev-login/route.ts:112 와 같은
  *    이유로 컨테이너 안에서 request.url 은 0.0.0.0 으로 풀린다.
@@ -24,7 +30,9 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { redirectRelative } from '@/lib/redirect';
-import { parseJWT, isSessionExpired } from '@/lib/auth';
+import { parseJWT, isSessionExpired, checkPagePermission } from '@/lib/auth';
+import { fetchIdentity, type IdentityResult } from '@/lib/identity';
+import { ROLE_COOKIE_NAME, encodeRoleCookie } from '@/lib/roleCookie';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -163,6 +171,53 @@ function cookieMaxAge(token: string, expiresIn: unknown): number {
 
   if (seconds === null) return FALLBACK_COOKIE_MAX_AGE;
   return Math.min(MAX_COOKIE_MAX_AGE, Math.max(MIN_COOKIE_MAX_AGE, seconds));
+}
+
+/**
+ * admin-api 의 거절을 받은 사람이 할 일로 옮긴다. code 는 admin-api 의 error.message 다
+ * (admin-api/src/app/core/auth.py `_resolve_idp_identity`).
+ */
+function deniedMessage(denied: Extract<IdentityResult, { kind: 'denied' }>): {
+  title: string;
+  detail: string;
+} {
+  if (denied.status === 401) {
+    return {
+      title: 'Admin API rejected the session token',
+      detail:
+        'admin-api 가 이 콘솔 클라이언트에 발급된 토큰을 인정하지 않습니다. Helm 값 ' +
+        'adminApi.oidc.adminUiClientId 가 adminUi.env.OIDC_CLIENT_ID 와 같은지 확인하세요.' +
+        (denied.code ? ` (admin-api: ${denied.code})` : ''),
+    };
+  }
+  switch (denied.code) {
+    case 'user_not_provisioned':
+      return {
+        title: 'This account is not registered in the gateway',
+        detail:
+          '게이트웨이에 아직 이 사용자가 없습니다. gateway-cli login 으로 로그인해 키를 한 번 발급받은 뒤 ' +
+          '다시 로그인하세요.',
+      };
+    case 'user_deactivated':
+      return {
+        title: 'This account is deactivated',
+        detail:
+          '게이트웨이에서 이 계정이 비활성화돼 있습니다. IdP 에서 계정을 다시 활성화하고, 관리자에게 ' +
+          'Cognito 동기화를 실행해 달라고 요청하세요.',
+      };
+    case 'required_group_missing':
+      return {
+        title: 'This account is not in the required group',
+        detail:
+          '이 계정은 콘솔에 필요한 그룹에 속해 있지 않습니다. 관리자에게 adminApi.oidc.requiredGroup 으로 ' +
+          '설정된 그룹에 이 계정을 추가해 달라고 요청하세요.',
+      };
+    default:
+      return {
+        title: 'Admin API refused the sign-in',
+        detail: `admin-api 가 로그인을 거절했습니다(HTTP 403: ${denied.code || '사유 없음'}).`,
+      };
+  }
 }
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
@@ -304,9 +359,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   // 없으면 이런 무한 루프가 실제로 난다(적대적 검증에서 재현):
   //   `OIDC_COOKIE_TOKEN=access_token` + access_token 이 불투명한 IdP(Okta org 서버),
   //   또는 scope 에 `openid` 가 없어 id_token 이 안 와서 access_token 으로 폴백 →
-  //   그 문자열을 admin_jwt 로 굽는다 → 브라우저가 `/` 요청 → middleware 의 parseJWT 가
-  //   throw → catch 에서 쿠키 제거 + `/api/auth/login` 리다이렉트 → IdP 세션이 아직
-  //   살아 있으니 즉시 콜백으로 되돌아옴 → 다시 같은 쿠키 → **영원히 반복**.
+  //   그 문자열을 admin_jwt 로 굽는다 → 브라우저가 `/` 요청 → middleware 의 resolveSession
+  //   (안에서 parseJWT)이 throw → catch 에서 쿠키 제거 + `/api/auth/login` 리다이렉트 →
+  //   IdP 세션이 아직 살아 있으니 즉시 콜백으로 되돌아옴 → 다시 같은 쿠키 → **영원히 반복**.
   //   화면에는 아무 진단도 안 나온다 — 이 라우트가 애초에 없애려던 그 막다른 길이다.
   //
   // 그래서 실패는 루프가 아니라 원인이 적힌 페이지로 끝낸다. 검증은 서명 검증이 아니라
@@ -343,18 +398,54 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     );
   }
 
+  // 역할은 admin-api 에 묻는다 — 쿠키를 굽기 전에. 거절된 사람에게 모든 화면이 /403 이거나
+  // 모든 호출이 401 인 세션을 남기지 않는다.
+  const identity = await fetchIdentity(cookieToken);
+  if (identity.kind === 'denied') {
+    const { title, detail } = deniedMessage(identity);
+    const refused = failure(403, title, detail, secure);
+    // 앞 세션의 admin_jwt·admin_role 도 지운다 — 남기면 방금 거절된 사람에게 그 세션이 계속 화면을 연다.
+    // ⚠️ 여기서만 지운다: state·PKCE 검증을 통과한 뒤라 이 브라우저 자신의 로그인이다. 위의 다른 실패
+    //    페이지는 위조된 콜백 URL 로도 닿아, 거기서 지우면 남을 로그아웃시키는 수단이 된다.
+    for (const name of ['admin_jwt', ROLE_COOKIE_NAME]) {
+      refused.cookies.set(name, '', { httpOnly: true, sameSite: 'lax', path: '/', maxAge: 0, secure });
+    }
+    return refused;
+  }
+  if (identity.kind === 'unavailable' && !parsedSession.role) {
+    // 토큰이 역할을 주면 오늘처럼 들여보낸다 — 옛 admin-api(404)나 장애가 관리자 그룹 구성원을
+    // 잠그면 안 된다. 역할을 모르는 사람은 들여보내도 모든 화면이 /403 이라 여기서 끝낸다.
+    // 계정에 대한 판정이 아니라 일시 장애이므로 앞 세션은 건드리지 않는다.
+    return failure(
+      503,
+      'Could not confirm your role',
+      `역할을 확인하려고 admin-api 에 물었지만 답을 받지 못했습니다(${identity.reason}). ` +
+        '잠시 뒤 다시 로그인하세요.',
+      secure,
+    );
+  }
+
   const maxAge = cookieMaxAge(cookieToken, tokens.expires_in);
+
+  // 첫 화면은 권한표로 고른다 — `/` 를 못 여는 역할(DEVELOPER)은 첫 화면이 /403 이었다. 역할은
+  // middleware 가 볼 것과 같다: 토큰의 역할이 먼저, 없으면 admin-api 가 답한 역할(lib/auth.ts resolveSession).
+  const role = parsedSession.role || (identity.kind === 'ok' ? identity.role : undefined);
+  const landing =
+    role && !checkPagePermission('/', role) && checkPagePermission('/my', role) ? '/my' : '/';
 
   // 303 — POST/GET 구분 없이 GET 으로 이동시킨다(logout/route.ts:19 와 같은 이유).
   // 상대 Location — CloudFront/ALB 뒤에서 Host 헤더가 내부 오리진일 수 있다(lib/redirect.ts).
-  const res = redirectRelative('/');
-  res.cookies.set('admin_jwt', cookieToken, {
-    httpOnly: true,
-    sameSite: 'lax',
-    path: '/',
-    maxAge,
-    secure,
-  });
+  const res = redirectRelative(landing);
+  // admin_role 은 admin_jwt 와 수명·속성이 같다 — 토큰보다 오래 남을 이유가 없다.
+  const sessionCookie = { httpOnly: true, sameSite: 'lax' as const, path: '/', maxAge, secure };
+  res.cookies.set('admin_jwt', cookieToken, sessionCookie);
+  if (identity.kind === 'ok') {
+    res.cookies.set(
+      ROLE_COOKIE_NAME,
+      await encodeRoleCookie(identity.role, cookieToken, identity.teamId),
+      sessionCookie,
+    );
+  }
   clearTempCookies(res, secure);
   res.headers.set('Cache-Control', 'no-store');
   return res;
