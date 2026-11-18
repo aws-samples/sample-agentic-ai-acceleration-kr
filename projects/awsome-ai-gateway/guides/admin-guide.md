@@ -142,7 +142,7 @@ curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' "<Admin UI URL>/api/aut
 |---|---|---|
 | 배포 (환경마다 한 번) | Admin UI의 HTTPS 주소, 관리 콘솔용 IdP app client, Helm 값 연결 | [`07-cognito-onboarding.md` 7절](../deployment/docs/eks-fargate/07-cognito-onboarding.md#7-admin-콘솔-sso-브라우저-로그인) |
 | 관리자 계정 | IdP의 **관리자 그룹**(`adminBootstrap.groups`, 예: `ClaudeAdmin`) 멤버 | [3.2 IDP 작업](#32-idp-작업-cognito-기준)의 `admin-add-user-to-group` |
-| 관리자 계정 (한 번) | 게이트웨이 사용자 등록 | `gateway-cli login` 후 VK를 한 번 발급받습니다 ([`user-guide.md` 4절](user-guide.md#4-첫-로그인)). 관리 콘솔 로그인은 사용자를 새로 만들지 않습니다 |
+| 관리자 계정 (한 번) | 게이트웨이 사용자 등록 | 관리 콘솔에 처음 로그인하기 전에 본인 PC에서 `gateway-cli login`을 실행하고 VK를 한 번 발급받습니다 ([`user-guide.md` 4절](user-guide.md#4-첫-로그인)). 이 단계는 관리 콘솔 없이 진행되며, 계정이 팀 그룹(`Claude_<팀>`)에도 속해 있어야 발급됩니다. 관리 콘솔 로그인은 사용자를 새로 만들지 않습니다 |
 
 **로그인**
 
@@ -192,8 +192,8 @@ curl -X DELETE "$ADMIN_API_URL/admin/service-tokens/<id>" -H "Authorization: Bea
 
 | 증상 | 원인 | 조치 |
 |---|---|---|
-| `SSO (OIDC) is not configured` (503) | SSO가 연결되지 않았고 dev 로그인도 꺼져 있습니다. 운영 overlay를 SSO 설정 없이 설치하면 이 상태입니다 | 배포자가 SSO를 연결합니다 ([`07-cognito-onboarding.md` 7절](../deployment/docs/eks-fargate/07-cognito-onboarding.md#7-admin-콘솔-sso-브라우저-로그인)) |
-| `Dev login is disabled` (503) | dev 로그인이 꺼져 있거나 개발 환경이 아닙니다 | `<Admin UI URL>/api/auth/login`으로 들어갑니다 |
+| `SSO (OIDC) is not configured` (503) | SSO가 연결되지 않았고 dev 로그인도 꺼져 있습니다. 운영 overlay를 SSO 설정 없이 설치하면 이 상태입니다. SSO 변수를 일부만 넣은 경우에도 이 화면이 나오며, 비어 있는 변수 이름이 표시됩니다 | 배포자가 SSO를 연결합니다 ([`07-cognito-onboarding.md` 7절](../deployment/docs/eks-fargate/07-cognito-onboarding.md#7-admin-콘솔-sso-브라우저-로그인)) |
+| `<Admin UI URL>/api/auth/dev-login`을 직접 열었는데 `Dev login is disabled` (503) | dev 로그인이 꺼져 있거나 개발 환경이 아닙니다 | `<Admin UI URL>/api/auth/login`으로 들어갑니다 |
 | 로그인했는데 모든 페이지가 `403 접근 권한 없음` | IdP 토큰에 관리자 그룹이 없습니다 | 계정을 관리자 그룹에 추가하고 다시 로그인합니다. 그룹에 있는데도 403이면 [부록 B](#admin-권한이-안-들어옴)를 확인합니다 |
 | 화면은 열리는데 수치 자리에 `집계 실패`가 표시됨 | Admin API가 요청을 거부하고 있습니다 | 아래 명령으로 응답을 확인합니다 |
 | `Invalid sign-in state` | IdP 로그인 화면에서 10분 넘게 머물렀거나 브라우저가 쿠키를 막았습니다 | Admin UI URL을 다시 엽니다 |
@@ -940,6 +940,8 @@ kubectl exec -n llm-gateway deploy/llm-gateway-admin-api -- \
 kubectl exec -n llm-gateway deploy/llm-gateway-admin-ui -- \
   env | grep -E "ADMIN_GROUPS|OIDC_GROUPS_CLAIM"
 ```
+
+두 값은 `adminApi.oidc.enabled: true`일 때만 admin-ui에 주입됩니다. 아무것도 나오지 않으면 이 값부터 확인하세요.
 
 ---
 
