@@ -642,7 +642,7 @@ def create_app() -> FastAPI:
     register_exception_handlers(app)
 
     # ── Register routers ──
-    from app.routers import analytics, apps, aws_accounts, budgets, cli, dashboard, internal, keys, models, monitoring, my, productivity, rate_limits, routing, service_tokens, settings as settings_router, users
+    from app.routers import analytics, apps, aws_accounts, budgets, cli, dashboard, internal, keys, me, models, monitoring, my, productivity, rate_limits, routing, service_tokens, settings as settings_router, users
 
     app.include_router(keys.router)
     app.include_router(budgets.router)
@@ -656,6 +656,7 @@ def create_app() -> FastAPI:
     app.include_router(analytics.router)
     app.include_router(dashboard.router)
     app.include_router(my.router)
+    app.include_router(me.router)  # /admin/me — admin-ui 가 화면 권한을 정할 때 묻는 신원
     app.include_router(monitoring.router)
     app.include_router(productivity.router)
     app.include_router(cli.router)
