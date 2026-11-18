@@ -174,7 +174,11 @@ kubectl exec -it deploy/llm-gateway-admin-api -n llm-gateway -- \
 open "$ADMIN_UI_URL"
 ```
 
-✅ **로그인 페이지** 가 떠야 함. dev 환경에선 dev login 으로 로그인 가능.
+✅ 환경에 따라 다음 중 하나가 떠야 함 (절차: [admin-guide.md 2절](../../../guides/admin-guide.md#2-admin-ui-접속)).
+
+- dev: **Dev Login** 화면. `ADMIN` 을 고르면 대시보드로 들어간다.
+- SSO 를 연결한 환경: IdP 로그인 화면으로 이동한다.
+- 운영 overlay 를 SSO 설정 없이 설치한 환경: `SSO (OIDC) is not configured` (503). 로그인 경로가 아직 없는 상태이며, [07-cognito-onboarding.md 7절](./07-cognito-onboarding.md#7-admin-콘솔-sso-브라우저-로그인)로 연결한다.
 
 ---
 

@@ -226,7 +226,7 @@ This is **re-origination**, not relay. There is no path for headers to leak.
 | Audience | Document | Description |
 |----------|----------|-------------|
 | Deployer (Infra Engineer) | [`guides/deployer-guide.md`](guides/deployer-guide.md) | EKS Fargate deployment, Terraform, Helm, secrets, monitoring |
-| Admin (Operator) | [`guides/admin-guide.md`](guides/admin-guide.md) | User/team management, budgets, rate limits, models, incident response |
+| Admin (Operator) | [`guides/admin-guide.md`](guides/admin-guide.md) | Admin console sign-in (dev and prod), user/team management, budgets, rate limits, models, incident response |
 | End User (Developer) | [`guides/user-guide.md`](guides/user-guide.md) | CLI install, login, Claude Code integration, troubleshooting |
 | 3-client Onboarding (all OS) | [`guides/QUICKSTART.md`](guides/QUICKSTART.md) | Claude Code / Codex / Cowork × macOS · Linux · Windows |
 | Deployer / Admin | [`docs/guides/multi-account-bedrock-setup.md`](docs/guides/multi-account-bedrock-setup.md) | Per-model target AWS account: roles, IAM, migrations, console, rollback (Korean) |

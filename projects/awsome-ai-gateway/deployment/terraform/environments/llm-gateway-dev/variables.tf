@@ -252,7 +252,7 @@ variable "cognito_admin_ui_callback_urls" {
 }
 
 variable "cognito_admin_ui_logout_urls" {
-  description = "admin-ui 로그아웃 뒤 돌아올 URI 화이트리스트"
+  description = "admin-ui 로그아웃 뒤 돌아올 URI 허용 목록"
   type        = list(string)
   default     = []
 }

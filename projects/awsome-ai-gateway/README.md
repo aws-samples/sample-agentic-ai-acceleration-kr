@@ -229,7 +229,7 @@ AWSome AI Gateway는 **re-origination(요청 재구성 발신)** 방식입니다
 | 대상 | 문서 | 설명 |
 |------|------|------|
 | 배포자 (인프라 엔지니어) | [`guides/deployer-guide.md`](guides/deployer-guide.md) | EKS Fargate 배포, Terraform, Helm, 시크릿, 모니터링 |
-| 어드민 (운영자) | [`guides/admin-guide.md`](guides/admin-guide.md) | 사용자/팀 관리, 예산, Rate Limit, 모델, 모니터링, 사고 대응 |
+| 어드민 (운영자) | [`guides/admin-guide.md`](guides/admin-guide.md) | 관리 콘솔 로그인(dev·prod), 사용자/팀 관리, 예산, Rate Limit, 모델, 모니터링, 사고 대응 |
 | 실사용자 (개발자) | [`guides/user-guide.md`](guides/user-guide.md) | CLI 설치·로그인·Claude Code 연동·트러블슈팅 (Claude Code 중심) |
 | 3-client 온보딩 (전 OS) | [`guides/QUICKSTART.md`](guides/QUICKSTART.md) | Claude Code / Codex / Cowork × macOS·Linux·Windows 붙이기 (단일 소스) |
 | 배포자 / 어드민 | [`docs/guides/multi-account-bedrock-setup.md`](docs/guides/multi-account-bedrock-setup.md) | 모델별 대상 AWS 계정 설정(역할·IAM·마이그레이션·콘솔·롤백) |
