@@ -46,3 +46,9 @@ variable "region" {
   description = "Region the guardrail lives in; picks its guardrail profile."
   type        = string
 }
+
+variable "python_bin" {
+  description = "Python interpreter for this module's local-exec helper scripts. Needs a boto3 new enough for the AgentCore APIs it calls (botocore >= 1.43); point at a venv python where the host's system python3 is older."
+  type        = string
+  default     = "python3"
+}

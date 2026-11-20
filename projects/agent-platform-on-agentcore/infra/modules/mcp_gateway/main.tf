@@ -245,7 +245,7 @@ resource "null_resource" "gateway_tags" {
   }
   provisioner "local-exec" {
     command = join(" ", [
-      "python3", local.script, "tag",
+      var.python_bin, local.script, "tag",
       "--gateway-arn", awscc_bedrockagentcore_gateway.this.gateway_arn,
       "--tags", "Platform=${var.project}", "Project=${var.project}",
       "--region", var.region,
@@ -265,7 +265,7 @@ locals {
     "--drop-tool", "lookup_salary",
   ]
   target_upsert_command = join(" ", concat([
-    "python3", local.script, "upsert",
+    var.python_bin, local.script, "upsert",
     "--gateway-id", awscc_bedrockagentcore_gateway.this.gateway_identifier,
     "--name", local.target_name,
     "--lambda-arn", aws_lambda_function.tools.arn,
@@ -282,6 +282,8 @@ resource "null_resource" "target" {
     script_sha  = filesha256(local.script)
     target_name = local.target_name
     # Destroy-time provisioners cannot read vars, so the command is frozen here.
+    # It stays "python3", not var.python_bin: changing a trigger replaces the
+    # live target, and DeleteGatewayTarget is known to every recent boto3.
     delete_command = join(" ", [
       "python3", abspath(local.script), "delete",
       "--gateway-id", awscc_bedrockagentcore_gateway.this.gateway_identifier,
@@ -342,7 +344,7 @@ resource "null_resource" "websearch_target" {
 
   provisioner "local-exec" {
     command = join(" ", concat([
-      "python3", local.script, "upsert",
+      var.python_bin, local.script, "upsert",
       "--gateway-id", awscc_bedrockagentcore_gateway.this.gateway_identifier,
       "--name", local.websearch_target,
       "--connector-id", local.websearch_connector,
@@ -394,7 +396,7 @@ resource "null_resource" "runtime_mcp_target" {
 
   provisioner "local-exec" {
     command = join(" ", [
-      "python3", local.script, "upsert",
+      var.python_bin, local.script, "upsert",
       "--gateway-id", awscc_bedrockagentcore_gateway.this.gateway_identifier,
       "--name", each.key,
       "--mcp-endpoint", each.value,
@@ -439,7 +441,7 @@ resource "null_resource" "registry_target" {
 
   provisioner "local-exec" {
     command = join(" ", [
-      "python3", local.script, "upsert",
+      var.python_bin, local.script, "upsert",
       "--gateway-id", awscc_bedrockagentcore_gateway.this.gateway_identifier,
       "--name", "registry",
       "--mcp-endpoint", var.registry_mcp_endpoint,

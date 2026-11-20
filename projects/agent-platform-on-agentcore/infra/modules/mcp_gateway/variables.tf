@@ -88,3 +88,9 @@ variable "runtime_mcp_listing_mode" {
     error_message = "runtime_mcp_listing_mode must be DEFAULT or DYNAMIC."
   }
 }
+
+variable "python_bin" {
+  description = "Python interpreter for this module's local-exec helper scripts. Needs a boto3 new enough for the AgentCore APIs it calls (botocore >= 1.43); point at a venv python where the host's system python3 is older."
+  type        = string
+  default     = "python3"
+}

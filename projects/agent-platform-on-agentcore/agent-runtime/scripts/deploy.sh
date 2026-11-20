@@ -461,7 +461,10 @@ check_status() {
         local status_output
         if status_output=$(agentcore status 2>&1); then
             # Check for READY status in the endpoint section
-            if echo "$status_output" | grep -q "STATUS: READY"; then
+            # Older starter-toolkit releases print "STATUS: READY"; current ones
+            # print "Endpoint: DEFAULT (READY)". Matching only the first looped
+            # all 30 attempts and failed a deploy whose runtime was already READY.
+            if echo "$status_output" | grep -qE "STATUS: READY|Endpoint: [A-Za-z0-9_-]+ \(READY\)"; then
                 print_success "Deployment completed successfully!"
                 print_success "Agent endpoint is READY"
 
@@ -480,11 +483,11 @@ check_status() {
                 fi
 
                 return 0
-            elif echo "$status_output" | grep -qi "STATUS:.*FAILED"; then
+            elif echo "$status_output" | grep -qiE "STATUS:.*FAILED|Endpoint: [A-Za-z0-9_-]+ \([A-Z_]*FAILED\)"; then
                 print_error "Deployment failed"
                 echo "$status_output"
                 return 1
-            elif echo "$status_output" | grep -qi "STATUS:.*CREATING\|STATUS:.*UPDATING\|STATUS:.*PENDING"; then
+            elif echo "$status_output" | grep -qiE "STATUS:.*(CREATING|UPDATING|PENDING)|Endpoint: [A-Za-z0-9_-]+ \((CREATING|UPDATING|PENDING)\)"; then
                 print_status "Current status: Creating/Updating (waiting...)"
                 sleep 10
             else
